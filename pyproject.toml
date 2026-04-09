@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantum-swarm-heating"
+version = "0.5.55"
+description = "Adaptive ML heating control with digital twin fleet simulator"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.11"
+authors = [
+    { name = "Stuart J" },
+]
+
+dependencies = [
+    "numpy>=1.26",
+    "networkx>=3.0",
+    "requests>=2.28",
+    "pyyaml>=6.0",
+    "influxdb>=5.3",
+    "websocket-client>=1.6",
+    "paho-mqtt>=2.0",
+    "fastapi>=0.135.3",
+    "httpx>=0.28.1",
+    "uvicorn>=0.42.0",
+    "python-multipart>=0.0.22",
+]
+
+[project.optional-dependencies]
+torch = [
+    "torch>=2.2",
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+]
+all = [
+    "quantum-swarm-heating[torch,dev]",
+]
+
+[project.urls]
+Repository = "https://github.com/stuartj1-1981/quantum-swarm-heating"
+
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+[tool.setuptools.packages.find]
+where = ["quantum_swarm_heating"]
+include = ["qsh*"]
+
+[tool.pytest.ini_options]
+# Let pytest find `qsh` as a top-level package by adding
+# quantum_swarm_heating/ to sys.path — matches the Docker layout where
+# COPY qsh /qsh puts the package at the root.
+pythonpath = ["quantum_swarm_heating"]
+testpaths = [
+    "tests",
+    "quantum_swarm_heating/qsh",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# ---------------------------------------------------------------------------
+# Ruff — strict on safety, relaxed on style.
+# Catch bugs that crash hardware control loops.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# F  = Pyflakes: undefined names, broken imports, unused vars
+#      Safety layer — F821 catches _time-style runtime crashes.
+# E9 = Syntax errors: files that won't even parse
+select = ["F", "E9"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

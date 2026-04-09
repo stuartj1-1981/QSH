@@ -1,0 +1,163 @@
+"""WebSocket endpoint for live cycle data push.
+
+Uses an asyncio.Event-based broadcast pattern:
+- Each connected client waits on a shared event
+- Pipeline thread calls notify_clients() after updating shared state
+- All waiting clients wake, read the snapshot, and send it
+
+No per-connection polling. Clients receive data within milliseconds of
+the pipeline completing a cycle.
+"""
+
+import asyncio
+import logging
+from typing import Set
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from .state import shared_state
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Broadcast infrastructure
+_clients: Set[WebSocket] = set()
+_cycle_event: asyncio.Event = None  # Created lazily in the uvicorn event loop
+
+
+def _get_event() -> asyncio.Event:
+    """Get or create the broadcast event (must be called from the asyncio loop)."""
+    global _cycle_event
+    if _cycle_event is None:
+        _cycle_event = asyncio.Event()
+    return _cycle_event
+
+
+def notify_clients():
+    """Called from the pipeline thread after SharedState.update().
+
+    Thread-safe: uses call_soon_threadsafe to set the event in the
+    uvicorn asyncio loop.
+    """
+    if _cycle_event is None:
+        return  # No event loop yet (no clients have connected)
+    try:
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(_cycle_event.set)
+    except RuntimeError:
+        pass  # No running loop (shutdown race)
+
+
+@router.websocket("/ws/live")
+async def websocket_live(ws: WebSocket):
+    """Push cycle snapshot to client whenever the pipeline completes a cycle."""
+    await ws.accept()
+    _clients.add(ws)
+    event = _get_event()
+    logger.info("WebSocket client connected (%d total)", len(_clients))
+
+    try:
+        # Send current state immediately on connect
+        snap = shared_state.get_snapshot()
+        await ws.send_json(_format_snapshot(snap))
+        last_cycle = snap.cycle_number
+
+        while True:
+            # Wait for pipeline to signal a new cycle (or timeout for keepalive)
+            event.clear()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                # No cycle in 60s — send a keepalive ping
+                await ws.send_json({"type": "keepalive"})
+                continue
+
+            snap = shared_state.get_snapshot()
+            if snap.cycle_number != last_cycle:
+                await ws.send_json(_format_snapshot(snap))
+                last_cycle = snap.cycle_number
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("WebSocket error: %s", e)
+    finally:
+        _clients.discard(ws)
+        logger.info("WebSocket client disconnected (%d remaining)", len(_clients))
+
+
+def _format_snapshot(snap) -> dict:
+    """Format CycleSnapshot for WebSocket transmission."""
+    rooms_below = sum(
+        1 for r in snap.rooms.values()
+        if r['temp'] is not None and r['target'] is not None
+        and r['temp'] < r['target'] - 0.3
+    )
+    return {
+        "type": "cycle",
+        "timestamp": snap.timestamp,
+        "cycle_number": snap.cycle_number,
+        "status": {
+            "operating_state": snap.operating_state,
+            "control_enabled": snap.control_enabled,
+            "comfort_temp": snap.comfort_temp,
+            "comfort_schedule_active": snap.comfort_schedule_active,
+            "comfort_temp_active": snap.comfort_temp_active,
+            "optimal_flow": round(snap.optimal_flow, 1),
+            "applied_flow": round(snap.applied_flow, 1),
+            "optimal_mode": snap.optimal_mode,
+            "applied_mode": snap.applied_mode,
+            "total_demand": round(snap.total_demand, 2),
+            "outdoor_temp": round(snap.outdoor_temp, 1),
+            "hp_power_kw": snap.hp_power_kw,
+            "hp_cop": round(snap.hp_cop, 1),
+            "comfort_pct": round((1 - rooms_below / max(len(snap.rooms), 1)) * 100, 0),
+            "recovery_time_hours": snap.recovery_time_hours,
+            "capacity_pct": snap.capacity_pct,
+            "hp_capacity_kw": snap.hp_capacity_kw,
+            "min_load_pct": snap.min_load_pct,
+        },
+        "hp": {
+            "flow_temp": round(snap.hp_flow_temp, 1),
+            "return_temp": round(snap.hp_return_temp, 1),
+            "delta_t": round(snap.delta_t, 1),
+            "flow_rate": round(snap.flow_rate, 2),
+        },
+        "rooms": snap.rooms,
+        "energy": {
+            "current_rate": snap.current_rate,
+            "cost_today_pence": round(snap.cost_today_pence, 1),
+            "cost_yesterday_pence": round(snap.cost_yesterday_pence, 1),
+            "energy_today_kwh": round(snap.energy_today_kwh, 2),
+            "predicted_saving": round(snap.predicted_saving, 1),
+            "predicted_energy_saving": round(snap.predicted_energy_saving, 2),
+            "export_rate": snap.export_rate,
+        },
+        "engineering": {
+            "det_flow": round(snap.det_flow, 1),
+            "rl_flow": round(snap.rl_flow, 1) if snap.rl_flow else None,
+            "rl_blend": round(snap.rl_blend, 3),
+            "rl_reward": round(snap.rl_reward, 2),
+            "rl_loss": round(snap.rl_loss, 4),
+            "shoulder_monitoring": snap.shoulder_monitoring,
+            "summer_monitoring": snap.summer_monitoring,
+            "cascade_active": snap.cascade_active,
+            "frost_cap_active": snap.frost_cap_active,
+            "antifrost_override_active": snap.antifrost_override_active,
+            "winter_equilibrium": snap.winter_equilibrium,
+            "antifrost_threshold": snap.antifrost_threshold,
+            "signal_quality": snap.signal_quality,
+        },
+        "boost": {
+            "active": snap.boost_active,
+            "rooms": snap.boost_rooms,
+        },
+        "away": {
+            "active": snap.away_mode_active,
+            "days": snap.away_days,
+            "recovery_active": snap.recovery_active,
+            "zones_recovering": snap.zones_recovering,
+        },
+        "source_selection": snap.source_selection,
+    }
