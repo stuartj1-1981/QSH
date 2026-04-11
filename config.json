@@ -1,0 +1,24 @@
+{
+  "name": "Quantum Swarm Heating Add-on",
+  "version": "1.0.0",
+  "slug": "quantum_swarm_heating",
+  "description": "Adaptive Biomimetic heating control",
+  "arch": [
+    "amd64",
+    "aarch64"
+  ],
+  "startup": "application",
+  "boot": "auto",
+  "hassio_api": true,
+  "homeassistant_api": true,
+  "apparmor": false,
+  "map": ["addon_config:rw"],
+
+  "ingress": true,
+  "ingress_port": 9100,
+  "panel_icon": "mdi:heat-wave",
+  "panel_title": "QSH",
+
+  "options": {},
+  "schema": {}
+}
