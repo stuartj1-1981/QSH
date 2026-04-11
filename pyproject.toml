@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quantum-swarm-heating"
-version = "0.5.55"
+version = "1.0.0"
 description = "Adaptive ML heating control with digital twin fleet simulator"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -40,7 +40,7 @@ all = [
 ]
 
 [project.urls]
-Repository = "https://github.com/stuartj1-1981/quantum-swarm-heating"
+Repository = "https://github.com/stuartj1-1981/QSH"
 
 # ---------------------------------------------------------------------------
 # Tool configuration

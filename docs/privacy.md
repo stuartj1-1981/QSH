@@ -1,6 +1,6 @@
 # QSH Privacy Policy
 
-**Last updated:** [release date]
+**Last updated:** 11 April 2026
 **Data controller:** Stuart Hunt (QSH Project)
 **Contact:** quantum_swarm_heating@gmail.com (contact via email only)
 

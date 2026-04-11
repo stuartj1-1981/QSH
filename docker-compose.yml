@@ -1,6 +1,6 @@
 services:
   qsh:
-    image: ghcr.io/<stuart_account>/qsh:latest
+    image: ghcr.io/stuartj1-1981/qsh:latest
     ports:
       - "9100:9100"
     volumes:

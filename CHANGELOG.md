@@ -2,7 +2,7 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.0.0] — 2026-04-XX
+## [1.0.0] — 2026-04-11
 
 First public release.
 
