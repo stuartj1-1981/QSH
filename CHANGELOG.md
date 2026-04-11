@@ -2,6 +2,19 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.2] — 2026-04-11
+
+### Fixed
+- Fix `python -m qsh.main` startup failure on Home Assistant OS reported by beta testers (GitHub Issue #4). The compiled `main.cpython-312-*.so` extension module cannot be executed via `python -m` because Python cannot extract a code object from a compiled extension, raising "No code object available for qsh.main"
+- Add `qsh/__main__.py` source shim that imports and calls `main()` from the compiled module, shipped as source alongside `__init__.py`
+- Change Dockerfile `CMD` from `python -m qsh.main` to `python -m qsh` so the shim is invoked instead of the compiled extension
+- Extend Dockerfile IP boundary assertion to permit `__main__.py` as a source-boundary exception alongside `__init__.py`
+- Add build-time entrypoint shim smoke test that exercises the `__main__.py` → compiled `main.so` import chain so the original failure mode is caught before an image reaches the registry
+- Replace dead `python3 /qsh_script.py` reference in `run.sh` with `exec python -m qsh`, matching the Dockerfile CMD and using `exec` for proper signal handling; mark `run.sh` executable so HA add-on scaffolds that invoke it directly don't fail
+
+### Deployment
+- Add `"image": "ghcr.io/stuartj1-1981/qsh"` to `config.json` so Home Assistant Supervisor pulls the pre-built multi-arch image from ghcr.io instead of rebuilding the Dockerfile locally on beta testers' hardware. Without this field the INSTRUCTION-75 CI pipeline was effectively bypassed on every install
+
 ## [1.1.1] — 2026-04-11
 
 ### CI/CD

@@ -1,6 +1,6 @@
 {
   "name": "Quantum Swarm Heating Add-on",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "slug": "quantum_swarm_heating",
   "image": "ghcr.io/stuartj1-1981/qsh",
   "description": "Adaptive Biomimetic heating control",
