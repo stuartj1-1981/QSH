@@ -32,7 +32,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Hardcoded lowercase — ${{ github.repository }} evaluates to the canonical
+  # GitHub form "stuartj1-1981/QSH" which is invalid as a Docker image
+  # reference (repository names must be lowercase). docker/metadata-action
+  # lowercases automatically, but the build-push-action `outputs:` field and
+  # the imagetools shell step use IMAGE_NAME directly.
+  IMAGE_NAME: stuartj1-1981/qsh
 
 permissions:
   contents: read
