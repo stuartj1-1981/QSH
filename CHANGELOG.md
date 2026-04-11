@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.1] — 2026-04-11
+
+### CI/CD
+- Switched multi-arch Docker build to native arm64 runners (`ubuntu-24.04-arm`), eliminating QEMU emulation
+- Split build into three parallel jobs: `build-amd64`, `build-arm64`, and `merge-manifest` using the by-digest push pattern
+- Per-arch GitHub Actions layer caching (`scope=linux-amd64`, `scope=linux-arm64`) for independent cache lanes
+- Bumped all workflow actions to Node.js 24-compatible versions (`checkout@v5`, `setup-buildx-action@v4`, `login-action@v4`, `metadata-action@v6`, `build-push-action@v7`, `upload/download-artifact@v4`) ahead of the June 2026 Node.js 20 deprecation
+- Reduces worst-case build time from 60+ minutes under QEMU to ~5 minutes on native runners
+
 ## [1.1.0] — 2026-04-11
 
 ### CI/CD

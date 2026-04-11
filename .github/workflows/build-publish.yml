@@ -7,6 +7,17 @@
 #
 # The image is published to ghcr.io/stuartj1-1981/qsh:<tag> and :latest.
 # Beta testers pull via the HA add-on repository which references this image.
+#
+# Build strategy: native arm64 runners, no cross-arch emulation.
+#   * build-amd64    — runs on ubuntu-latest, builds linux/amd64, pushes by digest
+#   * build-arm64    — runs on ubuntu-24.04-arm, builds linux/arm64, pushes by digest
+#   * merge-manifest — merges the two per-arch digests into a single multi-arch
+#                      manifest under all tags (git tag, semantic version, latest)
+#
+# The by-digest push pattern avoids tag collisions between the two parallel
+# build jobs. Each build job uploads its digest as an artifact; the merge job
+# downloads them and runs `docker buildx imagetools create` to assemble the
+# final manifest list.
 
 name: Build & Publish
 
@@ -28,22 +39,114 @@ permissions:
   packages: write
 
 jobs:
-  build-and-push:
+  build-amd64:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      # QEMU for arm64 cross-build (same approach as local release pipeline)
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=linux-amd64
+          cache-to: type=gha,scope=linux-amd64,mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+          echo "Digest for linux/amd64: ${digest}"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-amd64
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64 image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=linux-arm64
+          cache-to: type=gha,scope=linux-arm64,mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+          echo "Digest for linux/arm64: ${digest}"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-arm64
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-manifest:
+    runs-on: ubuntu-latest
+    needs:
+      - build-amd64
+      - build-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download amd64 digest
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-amd64
+          path: /tmp/digests/amd64
+
+      - name: Download arm64 digest
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-arm64
+          path: /tmp/digests/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -59,7 +162,7 @@ jobs:
 
       - name: Extract metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -71,13 +174,28 @@ jobs:
             # Semantic version from config.json
             type=raw,value=${{ steps.version.outputs.version }}
 
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+
+          AMD64_DIGEST=$(basename "$(ls /tmp/digests/amd64/)")
+          ARM64_DIGEST=$(basename "$(ls /tmp/digests/arm64/)")
+          echo "amd64 digest: sha256:${AMD64_DIGEST}"
+          echo "arm64 digest: sha256:${ARM64_DIGEST}"
+
+          # Build the list of -t tag arguments from the metadata action output.
+          TAG_ARGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "Tag args: ${TAG_ARGS}"
+
+          # shellcheck disable=SC2086
+          docker buildx imagetools create ${TAG_ARGS} \
+            "${REGISTRY}/${IMAGE_NAME}@sha256:${AMD64_DIGEST}" \
+            "${REGISTRY}/${IMAGE_NAME}@sha256:${ARM64_DIGEST}"
+
+      - name: Inspect multi-arch manifest
+        run: |
+          set -euo pipefail
+          # Inspect using the first tag from the metadata action.
+          FIRST_TAG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "Inspecting: ${FIRST_TAG}"
+          docker buildx imagetools inspect "${FIRST_TAG}"
