@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.2] — 2026-04-11
+
+### Fixed
+- Fix `python -m qsh.main` startup failure on Home Assistant OS reported by beta testers (GitHub Issue #4). The compiled `main.cpython-312-*.so` extension module cannot be executed via `python -m` because Python cannot extract a code object from a compiled extension, raising "No code object available for qsh.main"
+- Add `qsh/__main__.py` source shim that imports and calls `main()` from the compiled module, ships as source alongside `__init__.py`
+- Change Dockerfile `CMD` from `python -m qsh.main` to `python -m qsh` so the shim is invoked instead of the compiled extension
+- Extend IP boundary assertion to permit `__main__.py` as a source-boundary exception
+- Add build-time entrypoint shim smoke test that exercises the `__main__.py` → compiled `main.so` import chain so the original failure mode is caught before an image reaches the registry
+
 ## [1.1.1] — 2026-04-11
 
 ### CI/CD

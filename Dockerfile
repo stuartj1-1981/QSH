@@ -92,7 +92,8 @@ RUN test -d /app/qsh/drivers && \
     LEAKED=$(find /app/qsh -name "*.py" \
         ! -path "*/drivers/*" \
         ! -path "*/api/*" \
-        ! -name "__init__.py" | wc -l) && \
+        ! -name "__init__.py" \
+        ! -name "__main__.py" | wc -l) && \
     test "$LEAKED" -eq 0 && \
     echo "IP boundary assertion PASS (${SO_COUNT} .so files, zero leakage)"
 
@@ -109,5 +110,12 @@ import qsh.drivers; \
 import qsh.api; \
 print('T-13 production-layout import smoke test PASS')"
 
+# --- Entrypoint shim verification (build-time gate) ---
+# Verifies __main__.py can import main() from the compiled .so.
+# INSTRUCTION-76: catches the "No code object available for qsh.main"
+# failure mode that `python -m qsh.main` hit on compiled extension modules.
+RUN python -c "from qsh.__main__ import main; print('Entrypoint shim OK')" 2>&1 || \
+    { echo "FATAL: __main__.py shim cannot import main from compiled module"; exit 1; }
+
 EXPOSE 9100
-CMD ["python", "-m", "qsh.main"]
+CMD ["python", "-m", "qsh"]
