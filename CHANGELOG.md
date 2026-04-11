@@ -2,6 +2,14 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.0] — 2026-04-11
+
+### CI/CD
+- GitHub Actions workflow to build and publish multi-arch Docker images (`linux/amd64`, `linux/arm64`) to `ghcr.io/stuartj1-1981/qsh` on version tag push
+- Assembly-only build reusing the pre-compiled `.so` artefacts synced by `release-sync.sh` — no compilation in CI
+- Image tagged with git tag, semantic version from `config.json`, and `latest`
+- GitHub Actions build cache enabled for faster subsequent builds
+
 ## [1.0.0] — 2026-04-11
 
 First public release.
