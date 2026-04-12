@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.3] — 2026-04-12
+
+### Fixed
+- Add `if __name__ == "__main__":` guard to `qsh/__main__.py` so the Dockerfile
+  entrypoint shim verification step (`from qsh.__main__ import main`) imports the
+  function without starting the full application. Without the guard, the build-time
+  `RUN` step launched the API server and hung indefinitely, blocking all CI builds
+  after the INSTRUCTION-76A changes landed on `main`.
+
 ## [1.1.2] — 2026-04-11
 
 ### Fixed
