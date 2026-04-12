@@ -1,2 +1,2 @@
 #!/usr/bin/with-contenv bashio
-exec python -m qsh
+python3 /qsh_script.py

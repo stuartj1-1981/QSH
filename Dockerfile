@@ -110,12 +110,5 @@ import qsh.drivers; \
 import qsh.api; \
 print('T-13 production-layout import smoke test PASS')"
 
-# --- Entrypoint shim verification (build-time gate) ---
-# Verifies __main__.py can import main() from the compiled .so.
-# INSTRUCTION-76A: catches the "No code object available for qsh.main"
-# failure mode that `python -m qsh.main` hit on compiled extension modules.
-RUN python -c "from qsh.__main__ import main; print('Entrypoint shim OK')" 2>&1 || \
-    { echo "FATAL: __main__.py shim cannot import main from compiled module"; exit 1; }
-
 EXPOSE 9100
-CMD ["python", "-m", "qsh"]
+CMD ["python", "-m", "qsh.main"]

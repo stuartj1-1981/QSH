@@ -16,12 +16,14 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from qsh.paths import find_state_file, save_state_file
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/away", tags=["away"])
 
 HA_TIMEOUT = 5
-_TIMESTAMPS_PATH = Path("/data/away_timestamps.json")
+_AWAY_TIMESTAMPS_FILENAME = "away_timestamps.json"
 
 
 # ── Activation Timestamp Helpers ──
@@ -30,8 +32,9 @@ _TIMESTAMPS_PATH = Path("/data/away_timestamps.json")
 def _load_timestamps() -> dict:
     """Load activation timestamps from persistent storage."""
     try:
-        if _TIMESTAMPS_PATH.exists():
-            return json.loads(_TIMESTAMPS_PATH.read_text())
+        path = Path(find_state_file(_AWAY_TIMESTAMPS_FILENAME))
+        if path.exists():
+            return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to load away timestamps: %s", e)
     return {}
@@ -40,8 +43,10 @@ def _load_timestamps() -> dict:
 def _save_timestamps(data: dict) -> None:
     """Write activation timestamps to persistent storage."""
     try:
-        _TIMESTAMPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _TIMESTAMPS_PATH.write_text(json.dumps(data))
+        path = Path(os.path.join("/config", _AWAY_TIMESTAMPS_FILENAME))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+        save_state_file(str(path))  # best-effort copy to /data/
     except OSError as e:
         logger.warning("Failed to save away timestamps: %s", e)
 

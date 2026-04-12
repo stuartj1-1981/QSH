@@ -14,6 +14,7 @@ Public API:
 
 import os
 
+from qsh.paths import find_state_file
 from .context import CycleContext
 from .controller import Controller
 from .orchestrator import run_cycle, save_pipeline_state, restore_pipeline_state
@@ -329,7 +330,7 @@ def build_pipeline(config, **kwargs):
         RLController(
             model=kw.get("model"),
             optimizer=kw.get("optimizer"),
-            checkpoint_path=kw.get("checkpoint_path", os.path.join(config.get("data_dir", "/data"), "rl_model_checkpoint.pt")),
+            checkpoint_path=kw.get("checkpoint_path", find_state_file("rl_model_checkpoint.pt")),
             calculate_rl_reward_fn=kw.get("calculate_rl_reward_fn"),
             update_rl_model_safe_fn=kw.get("update_rl_model_safe_fn"),
             initialize_rl_system_fn=kw.get("initialize_rl_system_fn"),
