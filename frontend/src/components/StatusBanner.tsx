@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
-import type { RoomState } from '../types/api'
+import type { RoomState, DriverStatus } from '../types/api'
 import { EntityValue } from './EntityValue'
 
 const PAUSE_STRATEGIES = [
@@ -27,6 +27,7 @@ interface StatusBannerProps {
     hp_cop?: string
   }
   engineering?: boolean
+  driverStatus?: DriverStatus
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -43,6 +44,7 @@ export const StatusBanner = memo(function StatusBanner({
   rooms,
   entityMap,
   engineering,
+  driverStatus,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -54,6 +56,20 @@ export const StatusBanner = memo(function StatusBanner({
 
   return (
     <>
+      {/* Driver error banner — degraded mode (MQTT connection failure etc.) */}
+      {driverStatus?.status === 'error' && (
+        <div className="rounded-xl border p-4 mb-2 bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300 flex items-start gap-3 text-sm">
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">MQTT broker connection failed</div>
+            <div className="mt-1 text-xs opacity-80">{driverStatus.error}</div>
+            <div className="mt-2 text-xs">
+              Check Settings &rarr; Heat Source to verify broker address, port, and credentials.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Pause warning strip */}
       {isPaused && (
         <div className="rounded-xl border p-3 mb-2 bg-amber-500/15 border-amber-500/30 text-amber-700 flex items-center gap-2 text-sm font-medium">

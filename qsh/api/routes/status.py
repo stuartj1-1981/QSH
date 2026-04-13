@@ -22,6 +22,7 @@ def get_status():
         "operating_state": snap.operating_state,
         "control_enabled": snap.control_enabled,
         "migration_pending": shared_state.get_migration_pending(),
+        "driver": shared_state.get_driver_status(),
         "comfort_temp": snap.comfort_temp,
         "comfort_schedule_active": snap.comfort_schedule_active,
         "comfort_temp_active": snap.comfort_temp_active,

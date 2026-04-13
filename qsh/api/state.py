@@ -153,6 +153,8 @@ class SharedState:
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
         self._migration_pending: bool = False
+        self._driver_status: str = "pending"        # "pending" | "connected" | "error"
+        self._driver_error: Optional[str] = None    # Human-readable error message
 
     def update(self, ctx, config: dict, sysid=None):
         """Called by pipeline thread after each run_cycle().
@@ -457,6 +459,15 @@ class SharedState:
     def get_migration_pending(self) -> bool:
         with self._lock:
             return self._migration_pending
+
+    def set_driver_status(self, status: str, error: Optional[str] = None) -> None:
+        with self._lock:
+            self._driver_status = status
+            self._driver_error = error
+
+    def get_driver_status(self) -> Dict[str, Any]:
+        with self._lock:
+            return {"status": self._driver_status, "error": self._driver_error}
 
     def set_for_testing(self, snapshot: CycleSnapshot, config: dict = None, sysid=None):
         """Inject state directly for unit tests. Not for production use."""

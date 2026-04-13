@@ -66,6 +66,11 @@ export interface SourceSelectionState {
   last_switch_reason: string
 }
 
+export interface DriverStatus {
+  status: 'pending' | 'connected' | 'error'
+  error: string | null
+}
+
 export interface StatusResponse {
   timestamp: number
   cycle_number: number
@@ -93,6 +98,7 @@ export interface StatusResponse {
   engineering: EngineeringState
   source_selection?: SourceSelectionState
   migration_pending?: boolean
+  driver?: DriverStatus
 }
 
 export interface RoomsResponse {

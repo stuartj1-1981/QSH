@@ -219,6 +219,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         rooms={rooms}
         entityMap={entityMap ?? undefined}
         engineering={engineering}
+        driverStatus={initial?.driver}
       />
 
       {/* Comfort temperature & shadow/live toggle */}
