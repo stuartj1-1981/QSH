@@ -14,7 +14,7 @@ describe('DataSharingSettings', () => {
   })
 
   it('renders with no telemetry config — toggle OFF, region hidden, disclaimer unchecked', () => {
-    render(<DataSharingSettings onRefetch={() => {}} />)
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
     const toggle = screen.getByRole('switch')
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(screen.queryByText('Select your region')).toBeNull()
@@ -28,6 +28,7 @@ describe('DataSharingSettings', () => {
       <DataSharingSettings
         telemetry={{ agreed: true, region: 'London', install_id: 'abc12345-6789' }}
         disclaimerAccepted={true}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -37,19 +38,19 @@ describe('DataSharingSettings', () => {
   })
 
   it('toggle ON shows region selector', () => {
-    render(<DataSharingSettings onRefetch={() => {}} />)
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
     fireEvent.click(screen.getByRole('switch'))
     expect(screen.getByText('Select your region')).toBeInTheDocument()
   })
 
   it('toggle OFF hides region selector', () => {
-    render(<DataSharingSettings telemetry={{ agreed: true, region: 'London' }} onRefetch={() => {}} />)
+    render(<DataSharingSettings telemetry={{ agreed: true, region: 'London' }} driver="ha" onRefetch={() => {}} />)
     fireEvent.click(screen.getByRole('switch'))
     expect(screen.queryByText('Select your region')).toBeNull()
   })
 
   it('region required when agreed — shows error, no API call', async () => {
-    render(<DataSharingSettings onRefetch={() => {}} />)
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
     fireEvent.click(screen.getByRole('switch'))
     fireEvent.click(screen.getByText('Save Changes'))
     expect(await screen.findByText('Please select or enter your region')).toBeInTheDocument()
@@ -57,7 +58,7 @@ describe('DataSharingSettings', () => {
   })
 
   it('disclaimer required when agreed — shows error', async () => {
-    render(<DataSharingSettings onRefetch={() => {}} />)
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
     // Toggle on
     fireEvent.click(screen.getByRole('switch'))
     // Select a region
@@ -74,6 +75,7 @@ describe('DataSharingSettings', () => {
       <DataSharingSettings
         telemetry={{ agreed: true, region: 'London' }}
         disclaimerAccepted={true}
+        driver="ha"
         onRefetch={onRefetch}
       />
     )
@@ -91,6 +93,7 @@ describe('DataSharingSettings', () => {
       <DataSharingSettings
         telemetry={{ agreed: true, region: 'London' }}
         disclaimerAccepted={true}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -99,7 +102,7 @@ describe('DataSharingSettings', () => {
   })
 
   it('opted-out save skips validation — patch called with agreed: false', async () => {
-    render(<DataSharingSettings onRefetch={() => {}} />)
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
     fireEvent.click(screen.getByText('Save Changes'))
     await waitFor(() => {
       expect(mockPatch).toHaveBeenCalledWith('telemetry', { agreed: false, region: undefined })
@@ -111,6 +114,7 @@ describe('DataSharingSettings', () => {
     render(
       <DataSharingSettings
         telemetry={{ agreed: true, region: 'London', install_id: 'abc12345-6789-defg' }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -122,6 +126,7 @@ describe('DataSharingSettings', () => {
     render(
       <DataSharingSettings
         telemetry={{ agreed: true, region: 'London', install_id: 'abc12345-6789' }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )

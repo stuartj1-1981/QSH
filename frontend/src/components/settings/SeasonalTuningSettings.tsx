@@ -1,11 +1,14 @@
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
 import { useState, useEffect, useRef } from 'react'
 import { Minus, Plus } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { apiUrl } from '../../lib/api'
+import type { Driver } from '../../types/config'
 
 interface SeasonalTuningSettingsProps {
   antifrostThreshold: number | null
   shoulderThreshold: number | null
+  driver: Driver
   onRefetch: () => void
 }
 
@@ -96,9 +99,11 @@ function Stepper({
   )
 }
 
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
 export function SeasonalTuningSettings({
   antifrostThreshold,
   shoulderThreshold,
+  driver: _driver,
   onRefetch,
 }: SeasonalTuningSettingsProps) {
   const handleAntifrostChange = async (value: number) => {

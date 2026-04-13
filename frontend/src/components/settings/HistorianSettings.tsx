@@ -1,25 +1,31 @@
-import { useState } from 'react'
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
+import { useState, useEffect } from 'react'
 import { Save, Loader2, Check, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { apiUrl } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { HelpTip } from '../HelpTip'
 import { HISTORIAN } from '../../lib/helpText'
-import type { HistorianYaml, InfluxTestResponse } from '../../types/config'
+import type { HistorianYaml, InfluxTestResponse, Driver } from '../../types/config'
 
 interface HistorianSettingsProps {
   historian?: HistorianYaml
+  driver: Driver
   onRefetch: () => void
 }
 
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
 export function HistorianSettings({
   historian: initial,
+  driver: _driver,
   onRefetch,
 }: HistorianSettingsProps) {
   const [hist, setHist] = useState<HistorianYaml>(
     initial || { enabled: false, host: 'a0d7b954-influxdb', port: 8086, database: 'qsh', username: 'qsh' }
   )
   const { patch, saving } = usePatchConfig()
+
+  useEffect(() => { setHist(initial || { enabled: false, host: 'a0d7b954-influxdb', port: 8086, database: 'qsh', username: 'qsh' }) }, [initial])
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<InfluxTestResponse | null>(null)
 
@@ -71,7 +77,7 @@ export function HistorianSettings({
           <input
             type="checkbox"
             checked={hist.enabled ?? false}
-            onChange={(e) => setHist({ ...hist, enabled: e.target.checked })}
+            onChange={(e) => setHist(prev => ({ ...prev, enabled: e.target.checked }))}
             className="accent-[var(--accent)]"
           />
           <span className="text-sm font-medium text-[var(--text)] flex items-center gap-1">Enable InfluxDB logging <HelpTip text={HISTORIAN.enabled} size={12} /></span>
@@ -85,7 +91,7 @@ export function HistorianSettings({
                 <input
                   type="text"
                   value={hist.host || ''}
-                  onChange={(e) => setHist({ ...hist, host: e.target.value })}
+                  onChange={(e) => setHist(prev => ({ ...prev, host: e.target.value }))}
                   placeholder="a0d7b954-influxdb"
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -95,7 +101,7 @@ export function HistorianSettings({
                 <input
                   type="number"
                   value={hist.port ?? 8086}
-                  onChange={(e) => setHist({ ...hist, port: parseInt(e.target.value) || 8086 })}
+                  onChange={(e) => setHist(prev => ({ ...prev, port: parseInt(e.target.value) || 8086 }))}
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
@@ -104,7 +110,7 @@ export function HistorianSettings({
                 <input
                   type="text"
                   value={hist.database || ''}
-                  onChange={(e) => setHist({ ...hist, database: e.target.value })}
+                  onChange={(e) => setHist(prev => ({ ...prev, database: e.target.value }))}
                   placeholder="qsh"
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -114,7 +120,7 @@ export function HistorianSettings({
                 <input
                   type="text"
                   value={hist.username || ''}
-                  onChange={(e) => setHist({ ...hist, username: e.target.value })}
+                  onChange={(e) => setHist(prev => ({ ...prev, username: e.target.value }))}
                   placeholder="qsh"
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -125,7 +131,7 @@ export function HistorianSettings({
               <input
                 type="password"
                 value={hist.password || ''}
-                onChange={(e) => setHist({ ...hist, password: e.target.value })}
+                onChange={(e) => setHist(prev => ({ ...prev, password: e.target.value }))}
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
             </div>
@@ -139,7 +145,7 @@ export function HistorianSettings({
                   min="1"
                   max="100"
                   value={hist.batch_size ?? 20}
-                  onChange={(e) => setHist({ ...hist, batch_size: parseInt(e.target.value) || 20 })}
+                  onChange={(e) => setHist(prev => ({ ...prev, batch_size: parseInt(e.target.value) || 20 }))}
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
@@ -153,7 +159,7 @@ export function HistorianSettings({
                   max="300"
                   value={hist.flush_interval_s ?? 60}
                   onChange={(e) =>
-                    setHist({ ...hist, flush_interval_s: parseInt(e.target.value) || 60 })
+                    setHist(prev => ({ ...prev, flush_interval_s: parseInt(e.target.value) || 60 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />

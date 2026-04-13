@@ -1,9 +1,13 @@
 /** TypeScript types for QSH configuration shapes. */
 
+export type Driver = 'ha' | 'mqtt'
+
 export interface MqttTopicInput {
   topic: string
   format?: 'plain' | 'json'
   json_path?: string
+  scale?: number
+  offset?: number
 }
 
 export interface MqttConfig {
@@ -162,11 +166,14 @@ export interface OccupancyScheduleYaml {
 export interface ControlYaml {
   dfan_control_entity?: string
   pid_target_entity?: string
+  dfan_control_topic?: string
+  pid_target_topic?: string
   nudge_budget?: number
 }
 
 export interface BatteryYaml {
   soc_entity?: string
+  soc_topic?: string
   min_soc_reserve?: number
   efficiency?: number
   voltage?: number
@@ -175,6 +182,7 @@ export interface BatteryYaml {
 
 export interface GridYaml {
   power_entity?: string
+  power_topic?: string
   nominal_voltage?: number
   min_voltage?: number
   max_voltage?: number
@@ -186,6 +194,7 @@ export interface InverterYaml {
 
 export interface SolarYaml {
   production_entity?: string
+  production_topic?: string
 }
 
 export interface HwScheduleYaml {
@@ -371,8 +380,10 @@ export interface ExternalSetpoints {
  * Enforcement is NOT done here — this is display-only.
  */
 export const SETPOINT_RANGES: Record<string, { min: number; max: number; unit: string; label: string; placeholder: string }> = {
-  comfort_temp:            { min: 15,  max: 25,  unit: '°C', label: 'Comfort Temperature',         placeholder: 'input_number.comfort_temp' },
-  antifrost_oat_threshold: { min: 0,   max: 15,  unit: '°C', label: 'Antifrost OAT Threshold',     placeholder: 'input_number.antifrost_oat_threshold' },
-  shoulder_threshold:      { min: 0.5, max: 10,  unit: 'kW', label: 'Shoulder Shutdown Threshold',  placeholder: 'input_number.shoulder_threshold' },
-  overtemp_protection:     { min: 18,  max: 30,  unit: '°C', label: 'Overtemp Protection',          placeholder: 'input_number.overtemp_protection' },
+  comfort_temp:            { min: 15,  max: 25,  unit: '°C', label: 'Comfort Temperature',              placeholder: 'input_number.comfort_temp' },
+  flow_min_temp:           { min: 20,  max: 45,  unit: '°C', label: 'Flow Minimum Temperature Entity',  placeholder: 'input_number.flow_min_temp' },
+  flow_max_temp:           { min: 30,  max: 60,  unit: '°C', label: 'Flow Maximum Temperature Entity',  placeholder: 'input_number.flow_max_temp' },
+  antifrost_oat_threshold: { min: 0,   max: 15,  unit: '°C', label: 'Antifrost OAT Threshold',          placeholder: 'input_number.antifrost_oat_threshold' },
+  shoulder_threshold:      { min: 0.5, max: 10,  unit: 'kW', label: 'Shoulder Shutdown Threshold',      placeholder: 'input_number.shoulder_threshold' },
+  overtemp_protection:     { min: 18,  max: 30,  unit: '°C', label: 'Overtemp Protection',              placeholder: 'input_number.overtemp_protection' },
 } as const

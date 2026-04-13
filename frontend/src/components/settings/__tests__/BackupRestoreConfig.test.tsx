@@ -18,7 +18,7 @@ describe('BackupRestore restore_config checkbox', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    render(<BackupRestore />)
+    render(<BackupRestore driver="ha" />)
 
     // Upload a file
     const file = new File(['zip-data'], 'backup.zip', { type: 'application/zip' })
@@ -47,7 +47,7 @@ describe('BackupRestore restore_config checkbox', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    render(<BackupRestore />)
+    render(<BackupRestore driver="ha" />)
 
     // Upload a file
     const file = new File(['zip-data'], 'backup.zip', { type: 'application/zip' })

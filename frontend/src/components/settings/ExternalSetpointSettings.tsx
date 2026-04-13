@@ -3,23 +3,27 @@ import { Save, Loader2, AlertTriangle, CheckCircle } from 'lucide-react'
 import { useExternalSetpoints } from '../../hooks/useExternalSetpoints'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
 import { EntityField } from './EntityField'
-import { SETPOINT_RANGES } from '../../types/config'
+import { SETPOINT_RANGES, type Driver } from '../../types/config'
 
 interface ExternalSetpointSettingsProps {
+  driver: Driver
   onRefetch: () => void
 }
 
 const TEMP_KEYS = ['comfort_temp', 'overtemp_protection'] as const
+const FLOW_KEYS = ['flow_min_temp', 'flow_max_temp'] as const
 const SEASONAL_KEYS = ['antifrost_oat_threshold', 'shoulder_threshold'] as const
-const ALL_KEYS = [...TEMP_KEYS, ...SEASONAL_KEYS]
+const ALL_KEYS = [...TEMP_KEYS, ...FLOW_KEYS, ...SEASONAL_KEYS]
 
-export function ExternalSetpointSettings({ onRefetch }: ExternalSetpointSettingsProps) {
+export function ExternalSetpointSettings({ driver, onRefetch }: ExternalSetpointSettingsProps) {
   const { data, loading, error, saving, save } = useExternalSetpoints()
   const [success, setSuccess] = useState(false)
 
-  // Local state for the 4 entity ID fields
+  // Local state for the 6 entity ID fields
   const [local, setLocal] = useState<Record<string, string>>({
     comfort_temp: '',
+    flow_min_temp: '',
+    flow_max_temp: '',
     antifrost_oat_threshold: '',
     shoulder_threshold: '',
     overtemp_protection: '',
@@ -31,6 +35,8 @@ export function ExternalSetpointSettings({ onRefetch }: ExternalSetpointSettings
       // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from fetched data is intentional
       setLocal({
         comfort_temp: data.comfort_temp ?? '',
+        flow_min_temp: data.flow_min_temp ?? '',
+        flow_max_temp: data.flow_max_temp ?? '',
         antifrost_oat_threshold: data.antifrost_oat_threshold ?? '',
         shoulder_threshold: data.shoulder_threshold ?? '',
         overtemp_protection: data.overtemp_protection ?? '',
@@ -63,6 +69,20 @@ export function ExternalSetpointSettings({ onRefetch }: ExternalSetpointSettings
       setSuccess(true)
       onRefetch()
     }
+  }
+
+  if (driver === 'mqtt') {
+    return (
+      <div className="space-y-6">
+        <h2 className="text-lg font-bold text-[var(--text)]">External Setpoints</h2>
+        <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-sm text-[var(--text-muted)]">
+          External setpoint entity binding is a Home Assistant driver feature. On MQTT driver,
+          publish setpoint values directly to the corresponding command topics configured in
+          Control and Heat Source settings. If you haven&apos;t configured those topics yet, do that
+          first — there is no setpoint binding to do here until they exist.
+        </div>
+      </div>
+    )
   }
 
   if (loading) {
@@ -108,6 +128,20 @@ export function ExternalSetpointSettings({ onRefetch }: ExternalSetpointSettings
       <div className="space-y-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
         <h3 className="text-sm font-medium text-[var(--text)]">Temperature Control</h3>
         {TEMP_KEYS.map((key) => (
+          <SetpointField
+            key={key}
+            fieldKey={key}
+            value={local[key]}
+            resolved={resolved}
+            onChange={(v) => setLocal((prev) => ({ ...prev, [key]: v }))}
+          />
+        ))}
+      </div>
+
+      {/* Flow Temperature group */}
+      <div className="space-y-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
+        <h3 className="text-sm font-medium text-[var(--text)]">Flow Temperature</h3>
+        {FLOW_KEYS.map((key) => (
           <SetpointField
             key={key}
             fieldKey={key}

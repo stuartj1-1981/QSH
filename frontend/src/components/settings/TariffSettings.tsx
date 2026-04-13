@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Save, Loader2, Check, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { apiUrl } from '../../lib/api'
@@ -6,19 +6,21 @@ import { usePatchConfig } from '../../hooks/useConfig'
 import { EntityField } from './EntityField'
 import { HelpTip } from '../HelpTip'
 import { TARIFF } from '../../lib/helpText'
-import type { EnergyYaml, HeatSourceYaml, OctopusTestResponse } from '../../types/config'
+import type { EnergyYaml, HeatSourceYaml, OctopusTestResponse, Driver } from '../../types/config'
 
 type TariffMode = 'octopus' | 'fixed' | 'none'
+type OctopusMode = 'ha_integration' | 'direct_api'
 
 const HP_EUID_PATTERN = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){7}$/
 
 interface TariffSettingsProps {
   energy: EnergyYaml
   heatSource?: HeatSourceYaml
+  driver: Driver
   onRefetch: () => void
 }
 
-export function TariffSettings({ energy: initial, heatSource: initialHs, onRefetch }: TariffSettingsProps) {
+export function TariffSettings({ energy: initial, heatSource: initialHs, driver, onRefetch }: TariffSettingsProps) {
   const [energy, setEnergy] = useState<EnergyYaml>(initial)
   const [mode, setMode] = useState<TariffMode>(
     initial.octopus?.api_key ? 'octopus' : initial.fixed_rates ? 'fixed' : 'none'
@@ -27,7 +29,13 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
   const [testResult, setTestResult] = useState<OctopusTestResponse | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [hs, setHs] = useState<HeatSourceYaml | undefined>(initialHs)
+  const inferredOctopusMode: OctopusMode = initial.octopus?.zone_entity_id ? 'ha_integration' : 'direct_api'
+  const [octopusMode, setOctopusMode] = useState<OctopusMode>(driver === 'mqtt' ? 'direct_api' : inferredOctopusMode)
+  const [showModeChange, setShowModeChange] = useState(false)
   const { patch, saving } = usePatchConfig()
+
+  useEffect(() => { setEnergy(initial) }, [initial])
+  useEffect(() => { setHs(initialHs) }, [initialHs])
 
   const save = async () => {
     // Build payload based on active mode — clear the other mode's data
@@ -115,6 +123,51 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
       {mode === 'octopus' && (
         <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-4">
           <h3 className="text-sm font-medium text-[var(--text)]">Octopus Energy</h3>
+
+          {/* Octopus mode badge */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--text-muted)]">Mode:</span>
+            <span className="px-2 py-0.5 rounded text-xs font-medium bg-[var(--accent)]/10 text-[var(--accent)]">
+              {octopusMode === 'ha_integration' ? 'HA Integration' : 'Direct API'}
+            </span>
+            {driver === 'ha' && !showModeChange && (
+              <button
+                type="button"
+                onClick={() => setShowModeChange(true)}
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] underline"
+              >
+                Change mode
+              </button>
+            )}
+          </div>
+
+          {driver === 'ha' && showModeChange && (
+            <div className="flex items-center gap-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+              <select
+                value={octopusMode}
+                onChange={(e) => setOctopusMode(e.target.value as OctopusMode)}
+                className="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              >
+                <option value="direct_api">Direct API</option>
+                <option value="ha_integration">HA Integration</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setShowModeChange(false)}
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {driver === 'mqtt' && (
+            <div className="p-3 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--text-muted)]">
+              HA Octopus Energy integration is unavailable on MQTT driver. Configure Direct API access
+              above using your Octopus account number and API key.
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-[var(--text-muted)] mb-1">API Key</label>
@@ -122,10 +175,10 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 type="password"
                 value={energy.octopus?.api_key || ''}
                 onChange={(e) =>
-                  setEnergy({
-                    ...energy,
-                    octopus: { ...energy.octopus, api_key: e.target.value },
-                  })
+                  setEnergy(prev => ({
+                    ...prev,
+                    octopus: { ...prev.octopus, api_key: e.target.value },
+                  }))
                 }
                 placeholder="sk_live_..."
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
@@ -137,10 +190,10 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 type="text"
                 value={energy.octopus?.account_number || ''}
                 onChange={(e) =>
-                  setEnergy({
-                    ...energy,
-                    octopus: { ...energy.octopus, account_number: e.target.value },
-                  })
+                  setEnergy(prev => ({
+                    ...prev,
+                    octopus: { ...prev.octopus, account_number: e.target.value },
+                  }))
                 }
                 placeholder="A-1234ABCD"
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
@@ -188,10 +241,10 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                   type="text"
                   value={hpEuid}
                   onChange={(e) =>
-                    setEnergy({
-                      ...energy,
-                      octopus: { ...energy.octopus, hp_euid: e.target.value || undefined },
-                    })
+                    setEnergy(prev => ({
+                      ...prev,
+                      octopus: { ...prev.octopus, hp_euid: e.target.value || undefined },
+                    }))
                   }
                   placeholder="XX:XX:XX:XX:XX:XX:XX:XX"
                   className={cn(
@@ -206,77 +259,81 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 )}
               </div>
 
-              <EntityField
-                label="Zone Entity ID"
-                value={energy.octopus?.zone_entity_id || ''}
-                onChange={(v) =>
-                  setEnergy({
-                    ...energy,
-                    octopus: { ...energy.octopus, zone_entity_id: v || undefined },
-                  })
-                }
-                placeholder="climate.octopus_heat_pump_zone"
-              />
+              {driver === 'ha' && octopusMode === 'ha_integration' && (
+                <>
+                  <EntityField
+                    label="Zone Entity ID"
+                    value={energy.octopus?.zone_entity_id || ''}
+                    onChange={(v) =>
+                      setEnergy(prev => ({
+                        ...prev,
+                        octopus: { ...prev.octopus, zone_entity_id: v || undefined },
+                      }))
+                    }
+                    placeholder="climate.octopus_heat_pump_zone"
+                  />
 
-              <h4 className="text-xs font-medium text-[var(--text)]">Rate Entities</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <EntityField
-                  label="Current Day Rates"
-                  value={energy.octopus?.rates?.current_day || ''}
-                  onChange={(v) =>
-                    setEnergy({
-                      ...energy,
-                      octopus: {
-                        ...energy.octopus,
-                        rates: { ...energy.octopus?.rates, current_day: v || undefined },
-                      },
-                    })
-                  }
-                  placeholder="event.current_day_rates"
-                />
-                <EntityField
-                  label="Next Day Rates"
-                  value={energy.octopus?.rates?.next_day || ''}
-                  onChange={(v) =>
-                    setEnergy({
-                      ...energy,
-                      octopus: {
-                        ...energy.octopus,
-                        rates: { ...energy.octopus?.rates, next_day: v || undefined },
-                      },
-                    })
-                  }
-                  placeholder="event.next_day_rates"
-                />
-                <EntityField
-                  label="Current Day Export"
-                  value={energy.octopus?.rates?.current_day_export || ''}
-                  onChange={(v) =>
-                    setEnergy({
-                      ...energy,
-                      octopus: {
-                        ...energy.octopus,
-                        rates: { ...energy.octopus?.rates, current_day_export: v || undefined },
-                      },
-                    })
-                  }
-                  placeholder="event.export_current_day_rates"
-                />
-                <EntityField
-                  label="Next Day Export"
-                  value={energy.octopus?.rates?.next_day_export || ''}
-                  onChange={(v) =>
-                    setEnergy({
-                      ...energy,
-                      octopus: {
-                        ...energy.octopus,
-                        rates: { ...energy.octopus?.rates, next_day_export: v || undefined },
-                      },
-                    })
-                  }
-                  placeholder="event.export_next_day_rates"
-                />
-              </div>
+                  <h4 className="text-xs font-medium text-[var(--text)]">Rate Entities</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <EntityField
+                      label="Current Day Rates"
+                      value={energy.octopus?.rates?.current_day || ''}
+                      onChange={(v) =>
+                        setEnergy(prev => ({
+                          ...prev,
+                          octopus: {
+                            ...prev.octopus,
+                            rates: { ...prev.octopus?.rates, current_day: v || undefined },
+                          },
+                        }))
+                      }
+                      placeholder="event.current_day_rates"
+                    />
+                    <EntityField
+                      label="Next Day Rates"
+                      value={energy.octopus?.rates?.next_day || ''}
+                      onChange={(v) =>
+                        setEnergy(prev => ({
+                          ...prev,
+                          octopus: {
+                            ...prev.octopus,
+                            rates: { ...prev.octopus?.rates, next_day: v || undefined },
+                          },
+                        }))
+                      }
+                      placeholder="event.next_day_rates"
+                    />
+                    <EntityField
+                      label="Current Day Export"
+                      value={energy.octopus?.rates?.current_day_export || ''}
+                      onChange={(v) =>
+                        setEnergy(prev => ({
+                          ...prev,
+                          octopus: {
+                            ...prev.octopus,
+                            rates: { ...prev.octopus?.rates, current_day_export: v || undefined },
+                          },
+                        }))
+                      }
+                      placeholder="event.export_current_day_rates"
+                    />
+                    <EntityField
+                      label="Next Day Export"
+                      value={energy.octopus?.rates?.next_day_export || ''}
+                      onChange={(v) =>
+                        setEnergy(prev => ({
+                          ...prev,
+                          octopus: {
+                            ...prev.octopus,
+                            rates: { ...prev.octopus?.rates, next_day_export: v || undefined },
+                          },
+                        }))
+                      }
+                      placeholder="event.export_next_day_rates"
+                    />
+                  </div>
+                </>
+              )}
 
               {/* Weather Compensation */}
               {hs && (
@@ -294,16 +351,16 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                             : 'false'
                         }
                         onChange={(e) =>
-                          setHs({
-                            ...hs,
+                          setHs(prev => prev ? ({
+                            ...prev,
                             flow_control: {
-                              ...hs.flow_control,
+                              ...prev.flow_control,
                               base_data: {
-                                ...(hs.flow_control?.base_data || {}),
+                                ...(prev.flow_control?.base_data || {}),
                                 weather_comp_enabled: e.target.value === 'true',
                               },
                             },
-                          })
+                          }) : prev)
                         }
                         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                       >
@@ -319,16 +376,16 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                         type="number"
                         value={String((hs.flow_control?.base_data as Record<string, unknown> | undefined)?.fixed_flow_temperature ?? '')}
                         onChange={(e) =>
-                          setHs({
-                            ...hs,
+                          setHs(prev => prev ? ({
+                            ...prev,
                             flow_control: {
-                              ...hs.flow_control,
+                              ...prev.flow_control,
                               base_data: {
-                                ...(hs.flow_control?.base_data || {}),
+                                ...(prev.flow_control?.base_data || {}),
                                 fixed_flow_temperature: parseFloat(e.target.value) || undefined,
                               },
                             },
-                          })
+                          }) : prev)
                         }
                         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                       />
@@ -343,16 +400,16 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                           String((hs.flow_control?.base_data as Record<string, unknown> | undefined)?.weather_comp_min_temperature ?? '')
                         }
                         onChange={(e) =>
-                          setHs({
-                            ...hs,
+                          setHs(prev => prev ? ({
+                            ...prev,
                             flow_control: {
-                              ...hs.flow_control,
+                              ...prev.flow_control,
                               base_data: {
-                                ...(hs.flow_control?.base_data || {}),
+                                ...(prev.flow_control?.base_data || {}),
                                 weather_comp_min_temperature: parseFloat(e.target.value) || undefined,
                               },
                             },
-                          })
+                          }) : prev)
                         }
                         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                       />
@@ -367,16 +424,16 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                           String((hs.flow_control?.base_data as Record<string, unknown> | undefined)?.weather_comp_max_temperature ?? '')
                         }
                         onChange={(e) =>
-                          setHs({
-                            ...hs,
+                          setHs(prev => prev ? ({
+                            ...prev,
                             flow_control: {
-                              ...hs.flow_control,
+                              ...prev.flow_control,
                               base_data: {
-                                ...(hs.flow_control?.base_data || {}),
+                                ...(prev.flow_control?.base_data || {}),
                                 weather_comp_max_temperature: parseFloat(e.target.value) || undefined,
                               },
                             },
-                          })
+                          }) : prev)
                         }
                         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                       />
@@ -403,13 +460,13 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 step="0.001"
                 value={energy.fixed_rates?.import_rate ?? ''}
                 onChange={(e) =>
-                  setEnergy({
-                    ...energy,
+                  setEnergy(prev => ({
+                    ...prev,
                     fixed_rates: {
-                      ...energy.fixed_rates,
+                      ...prev.fixed_rates,
                       import_rate: parseFloat(e.target.value) || 0,
                     },
-                  })
+                  }))
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
@@ -423,13 +480,13 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 step="0.001"
                 value={energy.fixed_rates?.export_rate ?? ''}
                 onChange={(e) =>
-                  setEnergy({
-                    ...energy,
+                  setEnergy(prev => ({
+                    ...prev,
                     fixed_rates: {
-                      ...energy.fixed_rates,
+                      ...prev.fixed_rates,
                       export_rate: parseFloat(e.target.value) || 0,
                     },
-                  })
+                  }))
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
@@ -456,13 +513,13 @@ export function TariffSettings({ energy: initial, heatSource: initialHs, onRefet
                 step="0.01"
                 value={energy.fallback_rates?.[tier] ?? ''}
                 onChange={(e) =>
-                  setEnergy({
-                    ...energy,
+                  setEnergy(prev => ({
+                    ...prev,
                     fallback_rates: {
-                      ...energy.fallback_rates,
+                      ...prev.fallback_rates,
                       [tier]: parseFloat(e.target.value) || 0,
                     },
-                  })
+                  }))
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />

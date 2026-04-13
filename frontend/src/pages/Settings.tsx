@@ -18,6 +18,7 @@ import { DataSharingSettings } from '../components/settings/DataSharingSettings'
 import { BackupRestore } from '../components/settings/BackupRestore'
 import { SystemSettings } from '../components/settings/SystemSettings'
 import { Loader2 } from 'lucide-react'
+import type { Driver } from '../types/config'
 
 interface SettingsProps {
   onRunWizard: () => void
@@ -64,9 +65,11 @@ export function Settings({ onRunWizard }: SettingsProps) {
       )
     }
 
+    const driver: Driver = data.driver ?? 'ha'
+
     switch (section) {
       case 'rooms':
-        return <RoomSettings rooms={data.rooms || {}} onRefetch={refetch} />
+        return <RoomSettings rooms={data.rooms || {}} driver={driver} onRefetch={refetch} />
       case 'heat_source':
         return (
           <HeatSourceSettings
@@ -74,33 +77,37 @@ export function Settings({ onRunWizard }: SettingsProps) {
             heatSources={data.heat_sources}
             sourceSelection={data.source_selection}
             rootConfig={data}
+            mqtt={data.mqtt}
+            driver={driver}
             onRefetch={refetch}
           />
         )
       case 'tariff':
-        return <TariffSettings energy={data.energy || {}} heatSource={data.heat_source} onRefetch={refetch} />
+        return <TariffSettings energy={data.energy || {}} heatSource={data.heat_source} driver={driver} onRefetch={refetch} />
       case 'thermal':
         return (
           <ThermalSettings
             thermal={data.thermal || {}}
             rooms={Object.keys(data.rooms || {})}
+            driver={driver}
             onRefetch={refetch}
           />
         )
       case 'control':
-        return <ControlSettings control={data.control || {}} rootConfig={data} onRefetch={refetch} />
+        return <ControlSettings control={data.control || {}} rootConfig={data} driver={driver} onRefetch={refetch} />
       case 'external_setpoints':
-        return <ExternalSetpointSettings onRefetch={refetch} />
+        return <ExternalSetpointSettings driver={driver} onRefetch={refetch} />
       case 'seasonal_tuning':
         return (
           <SeasonalTuningSettings
             antifrostThreshold={live?.engineering?.antifrost_threshold ?? null}
             shoulderThreshold={shoulderThreshold}
+            driver={driver}
             onRefetch={handleSeasonalRefetch}
           />
         )
       case 'outdoor_weather':
-        return <OutdoorWeatherSettings outdoor={data.outdoor} onRefetch={refetch} />
+        return <OutdoorWeatherSettings outdoor={data.outdoor} mqtt={data.mqtt} driver={driver} onRefetch={refetch} />
       case 'solar_battery':
         return (
           <SolarBatterySettings
@@ -108,6 +115,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
             battery={data.battery}
             grid={data.grid}
             inverter={data.inverter}
+            driver={driver}
             onRefetch={refetch}
           />
         )
@@ -118,23 +126,25 @@ export function Settings({ onRunWizard }: SettingsProps) {
             hwSchedule={data.hw_schedule}
             hwTank={data.hw_tank}
             hwPrecharge={data.hw_precharge}
+            driver={driver}
             onRefetch={refetch}
           />
         )
       case 'historian':
-        return <HistorianSettings historian={data.historian} onRefetch={refetch} />
+        return <HistorianSettings historian={data.historian} driver={driver} onRefetch={refetch} />
       case 'data_sharing':
         return (
           <DataSharingSettings
             telemetry={data.telemetry}
             disclaimerAccepted={data.disclaimer_accepted}
+            driver={driver}
             onRefetch={refetch}
           />
         )
       case 'backup':
-        return <BackupRestore />
+        return <BackupRestore driver={driver} />
       case 'system':
-        return <SystemSettings onRunWizard={onRunWizard} />
+        return <SystemSettings driver={driver} onRunWizard={onRunWizard} />
     }
   }
 

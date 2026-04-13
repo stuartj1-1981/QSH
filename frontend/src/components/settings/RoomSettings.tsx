@@ -2,22 +2,41 @@ import { useState, useMemo, useCallback } from 'react'
 import { Plus, Trash2, Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver } from '../../types/config'
 import { EntityField } from './EntityField'
+import { TopicField } from './TopicField'
 
 interface RoomSettingsProps {
   rooms: Record<string, RoomConfigYaml>
+  driver: Driver
   onRefetch: () => void
 }
 
-export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
+/** Extract the topic string from a RoomMqttTopicValue (string or MqttTopicInput object). */
+function getTopicString(v: RoomMqttTopicValue | undefined): string {
+  if (!v) return ''
+  if (typeof v === 'string') return v
+  return v.topic ?? ''
+}
+
+/** Set the topic string, preserving MqttTopicInput metadata if the previous value was an object. */
+function setTopicString(prev: RoomMqttTopicValue | undefined, topic: string): RoomMqttTopicValue | undefined {
+  if (!topic) return undefined
+  if (prev && typeof prev === 'object') {
+    return { ...prev, topic }
+  }
+  return topic
+}
+
+export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
   const [newName, setNewName] = useState('')
   const { patch, saving } = usePatchConfig()
 
   const allEntityIds = useMemo(
-    () =>
-      Object.values(editedRooms).flatMap((room) => {
+    () => {
+      if (driver === 'mqtt') return []
+      return Object.values(editedRooms).flatMap((room) => {
         const trvs = Array.isArray(room.trv_entity) ? room.trv_entity : room.trv_entity ? [room.trv_entity] : []
         return [
           ...trvs,
@@ -25,10 +44,11 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
           room.heating_entity,
           room.occupancy_sensor,
         ]
-      }).filter(Boolean) as string[],
-    [editedRooms]
+      }).filter(Boolean) as string[]
+    },
+    [editedRooms, driver]
   )
-  const { resolved } = useEntityResolve(allEntityIds)
+  const { resolved } = useEntityResolve(allEntityIds, driver)
 
   const updateRoom = useCallback((name: string, changes: Partial<RoomConfigYaml>) => {
     setEditedRooms((prev) => ({
@@ -90,6 +110,16 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
     updateRoom(roomName, { trv_entity: arr })
   }, [editedRooms, updateRoom])
 
+  /** Clear legacy HA fields for a room (on MQTT driver). */
+  const clearLegacyHaFields = useCallback((name: string) => {
+    updateRoom(name, {
+      trv_entity: undefined,
+      independent_sensor: undefined,
+      heating_entity: undefined,
+      occupancy_sensor: undefined,
+    })
+  }, [updateRoom])
+
   const addRoom = () => {
     const name = newName.trim().toLowerCase().replace(/\s+/g, '_')
     if (!name || editedRooms[name]) return
@@ -112,6 +142,10 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
     const result = await patch('rooms', editedRooms)
     if (result) onRefetch()
   }
+
+  /** Check if a room has any legacy HA entity fields set. */
+  const hasLegacyHaFields = (room: RoomConfigYaml): boolean =>
+    !!(room.trv_entity || room.independent_sensor || room.heating_entity || room.occupancy_sensor)
 
   return (
     <div className="space-y-6">
@@ -228,7 +262,7 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
                 />
               </div>
             </div>
-            {/* Control mode */}
+            {/* Control mode — driver-agnostic */}
             <div className="grid grid-cols-4 gap-3">
               <div>
                 <label className="block text-xs text-[var(--text-muted)] mb-1">
@@ -256,7 +290,7 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
                   <option value="none">None</option>
                 </select>
               </div>
-              {room.control_mode === 'direct' && (
+              {room.control_mode === 'direct' && driver !== 'mqtt' && (
                 <>
                   <div>
                     <label className="block text-xs text-[var(--text-muted)] mb-1">
@@ -308,148 +342,281 @@ export function RoomSettings({ rooms, onRefetch }: RoomSettingsProps) {
                 </>
               )}
             </div>
-            {/* Entity fields */}
-            <div className="space-y-3">
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <EntityField
-                    label="TRV Entity"
-                    value={getPrimaryTrv(room)}
-                    friendlyName={resolved[getPrimaryTrv(room)]?.friendly_name}
-                    state={resolved[getPrimaryTrv(room)]?.state}
-                    unit={resolved[getPrimaryTrv(room)]?.unit}
-                    placeholder="climate.room_trv"
-                    onChange={(v) => updateTrvAt(name, 0, v)}
-                  />
-                </div>
-                <button
-                  onClick={() => addTrvSlot(name)}
-                  className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
-                  title="Add additional TRV"
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              {getExtraTrvs(room).map((trv, i) => (
-                <div key={`trv-${i + 1}`} className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <EntityField
-                      label={`TRV Entity ${i + 2}`}
-                      value={trv}
-                      friendlyName={resolved[trv]?.friendly_name}
-                      state={resolved[trv]?.state}
-                      unit={resolved[trv]?.unit}
-                      placeholder="climate.room_trv"
-                      onChange={(v) => updateTrvAt(name, i + 1, v)}
-                    />
-                  </div>
-                  <button
-                    onClick={() => updateTrvAt(name, i + 1, '')}
-                    className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
-                    title="Remove this TRV"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              <div className="grid grid-cols-2 gap-3">
-                <EntityField
-                  label="Temp Sensor"
-                  value={room.independent_sensor || ''}
-                  friendlyName={resolved[room.independent_sensor || '']?.friendly_name}
-                  state={resolved[room.independent_sensor || '']?.state}
-                  unit={resolved[room.independent_sensor || '']?.unit}
-                  placeholder="sensor.room_temp"
-                  onChange={(v) => updateRoom(name, { independent_sensor: v || undefined })}
+
+            {/* Driver-branched entity/topic fields */}
+            {driver === 'mqtt' ? (
+              <div className="space-y-3">
+                <TopicField
+                  label="Room Temp Topic"
+                  value={getTopicString(room.mqtt_topics?.room_temp)}
+                  onChange={(v) =>
+                    updateRoom(name, {
+                      mqtt_topics: {
+                        ...room.mqtt_topics,
+                        room_temp: setTopicString(room.mqtt_topics?.room_temp, v) ?? '',
+                      },
+                    })
+                  }
+                  placeholder={`rooms/${name}/temp`}
                 />
-                <EntityField
-                  label="Heating Entity"
-                  value={room.heating_entity || ''}
-                  friendlyName={resolved[room.heating_entity || '']?.friendly_name}
-                  state={resolved[room.heating_entity || '']?.state}
-                  unit={resolved[room.heating_entity || '']?.unit}
-                  placeholder="binary_sensor.heating"
-                  onChange={(v) => updateRoom(name, { heating_entity: v || undefined })}
+                <TopicField
+                  label="Valve Position Topic"
+                  value={getTopicString(room.mqtt_topics?.valve_position)}
+                  onChange={(v) =>
+                    updateRoom(name, {
+                      mqtt_topics: {
+                        ...room.mqtt_topics,
+                        room_temp: room.mqtt_topics?.room_temp ?? '',
+                        valve_position: setTopicString(room.mqtt_topics?.valve_position, v),
+                      },
+                    })
+                  }
+                  placeholder={`rooms/${name}/valve`}
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <EntityField
-                  label="Occupancy Sensor"
-                  value={room.occupancy_sensor || ''}
-                  friendlyName={resolved[room.occupancy_sensor || '']?.friendly_name}
-                  state={resolved[room.occupancy_sensor || '']?.state}
-                  unit={resolved[room.occupancy_sensor || '']?.unit}
-                  placeholder="binary_sensor.room_presence"
-                  onChange={(v) => updateRoom(name, { occupancy_sensor: v || undefined })}
+                <TopicField
+                  label="Valve Setpoint Topic"
+                  value={room.mqtt_topics?.valve_setpoint || ''}
+                  onChange={(v) =>
+                    updateRoom(name, {
+                      mqtt_topics: {
+                        ...room.mqtt_topics,
+                        room_temp: room.mqtt_topics?.room_temp ?? '',
+                        valve_setpoint: v || undefined,
+                      },
+                    })
+                  }
+                  placeholder={`rooms/${name}/valve/set`}
                 />
-                <div>
-                  <label className="block text-xs text-[var(--text-muted)] mb-1">
-                    Debounce (s)
-                  </label>
-                  <input
-                    type="number"
-                    step="10"
-                    min="0"
-                    max="600"
-                    value={room.occupancy_debounce ?? ''}
-                    onChange={(e) => {
-                      const raw = e.target.value ? parseInt(e.target.value, 10) : undefined
-                      const clamped = raw !== undefined ? Math.min(600, Math.max(0, raw)) : undefined
-                      updateRoom(name, { occupancy_debounce: clamped })
-                    }}
-                    placeholder="60"
-                    className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-                  />
-                </div>
-              </div>
-              {room.occupancy_sensor && (
+                <TopicField
+                  label="TRV Setpoint Topic"
+                  value={room.mqtt_topics?.trv_setpoint || ''}
+                  onChange={(v) =>
+                    updateRoom(name, {
+                      mqtt_topics: {
+                        ...room.mqtt_topics,
+                        room_temp: room.mqtt_topics?.room_temp ?? '',
+                        trv_setpoint: v || undefined,
+                      },
+                    })
+                  }
+                  placeholder={`rooms/${name}/setpoint`}
+                />
+                <TopicField
+                  label="Occupancy Topic"
+                  value={room.mqtt_topics?.occupancy_sensor || ''}
+                  onChange={(v) =>
+                    updateRoom(name, {
+                      mqtt_topics: {
+                        ...room.mqtt_topics,
+                        room_temp: room.mqtt_topics?.room_temp ?? '',
+                        occupancy_sensor: v || undefined,
+                      },
+                    })
+                  }
+                  placeholder={`rooms/${name}/occupancy`}
+                />
+
+                {/* Occupancy debounce — driver-agnostic */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-[var(--text-muted)] mb-1">
-                      Sensor Unavailable Behaviour
+                      Debounce (s)
                     </label>
-                    <select
-                      value={room.occupancy_fallback || 'schedule'}
-                      onChange={(e) =>
-                        updateRoom(name, {
-                          occupancy_fallback: e.target.value as RoomConfigYaml['occupancy_fallback'],
-                        })
-                      }
-                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                    >
-                      <option value="schedule">Use Schedule</option>
-                      <option value="occupied">Assume Occupied</option>
-                      <option value="last_known">Hold Last Known</option>
-                    </select>
+                    <input
+                      type="number"
+                      step="10"
+                      min="0"
+                      max="600"
+                      value={room.occupancy_debounce ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value ? parseInt(e.target.value, 10) : undefined
+                        const clamped = raw !== undefined ? Math.min(600, Math.max(0, raw)) : undefined
+                        updateRoom(name, { occupancy_debounce: clamped })
+                      }}
+                      placeholder="60"
+                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                    />
                   </div>
-                  {room.occupancy_fallback === 'last_known' && (
+                </div>
+
+                {/* Legacy HA config — render read-only muted if present */}
+                {hasLegacyHaFields(room) && (
+                  <div className="mt-4 pt-3 border-t border-[var(--border)] space-y-2">
+                    <h4 className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider">
+                      Legacy HA config — not active on MQTT driver
+                    </h4>
+                    {room.trv_entity && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        TRV Entity: {Array.isArray(room.trv_entity) ? room.trv_entity.join(', ') : room.trv_entity}
+                      </p>
+                    )}
+                    {room.independent_sensor && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Temp Sensor: {room.independent_sensor}
+                      </p>
+                    )}
+                    {room.heating_entity && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Heating Entity: {room.heating_entity}
+                      </p>
+                    )}
+                    {room.occupancy_sensor && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Occupancy Sensor: {room.occupancy_sensor}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => clearLegacyHaFields(name)}
+                      className="text-xs px-2 py-1 rounded border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--red)] hover:border-[var(--red)] transition-colors"
+                    >
+                      Clear legacy HA fields
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <EntityField
+                      label="TRV Entity"
+                      value={getPrimaryTrv(room)}
+                      friendlyName={resolved[getPrimaryTrv(room)]?.friendly_name}
+                      state={resolved[getPrimaryTrv(room)]?.state}
+                      unit={resolved[getPrimaryTrv(room)]?.unit}
+                      placeholder="climate.room_trv"
+                      onChange={(v) => updateTrvAt(name, 0, v)}
+                    />
+                  </div>
+                  <button
+                    onClick={() => addTrvSlot(name)}
+                    className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                    title="Add additional TRV"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+                {getExtraTrvs(room).map((trv, i) => (
+                  <div key={`trv-${i + 1}`} className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <EntityField
+                        label={`TRV Entity ${i + 2}`}
+                        value={trv}
+                        friendlyName={resolved[trv]?.friendly_name}
+                        state={resolved[trv]?.state}
+                        unit={resolved[trv]?.unit}
+                        placeholder="climate.room_trv"
+                        onChange={(v) => updateTrvAt(name, i + 1, v)}
+                      />
+                    </div>
+                    <button
+                      onClick={() => updateTrvAt(name, i + 1, '')}
+                      className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                      title="Remove this TRV"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                <div className="grid grid-cols-2 gap-3">
+                  <EntityField
+                    label="Temp Sensor"
+                    value={room.independent_sensor || ''}
+                    friendlyName={resolved[room.independent_sensor || '']?.friendly_name}
+                    state={resolved[room.independent_sensor || '']?.state}
+                    unit={resolved[room.independent_sensor || '']?.unit}
+                    placeholder="sensor.room_temp"
+                    onChange={(v) => updateRoom(name, { independent_sensor: v || undefined })}
+                  />
+                  <EntityField
+                    label="Heating Entity"
+                    value={room.heating_entity || ''}
+                    friendlyName={resolved[room.heating_entity || '']?.friendly_name}
+                    state={resolved[room.heating_entity || '']?.state}
+                    unit={resolved[room.heating_entity || '']?.unit}
+                    placeholder="binary_sensor.heating"
+                    onChange={(v) => updateRoom(name, { heating_entity: v || undefined })}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <EntityField
+                    label="Occupancy Sensor"
+                    value={room.occupancy_sensor || ''}
+                    friendlyName={resolved[room.occupancy_sensor || '']?.friendly_name}
+                    state={resolved[room.occupancy_sensor || '']?.state}
+                    unit={resolved[room.occupancy_sensor || '']?.unit}
+                    placeholder="binary_sensor.room_presence"
+                    onChange={(v) => updateRoom(name, { occupancy_sensor: v || undefined })}
+                  />
+                  <div>
+                    <label className="block text-xs text-[var(--text-muted)] mb-1">
+                      Debounce (s)
+                    </label>
+                    <input
+                      type="number"
+                      step="10"
+                      min="0"
+                      max="600"
+                      value={room.occupancy_debounce ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value ? parseInt(e.target.value, 10) : undefined
+                        const clamped = raw !== undefined ? Math.min(600, Math.max(0, raw)) : undefined
+                        updateRoom(name, { occupancy_debounce: clamped })
+                      }}
+                      placeholder="60"
+                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                    />
+                  </div>
+                </div>
+                {room.occupancy_sensor && (
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-[var(--text-muted)] mb-1">
-                        Watchdog timeout (min)
+                        Sensor Unavailable Behaviour
                       </label>
-                      <input
-                        type="number"
-                        step="5"
-                        min="5"
-                        max="480"
-                        value={room.last_known_timeout_s != null ? Math.round(room.last_known_timeout_s / 60) : ''}
-                        onChange={(e) => {
-                          const mins = e.target.value ? parseInt(e.target.value, 10) : undefined
+                      <select
+                        value={room.occupancy_fallback || 'schedule'}
+                        onChange={(e) =>
                           updateRoom(name, {
-                            last_known_timeout_s: mins !== undefined ? Math.min(28800, Math.max(300, mins * 60)) : undefined,
+                            occupancy_fallback: e.target.value as RoomConfigYaml['occupancy_fallback'],
                           })
-                        }}
-                        placeholder="60"
-                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-                      />
-                      <p className="text-xs text-[var(--text-muted)] mt-1">
-                        Degrade to &lsquo;occupied&rsquo; after this duration if sensor doesn&apos;t recover
-                      </p>
+                        }
+                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                      >
+                        <option value="schedule">Use Schedule</option>
+                        <option value="occupied">Assume Occupied</option>
+                        <option value="last_known">Hold Last Known</option>
+                      </select>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                    {room.occupancy_fallback === 'last_known' && (
+                      <div>
+                        <label className="block text-xs text-[var(--text-muted)] mb-1">
+                          Watchdog timeout (min)
+                        </label>
+                        <input
+                          type="number"
+                          step="5"
+                          min="5"
+                          max="480"
+                          value={room.last_known_timeout_s != null ? Math.round(room.last_known_timeout_s / 60) : ''}
+                          onChange={(e) => {
+                            const mins = e.target.value ? parseInt(e.target.value, 10) : undefined
+                            updateRoom(name, {
+                              last_known_timeout_s: mins !== undefined ? Math.min(28800, Math.max(300, mins * 60)) : undefined,
+                            })
+                          }}
+                          placeholder="60"
+                          className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                        />
+                        <p className="text-xs text-[var(--text-muted)] mt-1">
+                          Degrade to &lsquo;occupied&rsquo; after this duration if sensor doesn&apos;t recover
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>

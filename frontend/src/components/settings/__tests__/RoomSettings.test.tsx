@@ -27,13 +27,13 @@ describe('RoomSettings occupancy sensor', () => {
   }
 
   it('renders occupancy sensor EntityField', () => {
-    render(<RoomSettings rooms={baseRooms} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
     const labels = screen.getAllByText('Occupancy Sensor')
     expect(labels.length).toBeGreaterThan(0)
   })
 
   it('renders debounce input for all rooms', () => {
-    render(<RoomSettings rooms={baseRooms} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
     const debounceLabels = screen.getAllByText('Debounce (s)')
     // Debounce field is always visible alongside occupancy sensor field
     expect(debounceLabels.length).toBe(2)
@@ -43,12 +43,12 @@ describe('RoomSettings occupancy sensor', () => {
     const roomsNoSensor = {
       bedroom: { area_m2: 15, facing: 'N', ceiling_m: 2.4 },
     }
-    render(<RoomSettings rooms={roomsNoSensor} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={roomsNoSensor} driver="ha" onRefetch={() => {}} />)
     expect(screen.queryByText('Debounce (s)')).not.toBeNull()
   })
 
   it('shows fallback dropdown when occupancy_sensor is set', () => {
-    render(<RoomSettings rooms={baseRooms} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
     // Lounge has occupancy_sensor set, so fallback dropdown should be visible
     const fallbackLabels = screen.getAllByText('Sensor Unavailable Behaviour')
     expect(fallbackLabels.length).toBe(1) // Only lounge has a sensor
@@ -58,7 +58,7 @@ describe('RoomSettings occupancy sensor', () => {
     const roomsNoSensor = {
       bedroom: { area_m2: 15, facing: 'N', ceiling_m: 2.4 },
     }
-    render(<RoomSettings rooms={roomsNoSensor} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={roomsNoSensor} driver="ha" onRefetch={() => {}} />)
     expect(screen.queryByText('Sensor Unavailable Behaviour')).toBeNull()
   })
 
@@ -73,12 +73,12 @@ describe('RoomSettings occupancy sensor', () => {
         last_known_timeout_s: 3600,
       },
     }
-    render(<RoomSettings rooms={roomsLastKnown} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={roomsLastKnown} driver="ha" onRefetch={() => {}} />)
     expect(screen.queryByText('Watchdog timeout (min)')).not.toBeNull()
   })
 
   it('hides watchdog timeout when schedule fallback is selected', () => {
-    render(<RoomSettings rooms={baseRooms} onRefetch={() => {}} />)
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
     expect(screen.queryByText('Watchdog timeout (min)')).toBeNull()
   })
 })

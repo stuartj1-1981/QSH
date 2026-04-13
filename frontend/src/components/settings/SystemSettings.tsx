@@ -1,11 +1,15 @@
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
 import { Download, Wand2 } from 'lucide-react'
 import { apiUrl } from '../../lib/api'
+import type { Driver } from '../../types/config'
 
 interface SystemSettingsProps {
+  driver: Driver
   onRunWizard: () => void
 }
 
-export function SystemSettings({ onRunWizard }: SystemSettingsProps) {
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
+export function SystemSettings({ driver: _driver, onRunWizard }: SystemSettingsProps) {
   const downloadConfig = async () => {
     try {
       const resp = await fetch(apiUrl('api/config/raw'))

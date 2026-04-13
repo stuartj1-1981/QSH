@@ -13,6 +13,7 @@ beforeEach(() => {
 const baseProps = {
   antifrostThreshold: 7.0,
   shoulderThreshold: 2.0,
+  driver: 'ha' as const,
   onRefetch: vi.fn(),
 }
 
@@ -35,6 +36,7 @@ describe('SeasonalTuningSettings', () => {
       <SeasonalTuningSettings
         antifrostThreshold={null}
         shoulderThreshold={null}
+        driver="ha"
         onRefetch={vi.fn()}
       />
     )
@@ -47,6 +49,7 @@ describe('SeasonalTuningSettings', () => {
       <SeasonalTuningSettings
         antifrostThreshold={0}
         shoulderThreshold={2.0}
+        driver="ha"
         onRefetch={vi.fn()}
       />
     )
@@ -58,6 +61,7 @@ describe('SeasonalTuningSettings', () => {
       <SeasonalTuningSettings
         antifrostThreshold={15}
         shoulderThreshold={2.0}
+        driver="ha"
         onRefetch={vi.fn()}
       />
     )
@@ -71,6 +75,7 @@ describe('SeasonalTuningSettings', () => {
       <SeasonalTuningSettings
         antifrostThreshold={7.0}
         shoulderThreshold={0.5}
+        driver="ha"
         onRefetch={vi.fn()}
       />
     )
@@ -82,6 +87,7 @@ describe('SeasonalTuningSettings', () => {
       <SeasonalTuningSettings
         antifrostThreshold={7.0}
         shoulderThreshold={10}
+        driver="ha"
         onRefetch={vi.fn()}
       />
     )

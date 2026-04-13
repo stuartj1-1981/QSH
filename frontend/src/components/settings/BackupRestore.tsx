@@ -1,9 +1,16 @@
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
 import { useState, useRef } from 'react'
 import { Download, Upload, Loader2, AlertTriangle } from 'lucide-react'
 import { apiUrl } from '../../lib/api'
 import { cn } from '../../lib/utils'
+import type { Driver } from '../../types/config'
 
-export function BackupRestore() {
+interface BackupRestoreProps {
+  driver: Driver
+}
+
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
+export function BackupRestore({ driver: _driver }: BackupRestoreProps) {
   const [restoring, setRestoring] = useState(false)
   const [mode, setMode] = useState<'merge' | 'replace'>('merge')
   const [restoreConfig, setRestoreConfig] = useState(false)

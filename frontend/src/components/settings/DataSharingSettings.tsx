@@ -1,19 +1,23 @@
-import { useState } from 'react'
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
+import { useState, useEffect } from 'react'
 import { Save, Loader2, BarChart3 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { UK_REGIONS } from '../../lib/regions'
 import { cn } from '../../lib/utils'
-import type { TelemetryYaml } from '../../types/config'
+import type { TelemetryYaml, Driver } from '../../types/config'
 
 interface DataSharingSettingsProps {
   telemetry?: TelemetryYaml
   disclaimerAccepted?: boolean
+  driver: Driver
   onRefetch: () => void
 }
 
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
 export function DataSharingSettings({
   telemetry: initial,
   disclaimerAccepted: initialDisclaimer,
+  driver: _driver,
   onRefetch,
 }: DataSharingSettingsProps) {
   const existingRegion = initial?.region ?? ''
@@ -26,6 +30,22 @@ export function DataSharingSettings({
   const [region, setRegion] = useState(existingRegion)
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(initialDisclaimer ?? false)
   const [showRestartNotice, setShowRestartNotice] = useState(false)
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setAgreed(initial?.agreed ?? false)
+  }, [initial])
+  useEffect(() => {
+    const r = initial?.region ?? ''
+    const isUk = UK_REGIONS.includes(r as typeof UK_REGIONS[number])
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setRegionMode(r && !isUk ? 'international' : 'uk')
+    setRegion(r)
+  }, [initial])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setDisclaimerAccepted(initialDisclaimer ?? false)
+  }, [initialDisclaimer])
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const { patch, saving, error } = usePatchConfig()

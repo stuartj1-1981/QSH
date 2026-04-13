@@ -1,20 +1,25 @@
-import { useState } from 'react'
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
+import { useState, useEffect } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
-import type { ThermalYaml } from '../../types/config'
+import type { ThermalYaml, Driver } from '../../types/config'
 
 interface ThermalSettingsProps {
   thermal: ThermalYaml
   rooms: string[]
+  driver: Driver
   onRefetch: () => void
 }
 
-export function ThermalSettings({ thermal: initial, rooms, onRefetch }: ThermalSettingsProps) {
+// driver threaded in 88B; consumed in 88C/88D via rename to `driver`
+export function ThermalSettings({ thermal: initial, rooms, driver: _driver, onRefetch }: ThermalSettingsProps) {
   const [thermal, setThermal] = useState<ThermalYaml>(initial)
   const { patch, saving } = usePatchConfig()
 
+  useEffect(() => { setThermal(initial) }, [initial])
+
   const update = (changes: Partial<ThermalYaml>) => {
-    setThermal({ ...thermal, ...changes })
+    setThermal(prev => ({ ...prev, ...changes }))
   }
 
   const save = async () => {

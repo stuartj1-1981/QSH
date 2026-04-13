@@ -55,21 +55,19 @@ describe('ExternalSetpointSettings', () => {
     }
   })
 
-  it('renders 4 entity fields', () => {
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+  it('renders 6 entity fields including flow min/max', () => {
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.getByText(/Comfort Temperature/)).toBeInTheDocument()
+    expect(screen.getByText(/Flow Minimum Temperature/)).toBeInTheDocument()
+    expect(screen.getByText(/Flow Maximum Temperature/)).toBeInTheDocument()
     expect(screen.getByText(/Antifrost OAT Threshold/)).toBeInTheDocument()
     expect(screen.getByText(/Shoulder Shutdown Threshold/)).toBeInTheDocument()
     expect(screen.getByText(/Overtemp Protection/)).toBeInTheDocument()
-
-    // Flow min/max should NOT be rendered
-    expect(screen.queryByText(/Flow Min/)).toBeNull()
-    expect(screen.queryByText(/Flow Max/)).toBeNull()
   })
 
   it('displays current entity IDs from hook', () => {
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.getByDisplayValue('input_number.ct')).toBeInTheDocument()
     expect(screen.getByDisplayValue('input_number.shoulder')).toBeInTheDocument()
@@ -83,7 +81,7 @@ describe('ExternalSetpointSettings', () => {
       loading: false,
     }
 
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.getByText('Comfort Temp')).toBeInTheDocument()
     expect(screen.getByText('Current: 21.5°C')).toBeInTheDocument()
@@ -97,24 +95,24 @@ describe('ExternalSetpointSettings', () => {
       loading: false,
     }
 
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.getByText(/outside safe range/)).toBeInTheDocument()
     expect(screen.getByText(/Value 35°C is outside safe range/)).toBeInTheDocument()
   })
 
   it('shows "(using internal value)" for empty fields', () => {
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     const internalTexts = screen.getAllByText('(using internal value)')
-    // antifrost_oat_threshold and overtemp_protection are empty
-    expect(internalTexts.length).toBe(2)
+    // flow_min_temp, flow_max_temp, antifrost_oat_threshold and overtemp_protection are empty
+    expect(internalTexts.length).toBe(4)
   })
 
   it('save button disabled while saving', () => {
     mockHookReturn = { ...mockHookReturn, saving: true }
 
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     const saveButton = screen.getByRole('button', { name: /Save Changes/ })
     expect(saveButton).toBeDisabled()
@@ -123,13 +121,13 @@ describe('ExternalSetpointSettings', () => {
   it('displays error message', () => {
     mockHookReturn = { ...mockHookReturn, error: 'Something failed' }
 
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.getByText('Something failed')).toBeInTheDocument()
   })
 
   it('calls onRefetch after successful save', async () => {
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     // Modify a field to create a diff
     const input = screen.getByDisplayValue('input_number.ct')
@@ -147,6 +145,35 @@ describe('ExternalSetpointSettings', () => {
     })
   })
 
+  it('renders flow_min_temp and flow_max_temp with data and includes in save', async () => {
+    mockHookReturn = {
+      ...mockHookReturn,
+      data: {
+        ...MOCK_DATA,
+        flow_min_temp: 'input_number.fmin',
+        flow_max_temp: 'input_number.fmax',
+      },
+    }
+
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
+
+    expect(screen.getByDisplayValue('input_number.fmin')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('input_number.fmax')).toBeInTheDocument()
+
+    // Change one flow field and save
+    const fminInput = screen.getByDisplayValue('input_number.fmin')
+    fireEvent.change(fminInput, { target: { value: 'input_number.new_fmin' } })
+
+    const saveButton = screen.getByRole('button', { name: /Save Changes/ })
+    fireEvent.click(saveButton)
+
+    await waitFor(() => {
+      expect(mockSave).toHaveBeenCalled()
+      const payload = mockSave.mock.calls[0][0]
+      expect(payload).toHaveProperty('flow_min_temp', 'input_number.new_fmin')
+    })
+  })
+
   it('does not warn for non-numeric entity state', () => {
     mockResolvedReturn = {
       resolved: {
@@ -155,7 +182,7 @@ describe('ExternalSetpointSettings', () => {
       loading: false,
     }
 
-    render(<ExternalSetpointSettings onRefetch={mockRefetch} />)
+    render(<ExternalSetpointSettings driver="ha" onRefetch={mockRefetch} />)
 
     expect(screen.queryByText(/outside safe range/)).toBeNull()
     // Should not show "Current:" for non-numeric state

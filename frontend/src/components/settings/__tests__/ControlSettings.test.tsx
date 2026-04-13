@@ -22,6 +22,7 @@ describe('ControlSettings', () => {
       <ControlSettings
         control={{}}
         rootConfig={{ dfan_control_internal: true }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -35,6 +36,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{}}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -48,6 +50,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{ dfan_control_entity: 'input_boolean.dfan_control' }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -61,6 +64,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{ pid_target_entity: 'input_number.pid_target_temperature' }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -75,6 +79,7 @@ describe('ControlSettings', () => {
       <ControlSettings
         control={{}}
         rootConfig={{ dfan_control_internal: true }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -86,6 +91,7 @@ describe('ControlSettings', () => {
       <ControlSettings
         control={{}}
         rootConfig={{ dfan_control_internal: true }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -97,6 +103,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{ nudge_budget: 2.5 }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -110,6 +117,7 @@ describe('ControlSettings', () => {
       <ControlSettings
         control={{}}
         rootConfig={{ driver: 'mqtt', publish_mqtt_shadow: true }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -122,6 +130,7 @@ describe('ControlSettings', () => {
       <ControlSettings
         control={{ nudge_budget: 3.0 }}
         rootConfig={{ driver: 'ha' }}
+        driver="ha"
         onRefetch={() => {}}
       />
     )
@@ -133,6 +142,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{}}
+        driver="ha"
         onRefetch={() => {}}
       />
     )

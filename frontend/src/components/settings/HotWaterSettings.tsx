@@ -1,11 +1,12 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { patchOrDelete } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
 import { EntityField } from './EntityField'
+import { TopicField } from './TopicField'
 import { HelpTip } from '../HelpTip'
 import { HOT_WATER } from '../../lib/helpText'
-import type { HwPlanType, HwScheduleYaml, HwTankYaml, HwPrechargeYaml } from '../../types/config'
+import type { HwPlanType, HwScheduleYaml, HwTankYaml, HwPrechargeYaml, Driver } from '../../types/config'
 
 const CYLINDER_PLANS: { value: HwPlanType; label: string }[] = [
   { value: 'W', label: 'W — heating OR hot water' },
@@ -28,6 +29,7 @@ interface HotWaterSettingsProps {
   hwSchedule?: HwScheduleYaml
   hwTank?: HwTankYaml
   hwPrecharge?: HwPrechargeYaml
+  driver: Driver
   onRefetch: () => void
 }
 
@@ -36,6 +38,7 @@ export function HotWaterSettings({
   hwSchedule: initialSchedule,
   hwTank: initialTank,
   hwPrecharge: initialPrecharge,
+  driver,
   onRefetch,
 }: HotWaterSettingsProps) {
   const hasCylinder = initialPlan !== undefined && initialPlan !== 'Combi'
@@ -53,28 +56,59 @@ export function HotWaterSettings({
     deriveProbeConfig(initialTank || {})
   )
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setEnabled(initialPlan !== undefined && initialPlan !== 'Combi')
+  }, [initialPlan])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setPlan(initialPlan || 'W')
+  }, [initialPlan])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setSchedule(initialSchedule || { source: 'fixed', fixed_start_time: '02:30' })
+  }, [initialSchedule])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setTank(initialTank || { volume_litres: 200, target_temperature: 50 })
+  }, [initialTank])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setPrecharge(initialPrecharge || {})
+  }, [initialPrecharge])
+
+  // On MQTT, force schedule source to 'fixed' — HA entity schedule is unavailable
+  useEffect(() => {
+    if (driver === 'mqtt' && schedule.source === 'entity') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- coerce invalid source on driver change
+      setSchedule(prev => ({ ...prev, source: 'fixed' }))
+    }
+  }, [driver, schedule.source])
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const entityIds = useMemo(
-    () =>
-      [
+    () => {
+      if (driver === 'mqtt') return []
+      return [
         schedule.entity_id,
         tank.water_heater_entity,
         tank.sensor_top,
         tank.sensor_bottom,
-      ].filter(Boolean) as string[],
-    [schedule.entity_id, tank.water_heater_entity, tank.sensor_top, tank.sensor_bottom]
+      ].filter(Boolean) as string[]
+    },
+    [schedule.entity_id, tank.water_heater_entity, tank.sensor_top, tank.sensor_bottom, driver]
   )
-  const { resolved } = useEntityResolve(entityIds)
+  const { resolved } = useEntityResolve(entityIds, driver)
 
   const changeProbeConfig = (config: ProbeConfig) => {
     setProbeConfig(config)
     if (config === 'none') {
-      setTank({ ...tank, sensor_top: undefined, sensor_bottom: undefined })
+      setTank(prev => ({ ...prev, sensor_top: undefined, sensor_bottom: undefined }))
     } else if (config === 'single') {
       // Keep top, clear bottom
-      setTank({ ...tank, sensor_bottom: undefined })
+      setTank(prev => ({ ...prev, sensor_bottom: undefined }))
     }
     // 'dual' — keep both as-is
   }
@@ -169,29 +203,37 @@ export function HotWaterSettings({
           <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-3">
             <h3 className="text-sm font-medium text-[var(--text)]">Schedule Source</h3>
             <div className="flex gap-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="schedule_source"
-                  checked={schedule.source === 'entity'}
-                  onChange={() => setSchedule({ ...schedule, source: 'entity' })}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-sm text-[var(--text)]">HA entity</span>
-              </label>
+              {driver !== 'mqtt' && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="schedule_source"
+                    checked={schedule.source === 'entity'}
+                    onChange={() => setSchedule(prev => ({ ...prev, source: 'entity' }))}
+                    className="accent-[var(--accent)]"
+                  />
+                  <span className="text-sm text-[var(--text)]">HA entity</span>
+                </label>
+              )}
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="radio"
                   name="schedule_source"
                   checked={(schedule.source || 'fixed') === 'fixed'}
-                  onChange={() => setSchedule({ ...schedule, source: 'fixed' })}
+                  onChange={() => setSchedule(prev => ({ ...prev, source: 'fixed' }))}
                   className="accent-[var(--accent)]"
                 />
                 <span className="text-sm text-[var(--text)]">Fixed time</span>
               </label>
             </div>
 
-            {schedule.source === 'entity' && (
+            {driver === 'mqtt' && (
+              <p className="text-xs text-[var(--text-muted)]">
+                HA Schedule integration is unavailable on MQTT driver. Use fixed-time scheduling.
+              </p>
+            )}
+
+            {schedule.source === 'entity' && driver !== 'mqtt' && (
               <div className="space-y-3">
                 <EntityField
                   label="Schedule Entity"
@@ -199,7 +241,7 @@ export function HotWaterSettings({
                   friendlyName={resolved[schedule.entity_id || '']?.friendly_name}
                   state={resolved[schedule.entity_id || '']?.state}
                   unit={resolved[schedule.entity_id || '']?.unit}
-                  onChange={(v) => setSchedule({ ...schedule, entity_id: v || undefined })}
+                  onChange={(v) => setSchedule(prev => ({ ...prev, entity_id: v || undefined }))}
                   placeholder="binary_sensor.hw_timeframe"
                 />
                 <div>
@@ -210,7 +252,7 @@ export function HotWaterSettings({
                     type="text"
                     value={schedule.attribute_name || ''}
                     onChange={(e) =>
-                      setSchedule({ ...schedule, attribute_name: e.target.value || undefined })
+                      setSchedule(prev => ({ ...prev, attribute_name: e.target.value || undefined }))
                     }
                     placeholder="e.g. current_slot"
                     className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
@@ -228,7 +270,7 @@ export function HotWaterSettings({
                   type="time"
                   value={schedule.fixed_start_time || '02:30'}
                   onChange={(e) =>
-                    setSchedule({ ...schedule, source: 'fixed', fixed_start_time: e.target.value })
+                    setSchedule(prev => ({ ...prev, source: 'fixed', fixed_start_time: e.target.value }))
                   }
                   className="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -248,7 +290,7 @@ export function HotWaterSettings({
                   type="number"
                   value={tank.volume_litres ?? 200}
                   onChange={(e) =>
-                    setTank({ ...tank, volume_litres: parseInt(e.target.value) || 200 })
+                    setTank(prev => ({ ...prev, volume_litres: parseInt(e.target.value) || 200 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -261,22 +303,26 @@ export function HotWaterSettings({
                   type="number"
                   value={tank.target_temperature ?? 50}
                   onChange={(e) =>
-                    setTank({ ...tank, target_temperature: parseInt(e.target.value) || 50 })
+                    setTank(prev => ({ ...prev, target_temperature: parseInt(e.target.value) || 50 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
             </div>
-            <EntityField
-              label="Water Heater Entity"
-              value={tank.water_heater_entity || ''}
-              friendlyName={resolved[tank.water_heater_entity || '']?.friendly_name}
-              state={resolved[tank.water_heater_entity || '']?.state}
-              unit={resolved[tank.water_heater_entity || '']?.unit}
-              onChange={(v) => setTank({ ...tank, water_heater_entity: v || undefined })}
-              placeholder="water_heater.heat_pump"
-              helpText={HOT_WATER.hwSensor}
-            />
+
+            {/* Water heater entity — HA only */}
+            {driver !== 'mqtt' && (
+              <EntityField
+                label="Water Heater Entity"
+                value={tank.water_heater_entity || ''}
+                friendlyName={resolved[tank.water_heater_entity || '']?.friendly_name}
+                state={resolved[tank.water_heater_entity || '']?.state}
+                unit={resolved[tank.water_heater_entity || '']?.unit}
+                onChange={(v) => setTank(prev => ({ ...prev, water_heater_entity: v || undefined }))}
+                placeholder="water_heater.heat_pump"
+                helpText={HOT_WATER.hwSensor}
+              />
+            )}
 
             {/* Temperature probes — adjustable 0/1/2 */}
             <div className="space-y-3">
@@ -308,39 +354,69 @@ export function HotWaterSettings({
               )}
 
               {probeConfig === 'single' && (
-                <EntityField
-                  label="Cylinder Temperature Sensor"
-                  value={tank.sensor_top || ''}
-                  friendlyName={resolved[tank.sensor_top || '']?.friendly_name}
-                  state={resolved[tank.sensor_top || '']?.state}
-                  unit={resolved[tank.sensor_top || '']?.unit}
-                  onChange={(v) =>
-                    setTank({ ...tank, sensor_top: v || undefined, sensor_bottom: undefined })
-                  }
-                  placeholder="sensor.hw_cylinder_temp"
-                />
-              )}
-
-              {probeConfig === 'dual' && (
-                <div className="space-y-3">
+                driver === 'mqtt' ? (
+                  <TopicField
+                    label="Cylinder Temperature Topic"
+                    value={tank.sensor_top || ''}
+                    onChange={(v) =>
+                      setTank(prev => ({ ...prev, sensor_top: v || undefined, sensor_bottom: undefined }))
+                    }
+                    placeholder="temps/hwTopTemp"
+                  />
+                ) : (
                   <EntityField
-                    label="Top Sensor"
+                    label="Cylinder Temperature Sensor"
                     value={tank.sensor_top || ''}
                     friendlyName={resolved[tank.sensor_top || '']?.friendly_name}
                     state={resolved[tank.sensor_top || '']?.state}
                     unit={resolved[tank.sensor_top || '']?.unit}
-                    onChange={(v) => setTank({ ...tank, sensor_top: v || undefined })}
-                    placeholder="sensor.hw_tank_top"
+                    onChange={(v) =>
+                      setTank(prev => ({ ...prev, sensor_top: v || undefined, sensor_bottom: undefined }))
+                    }
+                    placeholder="sensor.hw_cylinder_temp"
                   />
-                  <EntityField
-                    label="Bottom Sensor"
-                    value={tank.sensor_bottom || ''}
-                    friendlyName={resolved[tank.sensor_bottom || '']?.friendly_name}
-                    state={resolved[tank.sensor_bottom || '']?.state}
-                    unit={resolved[tank.sensor_bottom || '']?.unit}
-                    onChange={(v) => setTank({ ...tank, sensor_bottom: v || undefined })}
-                    placeholder="sensor.hw_tank_bottom"
-                  />
+                )
+              )}
+
+              {probeConfig === 'dual' && (
+                <div className="space-y-3">
+                  {driver === 'mqtt' ? (
+                    <>
+                      <TopicField
+                        label="Top Probe Topic"
+                        value={tank.sensor_top || ''}
+                        onChange={(v) => setTank(prev => ({ ...prev, sensor_top: v || undefined }))}
+                        placeholder="temps/hwTopTemp"
+                      />
+                      <TopicField
+                        label="Bottom Probe Topic"
+                        value={tank.sensor_bottom || ''}
+                        onChange={(v) => setTank(prev => ({ ...prev, sensor_bottom: v || undefined }))}
+                        placeholder="temps/hwBotTemp"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <EntityField
+                        label="Top Sensor"
+                        value={tank.sensor_top || ''}
+                        friendlyName={resolved[tank.sensor_top || '']?.friendly_name}
+                        state={resolved[tank.sensor_top || '']?.state}
+                        unit={resolved[tank.sensor_top || '']?.unit}
+                        onChange={(v) => setTank(prev => ({ ...prev, sensor_top: v || undefined }))}
+                        placeholder="sensor.hw_tank_top"
+                      />
+                      <EntityField
+                        label="Bottom Sensor"
+                        value={tank.sensor_bottom || ''}
+                        friendlyName={resolved[tank.sensor_bottom || '']?.friendly_name}
+                        state={resolved[tank.sensor_bottom || '']?.state}
+                        unit={resolved[tank.sensor_bottom || '']?.unit}
+                        onChange={(v) => setTank(prev => ({ ...prev, sensor_bottom: v || undefined }))}
+                        placeholder="sensor.hw_tank_bottom"
+                      />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -353,13 +429,13 @@ export function HotWaterSettings({
                 type="checkbox"
                 checked={precharge.enabled ?? false}
                 onChange={(e) =>
-                  setPrecharge({
-                    ...precharge,
+                  setPrecharge(prev => ({
+                    ...prev,
                     enabled: e.target.checked,
-                    factor: precharge.factor ?? 0.5,
-                    lead_minutes: precharge.lead_minutes ?? 60,
-                    min_cycle_minutes: precharge.min_cycle_minutes ?? 30,
-                  })
+                    factor: prev.factor ?? 0.5,
+                    lead_minutes: prev.lead_minutes ?? 60,
+                    min_cycle_minutes: prev.min_cycle_minutes ?? 30,
+                  }))
                 }
                 className="accent-[var(--accent)]"
               />
@@ -381,7 +457,7 @@ export function HotWaterSettings({
                     max="1"
                     value={precharge.factor ?? 0.5}
                     onChange={(e) =>
-                      setPrecharge({ ...precharge, factor: parseFloat(e.target.value) || 0.5 })
+                      setPrecharge(prev => ({ ...prev, factor: parseFloat(e.target.value) || 0.5 }))
                     }
                     className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                   />
@@ -394,7 +470,7 @@ export function HotWaterSettings({
                     type="number"
                     value={precharge.lead_minutes ?? 60}
                     onChange={(e) =>
-                      setPrecharge({ ...precharge, lead_minutes: parseInt(e.target.value) || 60 })
+                      setPrecharge(prev => ({ ...prev, lead_minutes: parseInt(e.target.value) || 60 }))
                     }
                     className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                   />
@@ -407,7 +483,7 @@ export function HotWaterSettings({
                     type="number"
                     value={precharge.min_cycle_minutes ?? 30}
                     onChange={(e) =>
-                      setPrecharge({ ...precharge, min_cycle_minutes: parseInt(e.target.value) || 30 })
+                      setPrecharge(prev => ({ ...prev, min_cycle_minutes: parseInt(e.target.value) || 30 }))
                     }
                     className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                   />

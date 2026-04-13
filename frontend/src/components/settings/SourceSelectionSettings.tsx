@@ -1,4 +1,5 @@
-import { useState } from 'react'
+// Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
+import { useState, useEffect } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { HelpTip } from '../HelpTip'
@@ -15,8 +16,10 @@ export function SourceSelectionSettings({ config, sourceNames, onRefetch }: Sour
   const [ss, setSs] = useState<SourceSelectionYaml>(config)
   const { patch, saving } = usePatchConfig()
 
+  useEffect(() => { setSs(config) }, [config])
+
   const update = (changes: Partial<SourceSelectionYaml>) => {
-    setSs({ ...ss, ...changes })
+    setSs(prev => ({ ...prev, ...changes }))
   }
 
   const save = async () => {

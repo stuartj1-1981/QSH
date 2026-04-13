@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiUrl } from '../lib/api'
+import type { Driver } from '../types/config'
 
 interface ResolvedEntity {
   friendly_name: string
@@ -11,15 +12,18 @@ interface ResolvedEntity {
  * Resolve a batch of HA entity IDs to their friendly names.
  * Automatically fetches when entityIds changes.
  * Returns a map of entity_id → ResolvedEntity.
+ *
+ * When driver is 'mqtt' the hook is a no-op — the /api/entities/resolve
+ * endpoint returns 501 on MQTT installs so there is no point calling it.
  */
-export function useEntityResolve(entityIds: string[]) {
+export function useEntityResolve(entityIds: string[], driver?: Driver) {
   const [resolved, setResolved] = useState<Record<string, ResolvedEntity>>({})
   const [loading, setLoading] = useState(false)
   // Stable string key so the effect only re-runs when the actual set of IDs changes
   const key = entityIds.filter(Boolean).sort().join(',')
 
   useEffect(() => {
-    if (!key) {
+    if (!key || driver === 'mqtt') {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting state when input clears is intentional
       setResolved({})
       return
@@ -51,7 +55,7 @@ export function useEntityResolve(entityIds: string[]) {
     return () => {
       cancelled = true
     }
-  }, [key])
+  }, [key, driver])
 
   return { resolved, loading }
 }

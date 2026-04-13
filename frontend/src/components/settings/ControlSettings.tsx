@@ -1,26 +1,31 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
+import { apiUrl } from '../../lib/api'
 import { EntityField } from './EntityField'
-import type { ControlYaml, QshConfigYaml } from '../../types/config'
+import { TopicField } from './TopicField'
+import type { ControlYaml, QshConfigYaml, Driver } from '../../types/config'
 
 interface ControlSettingsProps {
   control: ControlYaml
   rootConfig?: QshConfigYaml
+  driver: Driver
   onRefetch: () => void
 }
 
-export function ControlSettings({ control: initial, rootConfig, onRefetch }: ControlSettingsProps) {
+export function ControlSettings({ control: initial, rootConfig, driver: _driver, onRefetch }: ControlSettingsProps) {
   const [ctrl, setCtrl] = useState<ControlYaml>(initial)
   const { patch, saving } = usePatchConfig()
 
-  const driver = rootConfig?.driver ?? 'ha'
+  useEffect(() => { setCtrl(initial) }, [initial])
+
+  const effectiveDriver = rootConfig?.driver ?? 'ha'
   const publishShadow = rootConfig?.publish_mqtt_shadow ?? true
 
   const entityIds = useMemo(
-    () => [ctrl.dfan_control_entity, ctrl.pid_target_entity].filter(Boolean) as string[],
-    [ctrl.dfan_control_entity, ctrl.pid_target_entity]
+    () => effectiveDriver === 'mqtt' ? [] : [ctrl.dfan_control_entity, ctrl.pid_target_entity].filter(Boolean) as string[],
+    [ctrl.dfan_control_entity, ctrl.pid_target_entity, effectiveDriver]
   )
   const { resolved } = useEntityResolve(entityIds)
 
@@ -46,37 +51,63 @@ export function ControlSettings({ control: initial, rootConfig, onRefetch }: Con
       <div className="space-y-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
         {/* Active Control */}
         <div>
-          <EntityField
-            label="Active Control"
-            value={ctrl.dfan_control_entity ?? ''}
-            friendlyName={resolved[ctrl.dfan_control_entity ?? '']?.friendly_name}
-            state={resolved[ctrl.dfan_control_entity ?? '']?.state}
-            unit={resolved[ctrl.dfan_control_entity ?? '']?.unit}
-            placeholder="input_boolean.dfan_control"
-            onChange={(v) => setCtrl({ ...ctrl, dfan_control_entity: v })}
-          />
-          {!ctrl.dfan_control_entity && (
+          {effectiveDriver === 'ha' ? (
+            <EntityField
+              label="Active Control"
+              value={ctrl.dfan_control_entity ?? ''}
+              friendlyName={resolved[ctrl.dfan_control_entity ?? '']?.friendly_name}
+              state={resolved[ctrl.dfan_control_entity ?? '']?.state}
+              unit={resolved[ctrl.dfan_control_entity ?? '']?.unit}
+              placeholder="input_boolean.dfan_control"
+              onChange={(v) => setCtrl(prev => ({ ...prev, dfan_control_entity: v }))}
+            />
+          ) : (
+            <TopicField
+              label="Active Control Topic"
+              value={ctrl.dfan_control_topic ?? ''}
+              onChange={(v) => setCtrl(prev => ({ ...prev, dfan_control_topic: v }))}
+              placeholder="control/dfan_control"
+            />
+          )}
+          {effectiveDriver === 'ha' && !ctrl.dfan_control_entity && (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>
+          )}
+          {effectiveDriver === 'mqtt' && !ctrl.dfan_control_topic && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>
           )}
           <p className="text-xs text-[var(--text-muted)] mt-2">
-            {ctrl.dfan_control_entity
-              ? 'QSH reads the bound entity state each cycle. ON = active control, OFF = shadow mode.'
-              : 'When ON, QSH controls your heat source. When OFF, QSH monitors only (shadow mode). Can also be toggled from HA dashboard or MQTT.'}
+            {effectiveDriver === 'ha'
+              ? (ctrl.dfan_control_entity
+                  ? 'QSH reads the bound entity state each cycle. ON = active control, OFF = shadow mode.'
+                  : 'When ON, QSH controls your heat source. When OFF, QSH monitors only (shadow mode). Can also be toggled from HA dashboard or MQTT.')
+              : 'Boolean topic. Publish true/on to enable active control, false/off for shadow mode.'}
           </p>
         </div>
 
         {/* PID Target Temperature */}
         <div>
-          <EntityField
-            label="PID Target Temperature (°C)"
-            value={ctrl.pid_target_entity ?? ''}
-            friendlyName={resolved[ctrl.pid_target_entity ?? '']?.friendly_name}
-            state={resolved[ctrl.pid_target_entity ?? '']?.state}
-            unit={resolved[ctrl.pid_target_entity ?? '']?.unit}
-            placeholder="input_number.pid_target_temperature"
-            onChange={(v) => setCtrl({ ...ctrl, pid_target_entity: v })}
-          />
-          {!ctrl.pid_target_entity && (
+          {effectiveDriver === 'ha' ? (
+            <EntityField
+              label="PID Target Temperature (°C)"
+              value={ctrl.pid_target_entity ?? ''}
+              friendlyName={resolved[ctrl.pid_target_entity ?? '']?.friendly_name}
+              state={resolved[ctrl.pid_target_entity ?? '']?.state}
+              unit={resolved[ctrl.pid_target_entity ?? '']?.unit}
+              placeholder="input_number.pid_target_temperature"
+              onChange={(v) => setCtrl(prev => ({ ...prev, pid_target_entity: v }))}
+            />
+          ) : (
+            <TopicField
+              label="PID Target Temperature Topic (°C)"
+              value={ctrl.pid_target_topic ?? ''}
+              onChange={(v) => setCtrl(prev => ({ ...prev, pid_target_topic: v }))}
+              placeholder="control/pid_target"
+            />
+          )}
+          {effectiveDriver === 'ha' && !ctrl.pid_target_entity && (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>
+          )}
+          {effectiveDriver === 'mqtt' && !ctrl.pid_target_topic && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>
           )}
         </div>
@@ -93,7 +124,7 @@ export function ControlSettings({ control: initial, rootConfig, onRefetch }: Con
             max="5.0"
             value={ctrl.nudge_budget ?? 3.0}
             onChange={(e) =>
-              setCtrl({ ...ctrl, nudge_budget: parseFloat(e.target.value) || 3.0 })
+              setCtrl(prev => ({ ...prev, nudge_budget: parseFloat(e.target.value) || 3.0 }))
             }
             className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
           />
@@ -101,7 +132,7 @@ export function ControlSettings({ control: initial, rootConfig, onRefetch }: Con
         </div>
       </div>
 
-      {driver === 'mqtt' && (
+      {effectiveDriver === 'mqtt' && (
         <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-3">
           <div className="flex items-center justify-between">
             <div>
@@ -117,7 +148,7 @@ export function ControlSettings({ control: initial, rootConfig, onRefetch }: Con
               type="button"
               onClick={async () => {
                 try {
-                  await fetch('./api/config/root', {
+                  await fetch(apiUrl('api/config/root'), {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ data: { publish_mqtt_shadow: !publishShadow } }),

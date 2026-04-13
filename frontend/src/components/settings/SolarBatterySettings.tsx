@@ -1,16 +1,18 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { patchOrDelete } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
 import { EntityField } from './EntityField'
+import { TopicField } from './TopicField'
 import { SOLAR } from '../../lib/helpText'
-import type { SolarYaml, BatteryYaml, GridYaml, InverterYaml } from '../../types/config'
+import type { SolarYaml, BatteryYaml, GridYaml, InverterYaml, Driver } from '../../types/config'
 
 interface SolarBatterySettingsProps {
   solar?: SolarYaml
   battery?: BatteryYaml
   grid?: GridYaml
   inverter?: InverterYaml
+  driver: Driver
   onRefetch: () => void
 }
 
@@ -19,25 +21,53 @@ export function SolarBatterySettings({
   battery: initialBattery,
   grid: initialGrid,
   inverter: initialInverter,
+  driver,
   onRefetch,
 }: SolarBatterySettingsProps) {
-  const [hasSolar, setHasSolar] = useState(!!initialSolar?.production_entity)
-  const [hasBattery, setHasBattery] = useState(!!initialBattery?.soc_entity)
+  const [hasSolar, setHasSolar] = useState(
+    driver === 'mqtt'
+      ? !!initialSolar?.production_topic || !!initialSolar?.production_entity
+      : !!initialSolar?.production_entity
+  )
+  const [hasBattery, setHasBattery] = useState(
+    driver === 'mqtt'
+      ? !!initialBattery?.soc_topic || !!initialBattery?.soc_entity
+      : !!initialBattery?.soc_entity
+  )
 
   const [solar, setSolar] = useState<SolarYaml>(initialSolar || {})
   const [battery, setBattery] = useState<BatteryYaml>(initialBattery || {})
   const [grid, setGrid] = useState<GridYaml>(initialGrid || {})
   const [inverter, setInverter] = useState<InverterYaml>(initialInverter || {})
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setSolar(initialSolar || {})
+  }, [initialSolar])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setBattery(initialBattery || {})
+  }, [initialBattery])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setGrid(initialGrid || {})
+  }, [initialGrid])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
+    setInverter(initialInverter || {})
+  }, [initialInverter])
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const entityIds = useMemo(
     () =>
-      [solar.production_entity, battery.soc_entity, grid.power_entity].filter(
-        Boolean
-      ) as string[],
-    [solar.production_entity, battery.soc_entity, grid.power_entity]
+      driver === 'mqtt'
+        ? []
+        : [solar.production_entity, battery.soc_entity, grid.power_entity].filter(
+            Boolean
+          ) as string[],
+    [solar.production_entity, battery.soc_entity, grid.power_entity, driver]
   )
   const { resolved } = useEntityResolve(entityIds)
 
@@ -98,16 +128,26 @@ export function SolarBatterySettings({
 
         {hasSolar && (
           <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
-            <EntityField
-              label="Solar Production Entity"
-              value={solar.production_entity || ''}
-              friendlyName={resolved[solar.production_entity || '']?.friendly_name}
-              state={resolved[solar.production_entity || '']?.state}
-              unit={resolved[solar.production_entity || '']?.unit}
-              onChange={(v) => setSolar({ ...solar, production_entity: v || undefined })}
-              placeholder="sensor.solar_power"
-              helpText={SOLAR.solarEntity}
-            />
+            {driver === 'ha' ? (
+              <EntityField
+                label="Solar Production Entity"
+                value={solar.production_entity || ''}
+                friendlyName={resolved[solar.production_entity || '']?.friendly_name}
+                state={resolved[solar.production_entity || '']?.state}
+                unit={resolved[solar.production_entity || '']?.unit}
+                onChange={(v) => setSolar(prev => ({ ...prev, production_entity: v || undefined }))}
+                placeholder="sensor.solar_power"
+                helpText={SOLAR.solarEntity}
+              />
+            ) : (
+              <TopicField
+                label="Solar Production Topic"
+                value={solar.production_topic || ''}
+                onChange={(v) => setSolar(prev => ({ ...prev, production_topic: v || undefined }))}
+                placeholder="solar/production_w"
+                helpText={SOLAR.solarEntity}
+              />
+            )}
 
             <div>
               <label className="block text-xs font-medium text-[var(--text)] mb-1">
@@ -120,7 +160,7 @@ export function SolarBatterySettings({
                 max="1.0"
                 value={inverter.fallback_efficiency ?? 0.97}
                 onChange={(e) =>
-                  setInverter({ ...inverter, fallback_efficiency: parseFloat(e.target.value) || 0.97 })
+                  setInverter(prev => ({ ...prev, fallback_efficiency: parseFloat(e.target.value) || 0.97 }))
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
@@ -143,16 +183,26 @@ export function SolarBatterySettings({
 
         {hasBattery && (
           <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
-            <EntityField
-              label="Battery SoC Entity"
-              value={battery.soc_entity || ''}
-              friendlyName={resolved[battery.soc_entity || '']?.friendly_name}
-              state={resolved[battery.soc_entity || '']?.state}
-              unit={resolved[battery.soc_entity || '']?.unit}
-              onChange={(v) => setBattery({ ...battery, soc_entity: v || undefined })}
-              placeholder="sensor.battery_soc"
-              helpText={SOLAR.batteryEntity}
-            />
+            {driver === 'ha' ? (
+              <EntityField
+                label="Battery SoC Entity"
+                value={battery.soc_entity || ''}
+                friendlyName={resolved[battery.soc_entity || '']?.friendly_name}
+                state={resolved[battery.soc_entity || '']?.state}
+                unit={resolved[battery.soc_entity || '']?.unit}
+                onChange={(v) => setBattery(prev => ({ ...prev, soc_entity: v || undefined }))}
+                placeholder="sensor.battery_soc"
+                helpText={SOLAR.batteryEntity}
+              />
+            ) : (
+              <TopicField
+                label="Battery SoC Topic"
+                value={battery.soc_topic || ''}
+                onChange={(v) => setBattery(prev => ({ ...prev, soc_topic: v || undefined }))}
+                placeholder="battery/soc_pct"
+                helpText={SOLAR.batteryEntity}
+              />
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-[var(--text)] mb-1">
@@ -164,7 +214,7 @@ export function SolarBatterySettings({
                   max="100"
                   value={battery.min_soc_reserve ?? 10}
                   onChange={(e) =>
-                    setBattery({ ...battery, min_soc_reserve: parseInt(e.target.value) || 10 })
+                    setBattery(prev => ({ ...prev, min_soc_reserve: parseInt(e.target.value) || 10 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -180,7 +230,7 @@ export function SolarBatterySettings({
                   max="1.0"
                   value={battery.efficiency ?? 0.9}
                   onChange={(e) =>
-                    setBattery({ ...battery, efficiency: parseFloat(e.target.value) || 0.9 })
+                    setBattery(prev => ({ ...prev, efficiency: parseFloat(e.target.value) || 0.9 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -195,7 +245,7 @@ export function SolarBatterySettings({
                   max="60"
                   value={battery.voltage ?? 51.2}
                   onChange={(e) =>
-                    setBattery({ ...battery, voltage: parseFloat(e.target.value) || 51.2 })
+                    setBattery(prev => ({ ...prev, voltage: parseFloat(e.target.value) || 51.2 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -211,7 +261,7 @@ export function SolarBatterySettings({
                   max="10"
                   value={battery.max_rate_kw ?? 3.0}
                   onChange={(e) =>
-                    setBattery({ ...battery, max_rate_kw: parseFloat(e.target.value) || 3.0 })
+                    setBattery(prev => ({ ...prev, max_rate_kw: parseFloat(e.target.value) || 3.0 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -220,15 +270,24 @@ export function SolarBatterySettings({
 
             {/* Grid */}
             <h4 className="text-sm font-medium text-[var(--text)] mt-4">Grid</h4>
-            <EntityField
-              label="Grid Power Entity"
-              value={grid.power_entity || ''}
-              friendlyName={resolved[grid.power_entity || '']?.friendly_name}
-              state={resolved[grid.power_entity || '']?.state}
-              unit={resolved[grid.power_entity || '']?.unit}
-              onChange={(v) => setGrid({ ...grid, power_entity: v || undefined })}
-              placeholder="sensor.grid_power"
-            />
+            {driver === 'ha' ? (
+              <EntityField
+                label="Grid Power Entity"
+                value={grid.power_entity || ''}
+                friendlyName={resolved[grid.power_entity || '']?.friendly_name}
+                state={resolved[grid.power_entity || '']?.state}
+                unit={resolved[grid.power_entity || '']?.unit}
+                onChange={(v) => setGrid(prev => ({ ...prev, power_entity: v || undefined }))}
+                placeholder="sensor.grid_power"
+              />
+            ) : (
+              <TopicField
+                label="Grid Power Topic"
+                value={grid.power_topic || ''}
+                onChange={(v) => setGrid(prev => ({ ...prev, power_topic: v || undefined }))}
+                placeholder="grid/import_w"
+              />
+            )}
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-medium text-[var(--text)] mb-1">
@@ -240,7 +299,7 @@ export function SolarBatterySettings({
                   max="250"
                   value={grid.nominal_voltage ?? 230}
                   onChange={(e) =>
-                    setGrid({ ...grid, nominal_voltage: parseInt(e.target.value) || 230 })
+                    setGrid(prev => ({ ...prev, nominal_voltage: parseInt(e.target.value) || 230 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -255,7 +314,7 @@ export function SolarBatterySettings({
                   max="230"
                   value={grid.min_voltage ?? 207}
                   onChange={(e) =>
-                    setGrid({ ...grid, min_voltage: parseInt(e.target.value) || 207 })
+                    setGrid(prev => ({ ...prev, min_voltage: parseInt(e.target.value) || 207 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
@@ -270,7 +329,7 @@ export function SolarBatterySettings({
                   max="260"
                   value={grid.max_voltage ?? 253}
                   onChange={(e) =>
-                    setGrid({ ...grid, max_voltage: parseInt(e.target.value) || 253 })
+                    setGrid(prev => ({ ...prev, max_voltage: parseInt(e.target.value) || 253 }))
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
