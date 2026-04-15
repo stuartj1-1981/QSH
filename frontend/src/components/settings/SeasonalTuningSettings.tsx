@@ -130,7 +130,7 @@ export function SeasonalTuningSettings({
 
       <div className="space-y-6 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
         <Stepper
-          label="Antifrost OAT Threshold"
+          label="Antifrost OAT Threshold (Shoulder Mode Disable)"
           helpText="Below this outdoor temperature, QSH maintains continuous HP operation to prevent manufacturer antifrost from seizing control."
           value={antifrostThreshold}
           unit="°C"

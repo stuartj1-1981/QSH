@@ -355,18 +355,34 @@ export interface MqttTestResponse {
   broker_version?: string
 }
 
+/** Envelope-level metadata returned by POST /api/wizard/scan-mqtt-topics (INSTRUCTION-93B). */
+export interface MqttScanMeta {
+  started_at: number
+  duration_s: number
+  window_seconds: number
+  total_topics: number
+  partial_topics: number
+}
+
 /** Topic discovered by POST /api/wizard/scan-mqtt-topics */
 export interface MqttTopicCandidate {
   topic: string
   payload: string
   is_numeric: boolean
-  suggested_field?: string
-  suggested_room?: string
+  suggested_field?: string | null
+  suggested_room?: string | null
+  // INSTRUCTION-93B — optional so legacy backends still type-check:
+  payloads_seen?: number
+  aggregated_payload?: string | null
+  retained?: boolean
+  scan_completeness?: 'retained' | 'heartbeat' | 'partial'
+  suggested_fields_per_key?: Record<string, string> | null
 }
 
 /** Response from POST /api/wizard/scan-mqtt-topics */
 export interface MqttScanResponse {
   topics: MqttTopicCandidate[]
+  scan_meta?: MqttScanMeta // INSTRUCTION-93B — optional for legacy-shape compatibility
 }
 
 /** FACING options */

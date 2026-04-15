@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { StatusBanner } from '../StatusBanner'
 import { EngineeringBar } from '../EngineeringBar'
-import { AntifrostThreshold } from '../AntifrostThreshold'
 
 describe('StatusBanner winter colour', () => {
   it('renders blue dot for Winter state (test 33)', () => {
@@ -49,7 +48,6 @@ describe('EngineeringBar winter badge', () => {
     rlReward: 0.5,
     shoulderMonitoring: false,
     summerMonitoring: false,
-    antifrostThreshold: 7.0,
   }
 
   it('renders Winter badge when antifrost active (test 35)', () => {
@@ -87,40 +85,3 @@ describe('EngineeringBar winter badge', () => {
   })
 })
 
-describe('AntifrostThreshold', () => {
-  it('renders current value (test 43)', () => {
-    render(<AntifrostThreshold threshold={7.0} />)
-    expect(screen.getByText('7.0°C')).toBeDefined()
-  })
-
-  it('renders with different threshold value', () => {
-    render(<AntifrostThreshold threshold={6.5} />)
-    expect(screen.getByText('6.5°C')).toBeDefined()
-  })
-
-  it('renders increment and decrement buttons', () => {
-    render(<AntifrostThreshold threshold={7.0} />)
-    expect(screen.getByText('−')).toBeDefined()
-    expect(screen.getByText('+')).toBeDefined()
-  })
-})
-
-describe('EngineeringBar passes threshold (test 46)', () => {
-  it('renders AntifrostThreshold with threshold from props', () => {
-    render(
-      <EngineeringBar
-        cycleNumber={100}
-        detFlow={35.0}
-        rlFlow={null}
-        rlBlend={0.0}
-        rlReward={0.5}
-        shoulderMonitoring={false}
-        summerMonitoring={false}
-        antifrostOverrideActive={false}
-        winterEquilibrium={false}
-        antifrostThreshold={6.0}
-      />
-    )
-    expect(screen.getByText('6.0°C')).toBeDefined()
-  })
-})

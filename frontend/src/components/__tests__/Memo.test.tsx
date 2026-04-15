@@ -7,13 +7,12 @@
  *  2. Renders with initial props, re-renders with identical props, and asserts
  *     the DOM output is stable (no crash / no content change).
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import { EngineeringBar } from '../EngineeringBar'
 import { TrendChart } from '../TrendChart'
 import { OperatingStateTimeline } from '../OperatingStateTimeline'
 import { CapacityBar } from '../CapacityBar'
-import { AntifrostThreshold } from '../AntifrostThreshold'
 import { RecoveryCard } from '../RecoveryCard'
 import { HardwareTelemetry } from '../HardwareTelemetry'
 
@@ -43,10 +42,6 @@ describe('React.memo wrapping — WS render path components', () => {
 
   it('CapacityBar is wrapped with React.memo', () => {
     expect(isMemoWrapped(CapacityBar)).toBe(true)
-  })
-
-  it('AntifrostThreshold is wrapped with React.memo', () => {
-    expect(isMemoWrapped(AntifrostThreshold)).toBe(true)
   })
 
   it('RecoveryCard is wrapped with React.memo', () => {
@@ -87,8 +82,6 @@ describe('React.memo — no re-render with identical props', () => {
   })
 
   it('EngineeringBar does not change DOM output on rerender with same props', () => {
-    // AntifrostThreshold requires fetch — stub it
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
     const props = {
       cycleNumber: 42,
       detFlow: 45.0,
@@ -99,12 +92,10 @@ describe('React.memo — no re-render with identical props', () => {
       summerMonitoring: false,
       antifrostOverrideActive: false,
       winterEquilibrium: false,
-      antifrostThreshold: 7.0,
     }
     const { container, rerender } = render(<EngineeringBar {...props} />)
     const htmlBefore = container.innerHTML
     rerender(<EngineeringBar {...props} />)
     expect(container.innerHTML).toBe(htmlBefore)
-    vi.unstubAllGlobals()
   })
 })

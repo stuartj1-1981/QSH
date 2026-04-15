@@ -274,7 +274,6 @@ export function Home({ engineering, onNavigate }: HomeProps) {
           summerMonitoring={eng.summer_monitoring}
           antifrostOverrideActive={eng.antifrost_override_active ?? false}
           winterEquilibrium={eng.winter_equilibrium ?? false}
-          antifrostThreshold={eng.antifrost_threshold ?? 7.0}
         />
       )}
 

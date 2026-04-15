@@ -8,7 +8,7 @@ import requests
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import time as _time
 
@@ -686,6 +686,13 @@ class MqttScanRequest(BaseModel):
     topic_prefix: str = ""
     filter_room: Optional[str] = None
 
+    # New in INSTRUCTION-93B: bounded-window aggregation. Anything shorter than
+    # 5 s reproduces the pre-93B pathology of missing delta publishers;
+    # anything longer than 120 s blocks the wizard UI unacceptably.
+    window_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
+    aggregate_json_fields: bool = True
+    prefer_retained: bool = True
+
 
 def _mqtt_connect_test(req: MqttTestRequest) -> dict:
     """Run MQTT connection test in a thread (blocking I/O)."""
@@ -722,12 +729,38 @@ def _mqtt_connect_test(req: MqttTestRequest) -> dict:
     return result
 
 
-def _mqtt_scan_topics(req: MqttScanRequest) -> list:
-    """Subscribe to broker and collect topics for 5 seconds."""
+# Keyword → QSH field mapping used by the wizard's broker-scan suggestion
+# engine. Applied against both the topic path and per-JSON-key in the
+# aggregated payload (INSTRUCTION-93B).
+#
+# Ordering matters: iteration stops at the first substring match, so the more
+# specific compound keywords (flow_temp, outdoor, outside, …) must come before
+# the generic ones (temp, temperature) to avoid "flow_temperature" being
+# mis-mapped to outdoor_temp via the bare "temp" substring.
+KEYWORD_SCORES = {
+    "flow_temp": "hp_flow_temp", "flow": "hp_flow_temp",
+    "return": "hp_return_temp",
+    "cop": "hp_cop",
+    "power": "hp_power", "watt": "hp_power",
+    "valve": "valve_position",
+    "outdoor": "outdoor_temp", "outside": "outdoor_temp",
+    "temperature": "outdoor_temp", "temp": "outdoor_temp",
+}
+
+
+def _mqtt_scan_topics(req: MqttScanRequest) -> dict:
+    """Subscribe to broker and aggregate per-topic state over a bounded window.
+
+    Returns the result envelope directly ({"topics": [...], "scan_meta": {...}})
+    so the route handler can forward it unchanged.
+    """
     import threading
     paho = _paho_mqtt
 
-    topics_found: Dict[str, str] = {}
+    PAYLOAD_CAP = 20  # Sliding window: retain the latest N payloads per topic
+                      # for field discovery. Finding #3: keep latest, not first,
+                      # because late-arriving heartbeats carry full-state.
+    state: Dict[str, Dict[str, Any]] = {}  # topic -> aggregation state
     connected = threading.Event()
     lock = threading.Lock()
 
@@ -740,11 +773,31 @@ def _mqtt_scan_topics(req: MqttScanRequest) -> list:
     def on_message(client, userdata, msg):
         try:
             payload = msg.payload.decode("utf-8", errors="replace")
-            with lock:
-                topics_found[msg.topic] = payload
         except Exception:
-            pass
+            return
+        is_retained = bool(getattr(msg, "retain", False))
+        topic = msg.topic
+        now = _time.time()
+        with lock:
+            entry = state.setdefault(topic, {
+                "payloads": [],
+                "retained_payload": None,
+                "first_seen_ts": now,
+                "last_seen_ts": now,
+                "message_count": 0,
+            })
+            entry["payloads"].append(payload)
+            # Finding #3: sliding window — keep the latest PAYLOAD_CAP payloads.
+            # Field discovery benefits from late-arriving heartbeats, so we must
+            # not discard them in favour of the earliest deltas.
+            if len(entry["payloads"]) > PAYLOAD_CAP:
+                entry["payloads"] = entry["payloads"][-PAYLOAD_CAP:]
+            if is_retained and entry["retained_payload"] is None:
+                entry["retained_payload"] = payload
+            entry["last_seen_ts"] = now
+            entry["message_count"] += 1
 
+    started_at = _time.time()
     try:
         client = paho.Client(paho.CallbackAPIVersion.VERSION2, client_id=req.client_id)
         if req.username:
@@ -755,62 +808,149 @@ def _mqtt_scan_topics(req: MqttScanRequest) -> list:
         client.on_message = on_message
         client.connect(req.broker, req.port, keepalive=10)
         client.loop_start()
-
         if not connected.wait(timeout=5.0):
             client.loop_stop()
-            return []
-
-        _time.sleep(5.0)
+            return {"topics": [], "scan_meta": _scan_meta(started_at, 0, 0, req.window_seconds)}
+        _time.sleep(req.window_seconds)
         client.disconnect()
         client.loop_stop()
-    except Exception:
-        return []
+    except Exception as exc:
+        logger.warning("MQTT scan failed: %s", exc)
+        return {"topics": [], "scan_meta": _scan_meta(started_at, 0, 0, req.window_seconds)}
 
-    # Score and filter
-    KEYWORD_SCORES = {
-        "temp": "outdoor_temp", "temperature": "outdoor_temp",
-        "outdoor": "outdoor_temp", "outside": "outdoor_temp",
-        "flow": "hp_flow_temp", "flow_temp": "hp_flow_temp",
-        "power": "hp_power", "watt": "hp_power",
-        "cop": "hp_cop",
-        "valve": "valve_position",
-        "return": "hp_return_temp",
+    topics_out = _fold_scan_state(state, req)
+    partial = sum(1 for t in topics_out if t["scan_completeness"] == "partial")
+    return {
+        "topics": topics_out,
+        "scan_meta": _scan_meta(started_at, len(topics_out), partial, req.window_seconds),
     }
 
-    results = []
-    for topic, payload in topics_found.items():
+
+def _scan_meta(started_at: float, total: int, partial: int, window: float = 0.0) -> dict:
+    """Build the scan_meta envelope returned alongside the topics list."""
+    return {
+        "started_at": started_at,
+        "duration_s": _time.time() - started_at,
+        "window_seconds": window,
+        "total_topics": total,
+        "partial_topics": partial,
+    }
+
+
+def _fold_scan_state(state: Dict[str, Dict[str, Any]], req: MqttScanRequest) -> List[dict]:
+    """Fold per-topic aggregation state into the result rows."""
+    import json
+
+    results: List[dict] = []
+    for topic, entry in state.items():
         if req.filter_room and req.filter_room.lower() not in topic.lower():
             continue
         if topic.startswith("$SYS"):
             continue
 
+        payloads: List[str] = entry["payloads"]
+        retained: Optional[str] = entry["retained_payload"]
+        representative = retained if (req.prefer_retained and retained is not None) else payloads[-1]
+
+        # JSON union across all captured payloads.
+        # Finding #4: first-write-wins is correct for *field discovery* — the
+        # union is illustrative of which keys the publisher emits, not
+        # authoritative for the value on any given key. Consumers using the
+        # aggregated payload for mapping purposes should look at the key set,
+        # not the values.
+        union_dict: Dict[str, Any] = {}
+        any_json = False
+        for p in payloads:
+            try:
+                parsed = json.loads(p)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            any_json = True
+            for k, v in parsed.items():
+                # Union semantics: first non-None wins. Later payloads do not
+                # overwrite earlier keys, because we care about presence, not
+                # the latest value (which is what `representative` already carries).
+                if k not in union_dict and v is not None:
+                    union_dict[k] = v
+        aggregated_payload = json.dumps(union_dict) if (req.aggregate_json_fields and any_json) else None
+
+        completeness = _classify_completeness(entry, payloads, any_json)
+
         is_numeric = False
         try:
-            float(payload)
+            float(representative)
             is_numeric = True
         except (ValueError, TypeError):
             pass
 
-        suggested = None
         lower_topic = topic.lower()
-        for kw, field in KEYWORD_SCORES.items():
-            if kw in lower_topic:
-                suggested = field
-                break
+        suggested = next((field for kw, field in KEYWORD_SCORES.items() if kw in lower_topic), None)
 
-        suggested_room = None
-        if req.filter_room:
-            suggested_room = req.filter_room
+        suggested_fields_per_key: Optional[Dict[str, str]] = None
+        if union_dict:
+            suggested_fields_per_key = {}
+            for key in union_dict.keys():
+                for kw, field in KEYWORD_SCORES.items():
+                    if kw in key.lower():
+                        suggested_fields_per_key[key] = field
+                        break
+            if not suggested_fields_per_key:
+                suggested_fields_per_key = None
 
         results.append({
             "topic": topic,
-            "payload": payload[:200],
+            "payload": representative[:200],
+            "payloads_seen": entry["message_count"],
+            "aggregated_payload": aggregated_payload,
+            "retained": retained is not None,
+            "scan_completeness": completeness,
             "is_numeric": is_numeric,
             "suggested_field": suggested,
-            "suggested_room": suggested_room,
+            "suggested_fields_per_key": suggested_fields_per_key,
+            "suggested_room": req.filter_room,
         })
-
     return results
+
+
+def _classify_completeness(entry: Dict[str, Any], payloads: List[str], any_json: bool) -> str:
+    """Classify a topic's scan result as retained | heartbeat | partial.
+
+    - 'retained': publisher set retain=true on a full-state payload; we have a
+      known-good snapshot regardless of window length.
+    - 'heartbeat': no retained payload, but across captured messages we saw at
+      least one payload whose JSON key set equals the union of all seen keys —
+      i.e. a full-state heartbeat arrived inside the window.
+    - 'partial': neither — operator may need to rescan with a longer window.
+    """
+    import json
+    if entry["retained_payload"] is not None:
+        return "retained"
+    if not any_json:
+        # Non-JSON (or single-message) topics are classified as 'heartbeat' when
+        # at least one message was seen; there are no deltas to be partial over.
+        return "heartbeat" if entry["message_count"] >= 1 else "partial"
+
+    # Compute union key set.
+    union_keys: set = set()
+    per_message_keys: List[set] = []
+    for p in payloads:
+        try:
+            parsed = json.loads(p)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            keys = set(parsed.keys())
+            union_keys |= keys
+            per_message_keys.append(keys)
+
+    if not union_keys:
+        return "partial"
+    # Heartbeat iff any single message's key set equals the union.
+    if any(mk == union_keys for mk in per_message_keys):
+        return "heartbeat"
+    return "partial"
 
 
 @router.post("/test-mqtt")
@@ -824,11 +964,11 @@ async def test_mqtt_connection(req: MqttTestRequest):
 
 @router.post("/scan-mqtt-topics")
 async def scan_mqtt_topics(req: MqttScanRequest):
-    """Discover MQTT topics on broker."""
+    """Discover MQTT topics on broker with bounded-window field aggregation."""
     import asyncio
     loop = asyncio.get_event_loop()
-    topics = await loop.run_in_executor(None, _mqtt_scan_topics, req)
-    return {"topics": topics}
+    result = await loop.run_in_executor(None, _mqtt_scan_topics, req)
+    return result  # {"topics": [...], "scan_meta": {...}}
 
 
 @router.post("/deploy")

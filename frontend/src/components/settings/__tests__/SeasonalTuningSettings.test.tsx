@@ -21,7 +21,7 @@ describe('SeasonalTuningSettings', () => {
   it('renders both threshold controls', () => {
     render(<SeasonalTuningSettings {...baseProps} />)
     expect(screen.getByText('Seasonal Tuning')).toBeDefined()
-    expect(screen.getByText('Antifrost OAT Threshold')).toBeDefined()
+    expect(screen.getByText('Antifrost OAT Threshold (Shoulder Mode Disable)')).toBeDefined()
     expect(screen.getByText('Shoulder Shutdown Threshold')).toBeDefined()
   })
 

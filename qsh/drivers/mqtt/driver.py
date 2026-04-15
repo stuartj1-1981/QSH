@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...signal_bus import InputBlock, OutputBlock
 from .client import MQTTClient, MQTTClientConfig
@@ -18,18 +18,110 @@ from .topic_map import (
     CAPABILITY_FIELDS,
     SYSTEM_INPUT_FIELDS,
     TopicMap,
+    TopicMapping,
     build_topic_map,
+    evaluate_availability_match,
+    extract_json_value,
     get_control_topics,
     parse_payload,
     parse_payload_str,
+    parse_timestamp,
     _prefixed,
 )
 
 logger = logging.getLogger(__name__)
 
-# Signal quality thresholds (seconds)
-_FRESH_THRESHOLD = 90
-_STALE_THRESHOLD = 300
+
+# Tracks availability topics whose payloads have been warned about, to avoid
+# log-spam when an upstream publisher keeps sending ambiguous values.
+_AVAILABILITY_WARN_ONCE: set[str] = set()
+
+
+def _resolve_signal_quality(
+    mapping: TopicMapping,
+    cache: Dict[str, Tuple[str, float]],
+    staleness_defaults: Dict[str, Dict[str, int]],
+    now: float,
+) -> Tuple[str, Optional[str], Optional[float]]:
+    """Resolve (signal_quality, payload_str, timestamp) for a mapping.
+
+    Bridge-agnostic four-step resolution. The first step that returns is
+    the answer.
+
+      1. Availability check — if declared and a message has been received.
+         Online → "good" (trumps any staleness timer; value payload passed
+         through unchanged). Offline → "unavailable" (value payload
+         discarded). Ambiguous → fall through.
+      2. Last-seen age — if declared and the current value payload contains
+         a parseable timestamp at the declared path.
+      3. Arrival age — fallback to cached-message arrival age.
+      4. Never received — no value entry and no authoritative availability.
+
+    signal_quality is one of "good", "stale", "unavailable".
+    payload_str and timestamp are None when no payload is usable this cycle.
+    """
+    value_entry = cache.get(mapping.topic)
+    avail_entry = (
+        cache.get(mapping.availability.topic) if mapping.availability else None
+    )
+
+    # ── Step 1: availability ───────────────────────────────────────────
+    if mapping.availability is not None and avail_entry is not None:
+        avail_payload = avail_entry[0]
+        result = evaluate_availability_match(
+            avail_payload, mapping.availability.online_match
+        )
+        if result is False:
+            # Publisher asserts offline — discard any cached value payload.
+            return ("unavailable", None, None)
+        if result is True:
+            # Publisher asserts online — trust over staleness timers.
+            if value_entry is not None:
+                return ("good", value_entry[0], value_entry[1])
+            return ("good", None, None)
+        # result is None → ambiguous: warn once, fall through.
+        key = mapping.availability.topic
+        if key not in _AVAILABILITY_WARN_ONCE:
+            _AVAILABILITY_WARN_ONCE.add(key)
+            logger.warning(
+                "MQTT availability payload on %s could not be evaluated "
+                "against match expression %r: %r",
+                mapping.availability.topic,
+                mapping.availability.online_match,
+                avail_payload,
+            )
+
+    # Category threshold lookup — "default" is guaranteed by build_topic_map.
+    thresholds = staleness_defaults.get(
+        mapping.category, staleness_defaults["default"]
+    )
+    fresh = thresholds["fresh"]
+    unavail = thresholds["unavailable"]
+
+    # ── Step 2: last_seen age ──────────────────────────────────────────
+    if mapping.last_seen is not None and value_entry is not None:
+        ts_raw = extract_json_value(value_entry[0], mapping.last_seen.json_path)
+        ts_last_seen = parse_timestamp(ts_raw, mapping.last_seen.format)
+        if ts_last_seen is not None:
+            age = now - ts_last_seen
+            if age > unavail:
+                return ("unavailable", None, None)
+            if age > fresh:
+                return ("stale", value_entry[0], value_entry[1])
+            return ("good", value_entry[0], value_entry[1])
+        # fall through to arrival age
+
+    # ── Step 3: arrival age ────────────────────────────────────────────
+    if value_entry is not None:
+        age = now - value_entry[1]
+        if age > unavail:
+            return ("unavailable", None, None)
+        if age > fresh:
+            return ("stale", value_entry[0], value_entry[1])
+        return ("good", value_entry[0], value_entry[1])
+
+    # ── Step 4: never received ─────────────────────────────────────────
+    return ("unavailable", None, None)
 
 
 def _parse_bool_payload(s: str):
@@ -205,33 +297,29 @@ class MQTTDriver:
         system_values: Dict[str, float] = {}
 
         if tm:
+            staleness_defaults = tm.staleness_defaults
             for mapping in tm.input_mappings:
-                cached = cache.get(mapping.topic)
-                if cached is None:
-                    # Never received
-                    if mapping.room:
-                        signal_quality[f"room_temps.{mapping.room}"] = "unavailable"
-                    elif mapping.field in SYSTEM_INPUT_FIELDS.values():
-                        signal_quality[mapping.field] = "unavailable"
-                    continue
-
-                payload_str, ts = cached
-                age = now - ts
-
-                # Signal quality
+                # Signal quality key (matches prior behaviour).
                 if mapping.room:
                     sq_key = f"room_temps.{mapping.room}"
-                elif mapping.field.startswith("_shadow_"):
-                    sq_key = mapping.field
                 else:
                     sq_key = mapping.field
 
-                if age <= _FRESH_THRESHOLD:
-                    signal_quality[sq_key] = "good"
-                elif age <= _STALE_THRESHOLD:
-                    signal_quality[sq_key] = "stale"
-                else:
-                    signal_quality[sq_key] = "unavailable"
+                quality, payload_str, ts = _resolve_signal_quality(
+                    mapping, cache, staleness_defaults, now
+                )
+
+                # Only record sq for fields tracked before (room or system).
+                if mapping.room:
+                    signal_quality[sq_key] = quality
+                elif mapping.field in SYSTEM_INPUT_FIELDS.values():
+                    signal_quality[sq_key] = quality
+                elif mapping.field.startswith("_shadow_"):
+                    signal_quality[sq_key] = quality
+
+                # Availability-online with no value payload yet → no parsing.
+                if payload_str is None:
+                    continue
 
                 # Parse value
                 value = parse_payload(payload_str, mapping.payload_format, mapping.json_path)

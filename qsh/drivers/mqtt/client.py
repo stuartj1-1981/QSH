@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 # Reconnect backoff schedule (seconds)
 _RECONNECT_DELAYS = [5, 10, 30, 60]
 
+# Driver currently constructs paho.Client() without protocol=, which defaults
+# to MQTTv311. Update this constant if the driver is ever changed to select
+# v5 via paho.Client(protocol=paho.MQTTv5). Do NOT read client._protocol — it
+# is a private paho attribute and not part of the public API.
+_MQTT_PROTOCOL_STR = "v3.1.1"
+
 
 @dataclass
 class MQTTClientConfig:
@@ -143,18 +149,64 @@ class MQTTClient:
     # ── Paho callbacks ──────────────────────────────────────────────────
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
-        """Called on successful connect — resubscribe to all topics."""
-        self._connected.set()
-        # Resubscribe on reconnect (paho clears subscriptions on reconnect)
-        for topic in self._subscriptions:
-            client.subscribe(topic, qos=0)
-        if self._subscriptions:
-            logger.info("MQTT (re)subscribed to %d topics on connect", len(self._subscriptions))
+        """Paho CONNACK callback — inspect reason_code before declaring success.
+
+        Do NOT set self._connected on a non-zero CONNACK reason. Doing so would
+        make connect()'s self._connected.wait() return True, producing a bogus
+        "MQTT connected" INFO line for what is actually a broker-side rejection.
+        """
+        rc_value = getattr(reason_code, "value", reason_code)
+        get_name = getattr(reason_code, "getName", None)
+        rc_name = get_name() if callable(get_name) else str(reason_code)
+
+        if rc_value == 0:
+            # Successful CONNACK — safe to mark session established and resubscribe.
+            self._connected.set()
+            for topic in self._subscriptions:
+                client.subscribe(topic, qos=0)
+            cfg = self._config
+            logger.info(
+                "MQTT auth OK: user=%s protocol=%s keepalive=%ds",
+                cfg.username or "<anonymous>",
+                _MQTT_PROTOCOL_STR,
+                cfg.keepalive,
+            )
+            if self._subscriptions:
+                logger.info(
+                    "MQTT (re)subscribed to %d topics on connect",
+                    len(self._subscriptions),
+                )
+        else:
+            # CONNACK rejected — surface the specific reason and leave _connected cleared.
+            # connect() will time out on self._connected.wait(timeout) and fall into
+            # the existing retry backoff.
+            logger.warning(
+                "MQTT CONNECT REJECTED by broker: %s (rc=%d) — "
+                "check credentials / protocol version / client_id policy",
+                rc_name, rc_value,
+            )
 
     def _on_disconnect(self, client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
-        """Called on disconnect — paho handles reconnect via loop_start()."""
+        """Paho disconnect callback — log the reason name alongside the numeric code.
+
+        Paho's default string representation collapses many distinct reasons into
+        "Unspecified error"; that ambiguity cost ~45 min of misdiagnosis on
+        Mudwalker's install (2026-04-14). Reason name resolution via paho's
+        ReasonCode.getName() restores the distinction between, e.g.,
+        Not authorized (0x87) vs Keep alive timeout (0x8D) vs Session taken over (0x8E).
+        """
         self._connected.clear()
-        logger.warning("MQTT disconnected (rc=%s) — paho will auto-reconnect", reason_code)
+        rc_value = getattr(reason_code, "value", reason_code)
+        get_name = getattr(reason_code, "getName", None)
+        rc_name = get_name() if callable(get_name) else str(reason_code)
+
+        if rc_value == 0:
+            logger.info("MQTT disconnected cleanly (%s, rc=0)", rc_name)
+        else:
+            logger.warning(
+                "MQTT disconnected: %s (rc=%d) — paho will auto-reconnect",
+                rc_name, rc_value,
+            )
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Message callback — thread-safe write to cache."""

@@ -1,5 +1,4 @@
 import { memo } from 'react'
-import { AntifrostThreshold } from './AntifrostThreshold'
 
 interface EngineeringBarProps {
   cycleNumber: number
@@ -11,7 +10,6 @@ interface EngineeringBarProps {
   summerMonitoring: boolean
   antifrostOverrideActive: boolean
   winterEquilibrium: boolean
-  antifrostThreshold: number
 }
 
 export const EngineeringBar = memo(function EngineeringBar({
@@ -24,7 +22,6 @@ export const EngineeringBar = memo(function EngineeringBar({
   summerMonitoring,
   antifrostOverrideActive,
   winterEquilibrium,
-  antifrostThreshold,
 }: EngineeringBarProps) {
   return (
     <div className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-3 mb-4">
@@ -37,7 +34,6 @@ export const EngineeringBar = memo(function EngineeringBar({
         <Stat label="RL" value={rlFlow !== null ? `${rlFlow.toFixed(1)}°C` : 'n/a'} />
         <Stat label="Blend" value={rlBlend.toFixed(3)} />
         <Stat label="Reward" value={rlReward.toFixed(2)} />
-        <AntifrostThreshold threshold={antifrostThreshold} />
         {antifrostOverrideActive && (
           <span className="px-2 py-0.5 rounded-full bg-[var(--blue)]/20 text-[var(--blue)] font-medium">
             {winterEquilibrium ? 'Winter (Eq)' : 'Winter'}
