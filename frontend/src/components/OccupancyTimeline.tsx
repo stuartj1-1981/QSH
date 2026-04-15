@@ -2,6 +2,7 @@
 // OccupancyTimeline is only rendered from Away.tsx which fetches its own history
 // data and does not subscribe to useLive().
 import type { HistoryPoint } from '../hooks/useHistory'
+import { formatTimeRange } from '../lib/utils'
 
 interface OccupancyTimelineProps {
   roomHistory: Record<string, HistoryPoint[]>
@@ -54,7 +55,7 @@ export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps
                         width: `${width}%`,
                         backgroundColor: OCC_COLORS[seg.state] ?? '#6b7280',
                       }}
-                      title={`${room}: ${seg.state}`}
+                      title={`${room.replace(/_/g, ' ')} — ${seg.state}\n${formatTimeRange(seg.start, seg.end)}`}
                       className="h-full min-w-[1px]"
                     />
                   )

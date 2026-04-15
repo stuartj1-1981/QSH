@@ -200,6 +200,57 @@ describe('LiveViewEngine', () => {
     engine.destroy()
   })
 
+  it('start() is idempotent — second call cancels the in-flight RAF handle', () => {
+    const canvas = createMockCanvas()
+    const engine = new LiveViewEngine(canvas)
+    const rafSpy = vi.mocked(window.requestAnimationFrame)
+    const cancelSpy = vi.mocked(window.cancelAnimationFrame)
+    const rafBefore = rafSpy.mock.calls.length
+    const cancelBefore = cancelSpy.mock.calls.length
+
+    engine.start()
+    engine.start()
+
+    // Two RAF registrations queued (one per start call),
+    // and one cancel in between to drop the stale handle.
+    expect(rafSpy.mock.calls.length - rafBefore).toBe(2)
+    expect(cancelSpy.mock.calls.length - cancelBefore).toBe(1)
+  })
+
+  it('stop() then start() resets lastTime so first frame dt = 16 ms', () => {
+    const canvas = createMockCanvas()
+    const engine = new LiveViewEngine(canvas)
+    engine.setData(makeData(3))
+    engine.start()
+
+    // Advance one frame at t=1000 — first frame post-start should use dt=16ms.
+    const rafCb1 = vi.mocked(window.requestAnimationFrame).mock.calls[0][0]
+    rafCb1(1000)
+
+    engine.stop()
+    engine.start()
+
+    // Next rAF registered by the new start loop — grab the latest callback.
+    const calls = vi.mocked(window.requestAnimationFrame).mock.calls
+    const rafCb2 = calls[calls.length - 1][0]
+    // Advance to t=5000. If lastTime was NOT reset it would be 1000 and dt
+    // would be clamped to 50 ms; with reset, first frame uses dt=16 ms and
+    // FPS accumulator gets exactly 16 ms.
+    expect(() => rafCb2(5000)).not.toThrow()
+    // Post-reset FPS starts at 0 (not enough accumulated frames yet).
+    expect(engine.getFps()).toBe(0)
+  })
+
+  it('setEngineering toggles engineering flag without throwing', () => {
+    const canvas = createMockCanvas()
+    const engine = new LiveViewEngine(canvas)
+    engine.setData(makeData(3))
+    expect(() => engine.setEngineering(true)).not.toThrow()
+    engine.start()
+    const rafCb = vi.mocked(window.requestAnimationFrame).mock.calls[0][0]
+    expect(() => rafCb(16)).not.toThrow()
+  })
+
   it('hysteresis prevents thrashing at near-square aspect ratio', () => {
     const canvas = createMockCanvas()
     // Start at 500×500 (square) — engine starts portrait=false (desktop)

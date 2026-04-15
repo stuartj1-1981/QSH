@@ -71,6 +71,15 @@ export interface DriverStatus {
   error: string | null
 }
 
+export interface HealthResponse {
+  status: 'ok' | 'degraded' | 'error'
+  pipeline_age_seconds: number
+  cycle_number: number
+  api_version: string
+  addon_version: string
+  driver: { status: string; [key: string]: unknown }
+}
+
 export interface StatusResponse {
   timestamp: number
   cycle_number: number

@@ -254,10 +254,12 @@ class HADriver:
             signal_quality=signal_quality,
             # Capability flags
             has_live_cop=sensor_data.has_live_cop,
+            has_live_flow=getattr(sensor_data, "has_live_flow", True),
             has_live_delta_t=sensor_data.has_live_delta_t,
             has_live_power=sensor_data.has_live_power,
             has_live_return_temp=sensor_data.has_live_return_temp,
             has_live_flow_rate=sensor_data.has_live_flow_rate,
+            has_live_hot_water=getattr(sensor_data, "has_live_hot_water", True),
             has_solar=getattr(sensor_data, "has_solar", False),
             has_battery=getattr(sensor_data, "has_battery", False),
             # Away mode
