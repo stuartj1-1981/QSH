@@ -17,6 +17,7 @@ from ..resolve import ResolvedValue, deep_get, _validate_range
 from .topic_map import (
     CAPABILITY_FIELDS,
     SYSTEM_INPUT_FIELDS,
+    SYSTEM_STRING_INPUT_FIELDS,
     TopicMap,
     TopicMapping,
     build_topic_map,
@@ -295,6 +296,7 @@ class MQTTDriver:
 
         # System-level fields with defaults from InputBlock
         system_values: Dict[str, float] = {}
+        hot_water_active: bool = False  # overridden below if the topic is configured and has a live payload
 
         if tm:
             staleness_defaults = tm.staleness_defaults
@@ -313,6 +315,8 @@ class MQTTDriver:
                 if mapping.room:
                     signal_quality[sq_key] = quality
                 elif mapping.field in SYSTEM_INPUT_FIELDS.values():
+                    signal_quality[sq_key] = quality
+                elif mapping.field in SYSTEM_STRING_INPUT_FIELDS.values():
                     signal_quality[sq_key] = quality
                 elif mapping.field.startswith("_shadow_"):
                     signal_quality[sq_key] = quality
@@ -341,6 +345,17 @@ class MQTTDriver:
                 elif mapping.field.startswith("_shadow_"):
                     # Store in shadow dict, not InputBlock
                     self._shadow[mapping.field] = payload_str
+                elif mapping.field in SYSTEM_STRING_INPUT_FIELDS.values():
+                    # Boolean/enum payload — parse raw string, NOT through parse_payload.
+                    payload_normalised = payload_str.strip().lower()
+                    if mapping.field == "hot_water_active":
+                        if payload_normalised in _ON_PAYLOADS:
+                            hot_water_active = True
+                            capabilities["has_live_hot_water"] = True
+                        elif payload_normalised in _OFF_PAYLOADS:
+                            hot_water_active = False
+                            capabilities["has_live_hot_water"] = True
+                        # Anything else (garbage payload): leave at default False, no capability set
                 elif value is not None:
                     system_values[mapping.field] = value
 
@@ -354,8 +369,39 @@ class MQTTDriver:
             pass  # away/control resolved below via _resolve_mqtt_control
 
         # ── Check delta_t capability (derived from return temp + flow temp) ──
+        has_live_flow = capabilities.get("has_live_flow", False)
         has_live_return = capabilities.get("has_live_return_temp", False)
         has_live_flow_rate = capabilities.get("has_live_flow_rate", False)
+        has_live_hot_water = capabilities.get("has_live_hot_water", False)
+
+        # Derive avg_open_frac from valve_positions if any zones are configured.
+        # Valve positions are stored 0–100 by convention (matches heating_percs);
+        # avg_open_frac is the mean divided by 100.0. Falls back to the InputBlock
+        # dataclass default (0.75) when no valves are reporting — matches pre-fix
+        # behaviour for installs without per-zone valves.
+        if valve_positions:
+            avg_open_frac = sum(valve_positions.values()) / (len(valve_positions) * 100.0)
+            avg_open_frac = max(0.0, min(1.0, avg_open_frac))  # clamp defensively
+        else:
+            avg_open_frac = 0.75
+
+        # Derive delta_t from flow − return when both are live.
+        # Fall back to the signal_bus default (3.0) only when we genuinely
+        # cannot compute — prevents InputBlock shipping a constant 3.0
+        # regardless of live telemetry (observed on Alun's install).
+        hp_flow_live_val = system_values.get("hp_flow_temp")
+        hp_return_live_val = system_values.get("hp_return_temp")
+        if (
+            has_live_flow
+            and has_live_return
+            and hp_flow_live_val is not None
+            and hp_return_live_val is not None
+        ):
+            computed_delta_t = hp_flow_live_val - hp_return_live_val
+            has_live_delta_t = True
+        else:
+            computed_delta_t = 3.0
+            has_live_delta_t = False
 
         # ── Energy rates from config ──
         fallback_rates = config.get("fallback_rates", {})
@@ -464,12 +510,14 @@ class MQTTDriver:
             room_temps=room_temps,
             independent_sensors=independent_sensors,
             valve_positions=valve_positions,
+            avg_open_frac=avg_open_frac,
             outdoor_temp=system_values.get("outdoor_temp", 5.0),
             target_temp=comfort_temp_rv.value,
             hp_flow_temp=system_values.get("hp_flow_temp", 35.0),
             hp_return_temp=system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
             hp_power=system_values.get("hp_power", 0.0),
             hp_cop=system_values.get("hp_cop", 3.5),
+            delta_t=computed_delta_t,
             flow_rate=system_values.get("flow_rate", 0.0),
             solar_production=system_values.get("solar_production", 0.0),
             grid_power=system_values.get("grid_power", 0.0),
@@ -477,14 +525,17 @@ class MQTTDriver:
             current_rate=current_rate,
             export_rate=export_rate,
             control_enabled=dfan_rv.value,
+            hot_water_active=hot_water_active,
             flow_min=flow_min_rv.value,
             flow_max=flow_max_rv.value,
             signal_quality=signal_quality,
             has_live_cop=capabilities.get("has_live_cop", False),
             has_live_power=capabilities.get("has_live_power", False),
+            has_live_flow=has_live_flow,
             has_live_return_temp=has_live_return,
             has_live_flow_rate=has_live_flow_rate,
-            has_live_delta_t=has_live_return,  # delta_t derived from return temp
+            has_live_delta_t=has_live_delta_t,
+            has_live_hot_water=has_live_hot_water,
             has_solar=capabilities.get("has_solar", False),
             has_battery=capabilities.get("has_battery", False),
             away_mode_active=away_rv.value,
@@ -500,33 +551,65 @@ class MQTTDriver:
         if not self._mqtt or not self._topic_map:
             return
 
+        control_enabled = config.get("control_enabled")
+        if control_enabled is None:
+            control_enabled = True
+
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
 
         # ── Hardware commands (HP flow/mode) ──
         if outputs.hardware_changed:
-            for om in self._topic_map.output_mappings:
-                if om.field == "applied_flow":
-                    self._mqtt.publish(om.topic, str(outputs.applied_flow))
-                elif om.field == "applied_mode":
-                    self._mqtt.publish(om.topic, outputs.applied_mode)
+            if control_enabled:
+                for om in self._topic_map.output_mappings:
+                    if om.field == "applied_flow":
+                        self._mqtt.publish(om.topic, str(outputs.applied_flow))
+                    elif om.field == "applied_mode":
+                        self._mqtt.publish(om.topic, outputs.applied_mode)
+            else:
+                logger.debug(
+                    "SHADOW MODE: suppressed HP command flow=%.1f mode=%s",
+                    outputs.applied_flow, outputs.applied_mode,
+                )
 
         # ── Heat source command ──
         if outputs.heat_source_changed and outputs.heat_source_command is not None:
-            for om in self._topic_map.output_mappings:
-                if om.field == "heat_source_command":
-                    self._mqtt.publish(om.topic, outputs.heat_source_command)
+            if control_enabled:
+                for om in self._topic_map.output_mappings:
+                    if om.field == "heat_source_command":
+                        self._mqtt.publish(om.topic, outputs.heat_source_command)
+            else:
+                logger.debug(
+                    "SHADOW MODE: suppressed heat_source_command → %s",
+                    outputs.heat_source_command,
+                )
 
         # ── Valve commands ──
         if outputs.valves_changed:
-            for om in self._topic_map.output_mappings:
-                if om.field == "valve_setpoint" and om.room and om.room in outputs.valve_setpoints:
-                    self._mqtt.publish(om.topic, str(outputs.valve_setpoints[om.room]))
+            if control_enabled:
+                for om in self._topic_map.output_mappings:
+                    if om.field == "valve_setpoint" and om.room and om.room in outputs.valve_setpoints:
+                        self._mqtt.publish(om.topic, str(outputs.valve_setpoints[om.room]))
+            else:
+                logger.debug(
+                    "SHADOW MODE: suppressed %d valve setpoint(s)",
+                    len(outputs.valve_setpoints),
+                )
 
-        # ── TRV setpoints (always publish if configured) ──
-        for om in self._topic_map.output_mappings:
-            if om.field == "trv_setpoint" and om.room and om.room in outputs.trv_setpoints:
-                self._mqtt.publish(om.topic, str(outputs.trv_setpoints[om.room]))
+        # ── TRV setpoints ──
+        # Gated on control_enabled. Shadow mode suppresses actuation but still
+        # allows shadow-entity publishes below for operator visibility.
+        if outputs.trv_setpoints:
+            if control_enabled:
+                for om in self._topic_map.output_mappings:
+                    if om.field == "trv_setpoint" and om.room and om.room in outputs.trv_setpoints:
+                        self._mqtt.publish(om.topic, str(outputs.trv_setpoints[om.room]))
+            else:
+                logger.debug(
+                    "SHADOW MODE: suppressed %d TRV setpoint(s)",
+                    len(outputs.trv_setpoints),
+                )
 
+        # Telemetry — not gated on control_enabled (shadow mode still publishes observable state)
         # ── Shadow entities (dual-publish transition — 36C Task 8) ──
         if outputs.shadow_changed and config.get("publish_mqtt_shadow", True):
             def _shadow_base(p: str) -> str:

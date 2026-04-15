@@ -77,6 +77,10 @@ const HEART_PARAMS: Record<string, HeartParams> = {
 
 const PATH_SEGMENTS = 40
 const SPREAD = 14
+// Hard cap per particle array — defends GPU budget on HA Companion WebView
+// when a tab returns to focus after a long background period and spawn rate
+// × dt would otherwise produce a burst.
+const MAX_PARTICLES_PER_TYPE = 200
 
 // ---------------------------------------------------------------------------
 // LiveViewEngine
@@ -157,6 +161,12 @@ export class LiveViewEngine {
   private lastTime = 0
   private prevRoomCount = 0
 
+  // FPS instrumentation (engineering overlay)
+  private fps = 0
+  private fpsAccum = 0
+  private fpsFrames = 0
+  private engineering = false
+
   // Palette
   private dark = true
   private C: Palette = LiveViewEngine.darkPalette()
@@ -203,6 +213,14 @@ export class LiveViewEngine {
   }
 
   start(): void {
+    // Idempotent: cancel any in-flight RAF handle before starting a new loop
+    // so double-start (e.g. mount + visibilitychange race) does not leak
+    // animation callbacks. Resetting lastTime ensures the first post-(re)start
+    // frame uses dt = 16 ms instead of a stale time - lastTime delta.
+    if (this.animFrameId !== 0) {
+      cancelAnimationFrame(this.animFrameId)
+      this.animFrameId = 0
+    }
     this.lastTime = 0
     const loop = (time: number) => {
       this.frame(time)
@@ -211,7 +229,12 @@ export class LiveViewEngine {
     this.animFrameId = requestAnimationFrame(loop)
   }
 
-  stop(): void { cancelAnimationFrame(this.animFrameId) }
+  stop(): void {
+    cancelAnimationFrame(this.animFrameId)
+    // Zero the handle so start() can correctly recognise the stopped state
+    // and we do not cancelAnimationFrame a stale id on the next start.
+    this.animFrameId = 0
+  }
 
   resize(): void {
     const dpr = window.devicePixelRatio || 1
@@ -257,6 +280,12 @@ export class LiveViewEngine {
     this.dark = dark
     this.C = dark ? LiveViewEngine.darkPalette() : LiveViewEngine.lightPalette()
   }
+
+  setEngineering(on: boolean): void {
+    this.engineering = on
+  }
+
+  getFps(): number { return this.fps }
 
   // -------------------------------------------------------------------
   // Coordinate helpers
@@ -426,12 +455,23 @@ export class LiveViewEngine {
     this.lastTime = time
     const dtS = dt / 1000
 
+    // FPS accumulator — recompute once per second of render-time.
+    this.fpsAccum += dt
+    this.fpsFrames += 1
+    if (this.fpsAccum >= 1000) {
+      this.fps = Math.round((this.fpsFrames * 1000) / this.fpsAccum)
+      this.fpsAccum = 0
+      this.fpsFrames = 0
+    }
+
     if (!this.data) {
       this.drawWaiting(dtS)
+      if (this.engineering) this.drawFpsOverlay()
       return
     }
     this.update(dtS)
     this.draw()
+    if (this.engineering) this.drawFpsOverlay()
   }
 
   private update(dt: number): void {
@@ -488,25 +528,28 @@ export class LiveViewEngine {
     const isHwActive = this.isHW()
     const plan = this.data.dhw.hwPlan
 
-    for (const room of this.data.rooms) {
-      if (room.valve <= 0) continue
-      // Plumbing-aware: W/Y plans stop room particles during HW
-      if (isHwActive && (plan === 'W' || plan === 'Y')) continue
-      // S/S+ plans: reduced rate during HW
-      const rateMult = isHwActive && (plan === 'S' || plan === 'S+') ? 0.3 : 1
-      const spawnRate = (room.valve / 100) * 2.5 * rateMult * this.particleScale
-      if (Math.random() < spawnRate * dt) {
-        this.flowP.push({
-          t: 0, speed: 0.15 + Math.random() * 0.1,
-          roomId: room.id, isReturn: false, alpha: 0.7 + Math.random() * 0.3,
-        })
-      }
-      // Return particles at lower rate (particleScale already in spawnRate)
-      if (Math.random() < spawnRate * 0.6 * dt) {
-        this.flowP.push({
-          t: 0, speed: 0.12 + Math.random() * 0.08,
-          roomId: room.id, isReturn: true, alpha: 0.5 + Math.random() * 0.3,
-        })
+    // Hard cap guard — skip spawning if array is already saturated.
+    if (this.flowP.length < MAX_PARTICLES_PER_TYPE) {
+      for (const room of this.data.rooms) {
+        if (room.valve <= 0) continue
+        // Plumbing-aware: W/Y plans stop room particles during HW
+        if (isHwActive && (plan === 'W' || plan === 'Y')) continue
+        // S/S+ plans: reduced rate during HW
+        const rateMult = isHwActive && (plan === 'S' || plan === 'S+') ? 0.3 : 1
+        const spawnRate = (room.valve / 100) * 2.5 * rateMult * this.particleScale
+        if (Math.random() < spawnRate * dt) {
+          this.flowP.push({
+            t: 0, speed: 0.15 + Math.random() * 0.1,
+            roomId: room.id, isReturn: false, alpha: 0.7 + Math.random() * 0.3,
+          })
+        }
+        // Return particles at lower rate (particleScale already in spawnRate)
+        if (Math.random() < spawnRate * 0.6 * dt) {
+          this.flowP.push({
+            t: 0, speed: 0.12 + Math.random() * 0.08,
+            roomId: room.id, isReturn: true, alpha: 0.5 + Math.random() * 0.3,
+          })
+        }
       }
     }
 
@@ -525,12 +568,15 @@ export class LiveViewEngine {
       this.neuralP.length = 0
       return
     }
-    for (const room of this.data.rooms) {
-      if (Math.random() < 0.3 * dt * this.particleScale) {
-        this.neuralP.push({
-          t: 0, speed: 0.2 + Math.random() * 0.1,
-          roomId: room.id, alpha: 0.6, radius: 2,
-        })
+    // Hard cap guard — skip spawning if array is already saturated.
+    if (this.neuralP.length < MAX_PARTICLES_PER_TYPE) {
+      for (const room of this.data.rooms) {
+        if (Math.random() < 0.3 * dt * this.particleScale) {
+          this.neuralP.push({
+            t: 0, speed: 0.2 + Math.random() * 0.1,
+            roomId: room.id, alpha: 0.6, radius: 2,
+          })
+        }
       }
     }
     for (let i = this.neuralP.length - 1; i >= 0; i--) {
@@ -544,19 +590,22 @@ export class LiveViewEngine {
 
   private updateWallLeaks(dt: number): void {
     if (!this.data) return
-    for (const room of this.data.rooms) {
-      const pos = this.roomPos.get(room.id)
-      if (!pos) continue
-      const rate = room.u * 3
-      if (Math.random() < rate * dt * this.particleScale) {
-        const angle = Math.random() * Math.PI * 2
-        this.wallP.push({
-          x: pos.nx, y: pos.ny,
-          vx: Math.cos(angle) * (20 + Math.random() * 15),
-          vy: Math.sin(angle) * (20 + Math.random() * 15),
-          life: 0, maxLife: 1.5 + Math.random(), size: 1.5 + Math.random(),
-          roomId: room.id,
-        })
+    // Hard cap guard — skip spawning if array is already saturated.
+    if (this.wallP.length < MAX_PARTICLES_PER_TYPE) {
+      for (const room of this.data.rooms) {
+        const pos = this.roomPos.get(room.id)
+        if (!pos) continue
+        const rate = room.u * 3
+        if (Math.random() < rate * dt * this.particleScale) {
+          const angle = Math.random() * Math.PI * 2
+          this.wallP.push({
+            x: pos.nx, y: pos.ny,
+            vx: Math.cos(angle) * (20 + Math.random() * 15),
+            vy: Math.sin(angle) * (20 + Math.random() * 15),
+            life: 0, maxLife: 1.5 + Math.random(), size: 1.5 + Math.random(),
+            roomId: room.id,
+          })
+        }
       }
     }
     for (let i = this.wallP.length - 1; i >= 0; i--) {
@@ -573,11 +622,14 @@ export class LiveViewEngine {
       this.dhwP.length = 0
       return
     }
-    if (Math.random() < 3 * dt * this.particleScale) {
-      this.dhwP.push({
-        t: 0, speed: 0.2 + Math.random() * 0.1,
-        pathType: Math.random() < 0.6 ? 'flow' : 'return', alpha: 0.8,
-      })
+    // Hard cap guard — skip spawning if array is already saturated.
+    if (this.dhwP.length < MAX_PARTICLES_PER_TYPE) {
+      if (Math.random() < 3 * dt * this.particleScale) {
+        this.dhwP.push({
+          t: 0, speed: 0.2 + Math.random() * 0.1,
+          pathType: Math.random() < 0.6 ? 'flow' : 'return', alpha: 0.8,
+        })
+      }
     }
     for (let i = this.dhwP.length - 1; i >= 0; i--) {
       this.dhwP[i].t += this.dhwP[i].speed * dt
@@ -1376,6 +1428,27 @@ export class LiveViewEngine {
       }
       ctx.restore()
     }
+  }
+
+  // -------------------------------------------------------------------
+  // drawFpsOverlay — engineering-mode FPS readout (bottom-right)
+  // -------------------------------------------------------------------
+
+  private drawFpsOverlay(): void {
+    const { ctx } = this
+    const cw = this.canvas.clientWidth || this.lp.dw
+    const ch = this.canvas.clientHeight || this.lp.dh
+
+    ctx.save()
+    // Palette may lack textMuted (defensive) — fall back to text with 50% alpha.
+    const colour = this.C.textMuted ?? this.C.text
+    if (!this.C.textMuted) ctx.globalAlpha = 0.5
+    ctx.fillStyle = colour
+    ctx.font = '11px sans-serif'
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText(`fps: ${this.fps}`, cw - 8, ch - 6)
+    ctx.restore()
   }
 
   // -------------------------------------------------------------------

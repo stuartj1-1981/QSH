@@ -72,7 +72,7 @@ export default function App() {
       onToggleDark={() => setDark(!dark)}
     >
       {activePage === 'home' && <Home engineering={engineering} onNavigate={setPage} />}
-      {activePage === 'liveview' && <LiveView dark={dark} />}
+      {activePage === 'liveview' && <LiveView dark={dark} engineering={engineering} />}
       {activePage === 'rooms' && <Rooms engineering={engineering} />}
       {activePage === 'schedule' && <Schedule />}
       {activePage === 'away' && <Away />}

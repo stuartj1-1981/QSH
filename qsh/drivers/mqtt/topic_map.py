@@ -384,14 +384,22 @@ SYSTEM_INPUT_FIELDS = {
     "flow_rate": "flow_rate",
 }
 
+# System-level fields whose payload is a raw string (boolean/enum), NOT a number.
+# These are parsed outside the numeric `parse_payload` path — see driver.read_inputs.
+SYSTEM_STRING_INPUT_FIELDS = {
+    "hot_water_active": "hot_water_active",
+}
+
 # Fields that indicate capabilities when received
 CAPABILITY_FIELDS = {
+    "hp_flow_temp": "has_live_flow",
     "hp_cop": "has_live_cop",
     "hp_power": "has_live_power",
     "hp_return_temp": "has_live_return_temp",
     "flow_rate": "has_live_flow_rate",
     "solar_production": "has_solar",
     "battery_soc": "has_battery",
+    "hot_water_active": "has_live_hot_water",
 }
 
 
@@ -462,7 +470,10 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
         if not raw_topic:
             continue
 
-        ib_field = SYSTEM_INPUT_FIELDS.get(config_key, f"_shadow_{config_key}")
+        ib_field = SYSTEM_INPUT_FIELDS.get(
+            config_key,
+            SYSTEM_STRING_INPUT_FIELDS.get(config_key, f"_shadow_{config_key}"),
+        )
         inferred_cat = category or infer_category(ib_field, config_key)
         tm.input_mappings.append(TopicMapping(
             topic=_prefixed(prefix, raw_topic),

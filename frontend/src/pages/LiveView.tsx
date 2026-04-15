@@ -4,9 +4,10 @@ import { LiveViewEngine } from '../lib/liveViewEngine'
 
 interface LiveViewProps {
   dark?: boolean
+  engineering?: boolean
 }
 
-export function LiveView({ dark = true }: LiveViewProps) {
+export function LiveView({ dark = true, engineering = false }: LiveViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<LiveViewEngine | null>(null)
   const { data, isConnected } = useLiveViewData()
@@ -45,6 +46,26 @@ export function LiveView({ dark = true }: LiveViewProps) {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  // Pause animation when tab is hidden so RAF throttling/backgrounding does
+  // not leave particles visually frozen mid-pipe. start() resets lastTime=0
+  // so the first post-resume frame uses dt=16ms rather than a stale delta.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        engineRef.current?.stop()
+      } else {
+        engineRef.current?.start()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // Toggle engineering FPS overlay on the engine
+  useEffect(() => {
+    engineRef.current?.setEngineering(engineering)
+  }, [engineering])
 
   // Mobile offset: --header-h (60px: header 44px + mb-4 16px) + p-4 padding (32px) = 92px total.
   // Desktop: h-full fills the Layout main area.

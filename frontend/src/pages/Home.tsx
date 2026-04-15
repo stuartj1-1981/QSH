@@ -3,6 +3,7 @@ import { useLive } from '../hooks/useLive'
 import { useStatus } from '../hooks/useStatus'
 import { useHistory } from '../hooks/useHistory'
 import { useRawConfig } from '../hooks/useConfig'
+import { useVersion } from '../hooks/useVersion'
 import type { RoomState } from '../types/api'
 import { StatusBanner } from '../components/StatusBanner'
 import { SourceSelector } from '../components/SourceSelector'
@@ -40,6 +41,7 @@ interface HomeProps {
 export function Home({ engineering, onNavigate }: HomeProps) {
   const { data: live, isConnected } = useLive()
   const { data: initial } = useStatus()
+  const { version } = useVersion()
   const { data: awayData, refetch: refetchAway } = useAwayState()
   const { setAway } = useSetAway()
   // Optimistic away-off state — true after "I'm Home" click, clears on server confirm.
@@ -322,6 +324,13 @@ export function Home({ engineering, onNavigate }: HomeProps) {
 
       {/* Engineering trend charts */}
       {engineering && <HomeTrends />}
+
+      {/* Addon version footer — always visible. Renders 'unknown' literally
+          when config.json is missing or unreadable so a deployment
+          misconfiguration surfaces to the owner instead of being masked. */}
+      <div className="mt-8 pt-4 border-t border-[var(--border)] text-center text-xs text-[var(--text-muted)]">
+        QSH v{version ?? '\u2026'}
+      </div>
     </div>
   )
 }
