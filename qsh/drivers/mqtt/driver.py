@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 _AVAILABILITY_WARN_ONCE: set[str] = set()
 
 
+# Signal-quality rank used for best-of resolution when multiple topics map to
+# the same sq_key. Lower is better — "good" beats "stale" beats "unavailable".
+_SQ_RANK: Dict[str, int] = {"good": 0, "stale": 1, "unavailable": 2}
+
+
 def _resolve_signal_quality(
     mapping: TopicMapping,
     cache: Dict[str, Tuple[str, float]],
@@ -157,6 +162,12 @@ class MQTTDriver:
         # (no log emitted for the seed); transitions thereafter log exactly once.
         self._previous_signal_quality: Dict[str, str] = {}
 
+        # Per-sq_key last-logged multi-source conflict signature.  Keyed by
+        # f"_conflict_{sq_key}"; value is the sorted (topic, quality) tuple.
+        # Prevents repeating the same conflict log every cycle — logs once
+        # on change, clears on agreement so a future disagreement re-fires.
+        self._prev_sq_conflicts: Dict[str, tuple] = {}
+
         # One-shot latch for the comfort_temp startup audit log.  See
         # INSTRUCTION-105 — makes it trivially auditable on restart whether
         # the resolved comfort temp came from the MQTT cache or the internal
@@ -187,6 +198,7 @@ class MQTTDriver:
 
         self._prefix = mqtt_cfg.get("topic_prefix", "")
         self._topic_map = build_topic_map(config)
+        self._log_multi_source_advisory()
         self._mqtt = MQTTClient(client_config)
         self._mqtt.connect()
 
@@ -284,6 +296,31 @@ class MQTTDriver:
             external_raw=None,
         )
 
+    def _log_multi_source_advisory(self) -> None:
+        """Log once at setup when multiple topics map to the same sq_key.
+
+        Bounded by the number of configured rooms/system fields, so a
+        single INFO line per multi-source key is an acceptable startup
+        cost. See INSTRUCTION-107.
+        """
+        tm = self._topic_map
+        if not tm:
+            return
+        key_topics: Dict[str, List[str]] = {}
+        for mapping in tm.input_mappings:
+            if mapping.room:
+                sq_key = f"room_temps.{mapping.room}"
+            else:
+                sq_key = mapping.field
+            key_topics.setdefault(sq_key, []).append(mapping.topic)
+        multi = {k: v for k, v in key_topics.items() if len(v) > 1}
+        for sq_key, topics in multi.items():
+            logger.info(
+                "MQTT multi-source: %s has %d topics (%s) — "
+                "will use best-of signal quality resolution",
+                sq_key, len(topics), ", ".join(topics),
+            )
+
     def _log_signal_quality_transition(
         self,
         sq_key: str,
@@ -354,6 +391,21 @@ class MQTTDriver:
 
         if tm:
             staleness_defaults = tm.staleness_defaults
+
+            # Pass 1 — accumulate candidates per sq_key / per destination.
+            # Multiple topics may map to the same sq_key (e.g. a primary and
+            # backup room sensor). We gather every contributing topic here
+            # and resolve best-of below.
+            _sq_candidates: Dict[
+                str, List[Tuple[str, Optional[str], TopicMapping]]
+            ] = {}
+            _room_temp_candidates: Dict[
+                str, List[Tuple[float, str, TopicMapping]]
+            ] = {}
+            _system_value_candidates: Dict[
+                str, List[Tuple[float, str, TopicMapping]]
+            ] = {}
+
             for mapping in tm.input_mappings:
                 # Signal quality key (matches prior behaviour).
                 if mapping.room:
@@ -365,22 +417,16 @@ class MQTTDriver:
                     mapping, cache, staleness_defaults, now
                 )
 
-                # Only record sq for fields tracked before (room or system).
-                if mapping.room:
-                    signal_quality[sq_key] = quality
-                elif mapping.field in SYSTEM_INPUT_FIELDS.values():
-                    signal_quality[sq_key] = quality
-                elif mapping.field in SYSTEM_STRING_INPUT_FIELDS.values():
-                    signal_quality[sq_key] = quality
-                elif mapping.field.startswith("_shadow_"):
-                    signal_quality[sq_key] = quality
-
-                # Emit transition log exactly once per good↔stale↔unavailable
-                # change for tracked sq_keys. Untracked fields (outside the
-                # elif chain above) skip logging too. See INSTRUCTION-100.
-                if sq_key in signal_quality:
-                    self._log_signal_quality_transition(
-                        sq_key, mapping, quality, cache, staleness_defaults, now
+                # Only accumulate sq for fields tracked before (room or system).
+                tracked = (
+                    bool(mapping.room)
+                    or mapping.field in SYSTEM_INPUT_FIELDS.values()
+                    or mapping.field in SYSTEM_STRING_INPUT_FIELDS.values()
+                    or mapping.field.startswith("_shadow_")
+                )
+                if tracked:
+                    _sq_candidates.setdefault(sq_key, []).append(
+                        (quality, payload_str, mapping)
                     )
 
                 # Availability-online with no value payload yet → no parsing.
@@ -392,8 +438,9 @@ class MQTTDriver:
 
                 if mapping.room:
                     if mapping.field == "room_temp" and value is not None:
-                        room_temps[mapping.room] = value
-                        independent_sensors[mapping.room] = value
+                        _room_temp_candidates.setdefault(mapping.room, []).append(
+                            (value, quality, mapping)
+                        )
                     elif mapping.field == "valve_position" and value is not None:
                         valve_positions[mapping.room] = value
                     elif mapping.field == "occupancy_sensor":
@@ -419,13 +466,66 @@ class MQTTDriver:
                             capabilities["has_live_hot_water"] = True
                         # Anything else (garbage payload): leave at default False, no capability set
                 elif value is not None:
-                    system_values[mapping.field] = value
+                    _system_value_candidates.setdefault(mapping.field, []).append(
+                        (value, quality, mapping)
+                    )
 
                 # Track capabilities
                 for config_key, cap_flag in CAPABILITY_FIELDS.items():
                     ib_field = SYSTEM_INPUT_FIELDS.get(config_key)
                     if mapping.field == ib_field and value is not None:
                         capabilities[cap_flag] = True
+
+            # Pass 2 — resolve best-of per sq_key / room / system field.
+            # Tie-breaker on equal quality: first candidate in
+            # input_mappings order wins (Python's min() is stable).
+
+            for sq_key, candidates in _sq_candidates.items():
+                best_quality, _best_payload, best_mapping = min(
+                    candidates, key=lambda c: _SQ_RANK.get(c[0], 99)
+                )
+                signal_quality[sq_key] = best_quality
+
+                # Transition log uses the winning mapping's details. The
+                # transition logger is keyed by sq_key (see __init__), so
+                # logging the resolved quality matches its design.
+                self._log_signal_quality_transition(
+                    sq_key, best_mapping, best_quality, cache, staleness_defaults, now
+                )
+
+                # Multi-source conflict log — once per signature change.
+                if len(candidates) > 1:
+                    qualities = {c[2].topic: c[0] for c in candidates}
+                    conflict_key = f"_conflict_{sq_key}"
+                    if len(set(qualities.values())) > 1:
+                        conflict_sig = tuple(sorted(qualities.items()))
+                        if self._prev_sq_conflicts.get(conflict_key) != conflict_sig:
+                            self._prev_sq_conflicts[conflict_key] = conflict_sig
+                            topics_str = ", ".join(
+                                f"{t}={q}" for t, q in sorted(qualities.items())
+                            )
+                            logger.info(
+                                "MQTT signal_quality %s: multi-source conflict "
+                                "resolved to '%s' (best-of: %s)",
+                                sq_key, best_quality, topics_str,
+                            )
+                    else:
+                        # All sources agree — clear so a future disagreement
+                        # logs again.
+                        self._prev_sq_conflicts.pop(conflict_key, None)
+
+            for room, candidates in _room_temp_candidates.items():
+                best_value, _best_q, _best_m = min(
+                    candidates, key=lambda c: _SQ_RANK.get(c[1], 99)
+                )
+                room_temps[room] = best_value
+                independent_sensors[room] = best_value
+
+            for field_name, candidates in _system_value_candidates.items():
+                best_value, _best_q, _best_m = min(
+                    candidates, key=lambda c: _SQ_RANK.get(c[1], 99)
+                )
+                system_values[field_name] = best_value
 
         else:
             pass  # away/control resolved below via _resolve_mqtt_control

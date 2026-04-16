@@ -40,7 +40,7 @@ export const TodaySummary = memo(function TodaySummary({
       <SummaryCard
         icon={<Zap size={18} className="text-[var(--blue)]" />}
         label="Current rate"
-        value={`${(currentRate * 100).toFixed(1)}p/kWh`}
+        value={`${(currentRate * 100).toFixed(2)}p/kWh`}
       />
       {predictedSaving !== undefined && (
         <SummaryCard
