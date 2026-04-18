@@ -4,6 +4,7 @@ import { useLive } from '../hooks/useLive'
 import { apiUrl } from '../lib/api'
 import { SettingsLayout, type SettingsSection } from '../components/settings/SettingsLayout'
 import { RoomSettings } from '../components/settings/RoomSettings'
+import { BuildingLayout } from '../components/settings/BuildingLayout'
 import { HeatSourceSettings } from '../components/settings/HeatSourceSettings'
 import { TariffSettings } from '../components/settings/TariffSettings'
 import { ThermalSettings } from '../components/settings/ThermalSettings'
@@ -70,6 +71,8 @@ export function Settings({ onRunWizard }: SettingsProps) {
     switch (section) {
       case 'rooms':
         return <RoomSettings rooms={data.rooms || {}} driver={driver} onRefetch={refetch} />
+      case 'building-layout':
+        return <BuildingLayout onRefetch={refetch} />
       case 'heat_source':
         return (
           <HeatSourceSettings

@@ -14,11 +14,13 @@ import {
   BarChart3,
   Leaf,
   Link as LinkIcon,
+  Building,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
 export type SettingsSection =
   | 'rooms'
+  | 'building-layout'
   | 'heat_source'
   | 'tariff'
   | 'thermal'
@@ -35,6 +37,7 @@ export type SettingsSection =
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof HomeIcon }[] = [
   { id: 'rooms', label: 'Rooms', icon: HomeIcon },
+  { id: 'building-layout', label: 'Building Layout', icon: Building },
   { id: 'heat_source', label: 'Heat Source', icon: Flame },
   { id: 'tariff', label: 'Tariff', icon: Zap },
   { id: 'thermal', label: 'Thermal', icon: Thermometer },

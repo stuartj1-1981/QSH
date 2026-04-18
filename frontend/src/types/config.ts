@@ -36,10 +36,55 @@ export interface RoomMqttTopics {
   occupancy_sensor?: string
 }
 
+/** Boundary referencing another room (INSTRUCTION-106A/B).
+ *  `floor_ceiling` is auto-set when a floor or ceiling face references a room;
+ *  the UI does not offer it as a user-selectable option on wall faces. */
+export interface RoomBoundaryYaml {
+  room: string
+  type?: 'wall' | 'open' | 'party' | 'floor_ceiling'
+}
+
+/** Face value — a reserved literal (per-face) or a RoomBoundaryYaml (scalar or array). */
+export type FaceValue = 'external' | 'ground' | 'roof' | 'unheated' | RoomBoundaryYaml | RoomBoundaryYaml[]
+
+/** Normalise a face value to an array of room refs. String literals and null return []. */
+export function normaliseFaceRefs(face: FaceValue | null | undefined): RoomBoundaryYaml[] {
+  if (face == null || typeof face === 'string') return []
+  if (Array.isArray(face)) return face
+  return [face]
+}
+
+/** True when a face value contains at least one room reference.
+ *  NOTE: Empty arrays should not exist (backend validates against them),
+ *  but the check is defensive for intermediate editing states. */
+export function hasRoomRefs(face: FaceValue | null | undefined): boolean {
+  if (face == null || typeof face === 'string') return false
+  if (Array.isArray(face)) return face.length > 0
+  return 'room' in face
+}
+
+/** True when a face value is a single RoomBoundaryYaml (not array, not string). */
+export function isSingleRoomRef(face: FaceValue | null | undefined): face is RoomBoundaryYaml {
+  return !!face && typeof face === 'object' && !Array.isArray(face) && 'room' in face
+}
+
+export interface RoomEnvelopeYaml {
+  north_wall?: FaceValue | null
+  east_wall?: FaceValue | null
+  south_wall?: FaceValue | null
+  west_wall?: FaceValue | null
+  floor?: FaceValue | null
+  ceiling?: FaceValue | null
+}
+
 export interface RoomConfigYaml {
   area_m2: number
   facing?: string
   ceiling_m?: number
+  /** Storey index (−1 basement, 0 ground, 1 first, ...). */
+  floor?: number
+  /** 6-face room envelope. */
+  envelope?: RoomEnvelopeYaml
   emitter_kw?: number
   emitter_type?: 'radiator' | 'ufh' | 'fan_coil'
   trv_entity?: string | string[]
@@ -58,6 +103,13 @@ export interface RoomConfigYaml {
   // Per-zone away internal values (36C — N3)
   away_active_internal?: boolean
   away_days_internal?: number
+}
+
+/** Response from PATCH /api/rooms/envelope (INSTRUCTION-106A). */
+export interface EnvelopePatchResponse {
+  updated: string[]
+  warnings: string[]
+  restart_required: boolean
 }
 
 export interface HeatSourceYaml {
