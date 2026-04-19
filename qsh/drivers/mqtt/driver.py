@@ -43,6 +43,32 @@ _AVAILABILITY_WARN_ONCE: set[str] = set()
 _SQ_RANK: Dict[str, int] = {"good": 0, "stale": 1, "unavailable": 2}
 
 
+# Per-room field → signal_quality dict prefix. Keeps room_temp / valve_position /
+# occupancy_sensor mappings in distinct sq_key namespaces so a live occupancy
+# sensor cannot mask a dead temp sensor (or vice versa).
+_ROOM_FIELD_SQ_PREFIX: Dict[str, str] = {
+    "room_temp": "room_temps",
+    "valve_position": "valve_positions",
+    "occupancy_sensor": "occupancy_sensors",
+}
+
+
+def _sq_key_for(mapping: "TopicMapping") -> str:
+    """Derive the signal_quality dict key for a mapping.
+
+    Per-room: "<field_group>.<room>" so occupancy and valve do not pollute
+    room_temps. System-level: the field name, matching prior behaviour.
+    Unknown per-room fields fall back to a generic "per_room.<field>.<room>"
+    so they are still tracked and never collide with the room_temps key.
+    """
+    if mapping.room:
+        prefix = _ROOM_FIELD_SQ_PREFIX.get(mapping.field)
+        if prefix:
+            return f"{prefix}.{mapping.room}"
+        return f"per_room.{mapping.field}.{mapping.room}"
+    return mapping.field
+
+
 def _resolve_signal_quality(
     mapping: TopicMapping,
     cache: Dict[str, Tuple[str, float]],
@@ -308,10 +334,7 @@ class MQTTDriver:
             return
         key_topics: Dict[str, List[str]] = {}
         for mapping in tm.input_mappings:
-            if mapping.room:
-                sq_key = f"room_temps.{mapping.room}"
-            else:
-                sq_key = mapping.field
+            sq_key = _sq_key_for(mapping)
             key_topics.setdefault(sq_key, []).append(mapping.topic)
         multi = {k: v for k, v in key_topics.items() if len(v) > 1}
         for sq_key, topics in multi.items():
@@ -407,11 +430,7 @@ class MQTTDriver:
             ] = {}
 
             for mapping in tm.input_mappings:
-                # Signal quality key (matches prior behaviour).
-                if mapping.room:
-                    sq_key = f"room_temps.{mapping.room}"
-                else:
-                    sq_key = mapping.field
+                sq_key = _sq_key_for(mapping)
 
                 quality, payload_str, ts = _resolve_signal_quality(
                     mapping, cache, staleness_defaults, now

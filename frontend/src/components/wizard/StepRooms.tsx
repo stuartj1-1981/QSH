@@ -114,7 +114,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
 
   const updateRoomMqttTopic = (roomName: string, key: string, value: string, format?: string, jsonPath?: string) => {
     const room = rooms[roomName]
-    const topics = room.mqtt_topics || { room_temp: '' }
+    const topics = room.mqtt_topics || {}
     let topicValue: RoomMqttTopicValue | undefined
     if (value) {
       if (format === 'json') {
@@ -380,6 +380,15 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         mqtt={mqtt}
                         onResults={setMqttScanResults}
                       />
+                      {!getRoomTopicStr(room.mqtt_topics?.room_temp) && (
+                        <div
+                          role="alert"
+                          className="rounded-md border border-[var(--amber)]/40 bg-[var(--amber)]/10 px-3 py-2 text-xs text-[var(--amber)]"
+                        >
+                          No Room Temp Topic set — this room will display &quot;--&quot; until a topic is
+                          provided and a publisher sends a numeric value.
+                        </div>
+                      )}
                       <TopicPicker
                         label="Room Temperature"
                         value={getRoomTopicStr(room.mqtt_topics?.room_temp)}

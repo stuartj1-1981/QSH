@@ -170,23 +170,53 @@ describe('BuildingLayout', () => {
 
   it('5d. mode toggle switches between Surface and Adjacent Room(s)', async () => {
     const user = (await import('@testing-library/user-event')).default.setup()
+    // Same-floor partner so wall faces have a valid candidate (makes the
+    // add-room dropdown render "Add room…" rather than "No rooms available").
     mockConfig.rooms = {
       lounge: { area_m2: 20, facing: 'interior', floor: 0 },
-      bed1: { area_m2: 12, facing: 'interior', floor: 1 },
+      kitchen: { area_m2: 12, facing: 'interior', floor: 0 },
     }
     render(<BuildingLayout />)
     await user.click(screen.getByLabelText('Expand envelope editor for lounge'))
-    // Find first "Adjacent Room(s)" button and click it
+
+    // Before: the first face should be in Surface mode — a face-literal select
+    // (aria-label ends with "face for lounge") must be present.
+    const faceSelectsBefore = screen.getAllByRole('combobox').filter(
+      (s) => s.getAttribute('aria-label')?.endsWith('face for lounge')
+    )
+    const faceCountBefore = faceSelectsBefore.length
+    expect(faceCountBefore).toBeGreaterThan(0)
+
+    // Click the first "Adjacent Room(s)" button → that face flips to rooms mode.
     const buttons = screen.getAllByRole('button')
     const adjacentBtn = buttons.find((b) => b.textContent === 'Adjacent Room(s)')
     expect(adjacentBtn).toBeDefined()
-    if (adjacentBtn) {
-      await user.click(adjacentBtn)
-    }
-    // After clicking, surface mode select should be hidden and rooms mode controls should appear
-    // Check that we have mode toggle buttons visible (both Surface and Adjacent Room(s) should be present)
-    const surfaceBtn = screen.getAllByRole('button').find((b) => b.textContent === 'Surface')
-    expect(surfaceBtn).toBeDefined()
+    await user.click(adjacentBtn!)
+
+    // After: one of the literal face selects is now gone (that face moved to
+    // rooms mode) and an "Add room…" picker has appeared in its place.
+    const faceSelectsAfter = screen.getAllByRole('combobox').filter(
+      (s) => s.getAttribute('aria-label')?.endsWith('face for lounge')
+    )
+    expect(faceSelectsAfter.length).toBe(faceCountBefore - 1)
+    const addRoomSelect = screen.getAllByRole('combobox').find((s) =>
+      (s as HTMLSelectElement).textContent?.includes('Add room')
+    )
+    expect(addRoomSelect).toBeDefined()
+
+    // Flip back to Surface — the Add-room picker disappears and the face
+    // literal select returns.
+    const surfaceBtns = screen.getAllByRole('button').filter((b) => b.textContent === 'Surface')
+    expect(surfaceBtns.length).toBeGreaterThan(0)
+    await user.click(surfaceBtns[0])
+    const addRoomStill = screen.getAllByRole('combobox').find((s) =>
+      (s as HTMLSelectElement).textContent?.includes('Add room')
+    )
+    expect(addRoomStill).toBeUndefined()
+    const faceSelectsRestored = screen.getAllByRole('combobox').filter(
+      (s) => s.getAttribute('aria-label')?.endsWith('face for lounge')
+    )
+    expect(faceSelectsRestored.length).toBe(faceCountBefore)
   })
 
   it('5e. destructive mode switch shows confirmation for 2+ refs', async () => {
