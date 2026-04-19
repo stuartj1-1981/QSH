@@ -90,6 +90,14 @@ export function LiveView({ dark = true, engineering = false }: LiveViewProps) {
     engine2dRef.current?.setEngineering(engineering)
   }, [engineering])
 
+  // Reserve right-edge canvas-text inset when the 2D/3D toggle is rendered.
+  // Toggle is absolutely positioned at right-4 with ~90px button row = ~106px
+  // from the container right edge. 130 CSS-px inset keeps the outdoor temp /
+  // mode label cleanly left of the toggle with ~24px breathing room.
+  useEffect(() => {
+    engine2dRef.current?.setHeaderRightMargin(hasEnvelopeData ? 130 : 30)
+  }, [hasEnvelopeData])
+
   // Toggle between 2D and 3D: start the active engine, stop the inactive one.
   // Resize the newly-active engine since its canvas may have been hidden when
   // the window was last resized.

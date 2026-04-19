@@ -19,10 +19,14 @@ describe('formatTimeRange', () => {
   })
 
   it('appends a day suffix when the range crosses midnight', () => {
-    // 2026-04-15 23:30 UTC → 2026-04-16 02:15 UTC — noon-to-noon local
-    // would also span two calendar days in most TZs so the suffix path fires.
-    const start = Date.UTC(2026, 3, 15, 23, 30, 0) / 1000
-    const end = Date.UTC(2026, 3, 16, 12, 15, 0) / 1000
+    // 24 hours apart centred on noon UTC. formatTimeRange compares LOCAL
+    // calendar days via toDateString(), so the inputs must land on two
+    // different local days in every real TZ. Worst-case TZ offset is ±14h
+    // from UTC, so a 24h span centred on noon UTC always straddles two local
+    // calendar days. (Previous revision used 23:30 UTC → 12:15 UTC next day,
+    // which under Europe/London BST = UTC+1 collapsed to a single local day.)
+    const start = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000
+    const end = Date.UTC(2026, 3, 16, 12, 0, 0) / 1000
     const out = formatTimeRange(start, end)
     // Must include a parenthesised day-month suffix after the end time.
     expect(out).toMatch(/\u2192 \d{2}:\d{2} \(.+\)$/)

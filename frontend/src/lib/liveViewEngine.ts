@@ -167,6 +167,11 @@ export class LiveViewEngine {
   private fpsFrames = 0
   private engineering = false
 
+  // CSS-pixel right-edge inset for the header text (outdoor temp + mode label).
+  // Bumped by LiveView when the HTML 2D/3D toggle is rendered, so the canvas
+  // header text doesn't crowd the toggle's ~90px-wide button row.
+  private headerRightPx = 30
+
   // Palette
   private dark = true
   private C: Palette = LiveViewEngine.darkPalette()
@@ -283,6 +288,15 @@ export class LiveViewEngine {
 
   setEngineering(on: boolean): void {
     this.engineering = on
+  }
+
+  /**
+   * Reserve a CSS-pixel right-edge inset for the header text so the overlaying
+   * HTML 2D/3D toggle doesn't crowd the outdoor temp and mode label. Default 30;
+   * bump to ~130 when the toggle is present.
+   */
+  setHeaderRightMargin(px: number): void {
+    this.headerRightPx = px
   }
 
   getFps(): number { return this.fps }
@@ -1326,13 +1340,19 @@ export class LiveViewEngine {
     ctx.textBaseline = 'top'
     ctx.fillText('How Heat Lives in Your Home', this.$x(30), this.$y(25))
 
+    // Outdoor temp + mode label — right-aligned at a CSS-pixel inset so the
+    // overlaying HTML 2D/3D toggle (when present) doesn't crowd them. Using
+    // clientWidth directly here rather than $x(dw - N) keeps the inset a fixed
+    // CSS pixel distance regardless of design-space scale.
+    const textRightX = this.canvas.clientWidth - this.headerRightPx
+
     // Outdoor temp (top-right)
     ctx.fillStyle = this.C.textMuted
     ctx.font = `${this.$s(this.lp.fontSize.annotation)}px sans-serif`
     ctx.textAlign = 'right'
     ctx.fillText(
       `Outside ${this.data.hp.outdoor_temp.toFixed(1)}°C`,
-      this.$x(this.lp.dw - 30), this.$y(28),
+      textRightX, this.$y(28),
     )
 
     // Operating mode (top-right, below OAT) — colour-coded by season
@@ -1345,7 +1365,7 @@ export class LiveViewEngine {
     ctx.fillStyle = SEASON_COLOUR[this.data.state.season] ?? this.C.textMuted
     ctx.font = `500 ${this.$s(this.lp.fontSize.annotation)}px sans-serif`
     ctx.textAlign = 'right'
-    ctx.fillText(this.data.state.label, this.$x(this.lp.dw - 30), this.$y(46))
+    ctx.fillText(this.data.state.label, textRightX, this.$y(46))
   }
 
   // -------------------------------------------------------------------

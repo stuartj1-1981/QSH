@@ -494,9 +494,25 @@ function FaceEditorRow({
   const literalOpts = literalOptionsForFace(face)
   const selectValue = faceValueToSelectValue(value)
 
-  // Determine mode based on current value
-  const mode: FaceMode = hasRoomRefs(value) ? 'rooms' : 'surface'
+  // Mode needs to allow 'rooms' with zero chips (user entered rooms mode but
+  // hasn't picked a room yet). A pure value-derived mode cannot express that.
+  //
+  // Resolution: derive during render. When the value has room refs we always
+  // show 'rooms' (authoritative from data). When the value has no refs we fall
+  // back to a manual override set by the toggle buttons, defaulting to
+  // 'surface'. This avoids setState-in-effect and keeps external value updates
+  // (e.g. reciprocal adds) authoritative without a sync pass.
+  //
+  // UX note (intentional): if a reciprocal add from another face promotes this
+  // face to 'rooms' and the user subsequently deletes every chip, the toggle
+  // snaps back to 'surface'. A face with zero room references is by definition
+  // a surface (external) face, so the snap matches the data. The user can
+  // re-toggle to Adjacent Room(s) at any time. We deliberately do NOT clear
+  // manualMode on external promotion because the value-driven branch above
+  // takes precedence whenever chips exist.
+  const [manualMode, setManualMode] = useState<FaceMode | null>(null)
   const roomRefs = normaliseRefs(value)
+  const mode: FaceMode = hasRoomRefs(value) ? 'rooms' : (manualMode ?? 'surface')
 
   // Candidate rooms depend on face kind and floor alignment.
   const candidateRooms = useMemo(() => {
@@ -525,6 +541,9 @@ function FaceEditorRow({
   const [nextMode, setNextMode] = useState<FaceMode>(mode)
 
   const handleModeToggle = (newMode: FaceMode) => {
+    // No-op when clicking the already-active mode — avoids destroying chip
+    // data by an accidental re-click.
+    if (newMode === mode) return
     if (newMode === 'surface' && roomRefs.length >= 2) {
       setNextMode(newMode)
       setShowConfirm(true)
@@ -534,11 +553,11 @@ function FaceEditorRow({
   }
 
   const switchMode = (newMode: FaceMode) => {
-    if (newMode === 'surface') {
-      onChangeFace(null)
-    } else {
-      onChangeFace(null)
-    }
+    setManualMode(newMode)
+    // Clear value on either transition: surface→rooms drops any literal,
+    // rooms→surface drops all chip refs. Parent reciprocal cleanup is
+    // handled by onRemoveRoom callbacks as chips are removed.
+    onChangeFace(null)
     setShowConfirm(false)
   }
 

@@ -18,6 +18,18 @@ export interface EntityMap {
   }>
 }
 
+/** Extract a single topic string from the various RoomMqttTopicValue shapes:
+ *  plain string, first element of an array, or `{ topic: ... }` object. */
+function firstTopic(v: unknown): string | undefined {
+  if (typeof v === 'string' && v) return v
+  if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string') return v[0]
+  if (v && typeof v === 'object') {
+    const t = (v as { topic?: unknown }).topic
+    if (typeof t === 'string' && t) return t
+  }
+  return undefined
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function buildEntityMap(config: Record<string, any> | null): EntityMap | null {
   if (!config) return null
@@ -44,12 +56,18 @@ export function buildEntityMap(config: Record<string, any> | null): EntityMap | 
   for (const [roomName, roomConfig] of Object.entries(rooms)) {
     const roomEntities: EntityMap['rooms'][string] = {}
 
-    // temp_sensor: two-step lookup via zone_sensor_map
+    const mqttTopics = (roomConfig.mqtt_topics ?? {}) as Record<string, unknown>
+    const mqttRoomTemp = firstTopic(mqttTopics.room_temp)
+    const mqttOccupancy = firstTopic(mqttTopics.occupancy_sensor)
+
+    // temp_sensor: zone_sensor_map → independent_sensor → mqtt_topics.room_temp → trv_entity
     const sensorKey = zoneSensorMap[roomName]
     if (sensorKey && entities[sensorKey]) {
       roomEntities.temp_sensor = entities[sensorKey]
     } else if (typeof roomConfig.independent_sensor === 'string') {
       roomEntities.temp_sensor = roomConfig.independent_sensor
+    } else if (mqttRoomTemp) {
+      roomEntities.temp_sensor = mqttRoomTemp
     } else {
       // Fall back to trv_entity
       const trv = roomConfig.trv_entity
@@ -68,9 +86,11 @@ export function buildEntityMap(config: Record<string, any> | null): EntityMap | 
       roomEntities.trv_entity = trv
     }
 
-    // occupancy_sensor: direct
+    // occupancy_sensor: top-level first, then mqtt_topics.occupancy_sensor
     if (typeof roomConfig.occupancy_sensor === 'string') {
       roomEntities.occupancy_sensor = roomConfig.occupancy_sensor
+    } else if (mqttOccupancy) {
+      roomEntities.occupancy_sensor = mqttOccupancy
     }
 
     if (Object.keys(roomEntities).length > 0) {

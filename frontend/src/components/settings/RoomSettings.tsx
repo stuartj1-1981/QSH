@@ -28,6 +28,23 @@ function setTopicString(prev: RoomMqttTopicValue | undefined, topic: string): Ro
   return topic
 }
 
+/** Drop keys whose value is an empty string or empty MqttTopicInput; drop the
+ *  whole mqtt_topics object if nothing non-empty remains. Returns a new room. */
+function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
+  if (!room.mqtt_topics) return room
+  const cleaned: Record<string, RoomMqttTopicValue> = {}
+  for (const [k, v] of Object.entries(room.mqtt_topics)) {
+    const s = getTopicString(v)
+    if (s) cleaned[k] = v as RoomMqttTopicValue
+  }
+  if (Object.keys(cleaned).length === 0) {
+    const copy = { ...room }
+    delete copy.mqtt_topics
+    return copy
+  }
+  return { ...room, mqtt_topics: cleaned }
+}
+
 export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
   const [newName, setNewName] = useState('')
@@ -139,7 +156,10 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
   }
 
   const save = async () => {
-    const result = await patch('rooms', editedRooms)
+    const cleaned = Object.fromEntries(
+      Object.entries(editedRooms).map(([n, r]) => [n, stripEmptyMqttTopics(r)])
+    )
+    const result = await patch('rooms', cleaned)
     if (result) onRefetch()
   }
 
@@ -346,6 +366,15 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
             {/* Driver-branched entity/topic fields */}
             {driver === 'mqtt' ? (
               <div className="space-y-3">
+                {!getTopicString(room.mqtt_topics?.room_temp) && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-[var(--amber)]/40 bg-[var(--amber)]/10 px-3 py-2 text-xs text-[var(--amber)]"
+                  >
+                    No Room Temp Topic set — this room will display &quot;--&quot; until a topic is
+                    provided and a publisher sends a numeric value.
+                  </div>
+                )}
                 <TopicField
                   label="Room Temp Topic"
                   value={getTopicString(room.mqtt_topics?.room_temp)}
@@ -353,7 +382,7 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     updateRoom(name, {
                       mqtt_topics: {
                         ...room.mqtt_topics,
-                        room_temp: setTopicString(room.mqtt_topics?.room_temp, v) ?? '',
+                        room_temp: setTopicString(room.mqtt_topics?.room_temp, v),
                       },
                     })
                   }
@@ -366,7 +395,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     updateRoom(name, {
                       mqtt_topics: {
                         ...room.mqtt_topics,
-                        room_temp: room.mqtt_topics?.room_temp ?? '',
                         valve_position: setTopicString(room.mqtt_topics?.valve_position, v),
                       },
                     })
@@ -380,7 +408,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     updateRoom(name, {
                       mqtt_topics: {
                         ...room.mqtt_topics,
-                        room_temp: room.mqtt_topics?.room_temp ?? '',
                         valve_setpoint: v || undefined,
                       },
                     })
@@ -394,7 +421,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     updateRoom(name, {
                       mqtt_topics: {
                         ...room.mqtt_topics,
-                        room_temp: room.mqtt_topics?.room_temp ?? '',
                         trv_setpoint: v || undefined,
                       },
                     })
@@ -408,7 +434,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     updateRoom(name, {
                       mqtt_topics: {
                         ...room.mqtt_topics,
-                        room_temp: room.mqtt_topics?.room_temp ?? '',
                         occupancy_sensor: v || undefined,
                       },
                     })

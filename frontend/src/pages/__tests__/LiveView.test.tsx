@@ -8,6 +8,7 @@ type EngineSpy = {
   setData: ReturnType<typeof vi.fn>
   setDark: ReturnType<typeof vi.fn>
   setEngineering: ReturnType<typeof vi.fn>
+  setHeaderRightMargin: ReturnType<typeof vi.fn>
   resize: ReturnType<typeof vi.fn>
   destroy: ReturnType<typeof vi.fn>
 }
@@ -35,6 +36,7 @@ vi.mock('../../lib/liveViewEngine', () => {
       setData = vi.fn()
       setDark = vi.fn()
       setEngineering = vi.fn()
+      setHeaderRightMargin = vi.fn()
       resize = vi.fn()
       destroy = vi.fn()
       constructor() {
@@ -145,6 +147,39 @@ describe('LiveView', () => {
   it('forwards engineering prop to 2D engine.setEngineering', () => {
     render(<LiveView engineering={true} />)
     expect(lastEngine!.setEngineering).toHaveBeenCalledWith(true)
+  })
+
+  it('reserves a wider header right margin on the 2D engine when the 2D/3D toggle is rendered', () => {
+    mockUseBuildingLayout.mockReturnValue({
+      layout: { rooms: {}, centroid: { x: 0, z: 0 }, buildingWidth: 0, floorCount: 1, log: [] },
+      rooms: {},
+      layoutRooms: {},
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+      hasEnvelopeData: true,
+    })
+    render(<LiveView />)
+    // Last call wins — must be the wide margin, not the default tight one.
+    const calls = lastEngine!.setHeaderRightMargin.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls[calls.length - 1][0]).toBe(130)
+  })
+
+  it('keeps the tight header right margin when no envelope data (toggle absent)', () => {
+    mockUseBuildingLayout.mockReturnValue({
+      layout: null,
+      rooms: null,
+      layoutRooms: null,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+      hasEnvelopeData: false,
+    })
+    render(<LiveView />)
+    const calls = lastEngine!.setHeaderRightMargin.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls[calls.length - 1][0]).toBe(30)
   })
 
   // ──────────────────────────────────────────────────────────
