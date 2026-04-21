@@ -3,9 +3,11 @@ Octopus Energy Direct API Module
 
 Bypasses Home Assistant REST API for heat pump control (flow temperature
 and zone mode), calling the Octopus Energy GraphQL API at
-`api.backend.octopus.energy/v1/graphql/` directly. This prevents the zone
-setpoint reset bug caused by the HA integration bundling zone data into
-mode/flow mutations.
+`api.backend.octopus.energy/v1/graphql/` directly. Uses the direct
+GraphQL endpoint as the primary path to avoid the historical setpoint-reset
+bug in the BottlecapDave HA integration (< v17.1.1, fixed 31 Oct 2025).
+The HA service call is retained as a fallback when the direct call fails;
+this is safe on BottlecapDave v17.1.1 and later.
 
 Note: `obtainKrakenToken` is still fetched from the legacy
 `api.octopus.energy/v1/graphql/` endpoint; the resulting bare JWT is
@@ -16,13 +18,17 @@ Config (options.json):
   octopus_hp_euid:        "00:1e:5e:..."   - Heat pump EUID from HA diagnostics
   octopus_account_number: "A-53DC655F"     - Account number (for zone mode)
   octopus_zone_entity_id: "climate.octo.." - HA entity for reading current mode
+  Minimum BottlecapDave HomeAssistant-OctopusEnergy version for safe fallback:
+    v17.1.1 (released 2025-10-31). Earlier versions re-bundled the setpoint on
+    set_hvac_mode and will clobber the zone target when the fallback fires.
 
 If octopus_api_key is not configured, falls back to HA service calls.
 """
 
 import json
 import logging
-import time
+import socket  # for socket.timeout exception type in _graphql_request retry branch
+import time    # also used for response-elapsed instrumentation in _graphql_request
 import threading
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.request import Request, urlopen
@@ -40,6 +46,15 @@ def _clean_temp(value):
     """
     return float(Decimal(str(float(value))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
+
+# Transport timeout — INSTRUCTION-116 first estimate.
+# Basis: the 19 April 2026 log window shows every failed call exhausting the full
+# 15 s window rather than returning in the 5–15 s band, suggesting the backend
+# does not partially complete in that range when struggling. 5 s + 5 s retry +
+# 5 s HA fallback fits safely inside the 30 s cycle. Review after one week of
+# logged response.elapsed on successes; raise if p95 exceeds 3 s.
+REQUEST_TIMEOUT_SECONDS = 5
+REQUEST_RETRY_ON_TIMEOUT = True  # single intra-cycle retry on socket.timeout only
 
 AUTH_URL = "https://api.octopus.energy/v1/graphql/"          # obtainKrakenToken, refresh
 API_URL  = "https://api.backend.octopus.energy/v1/graphql/"  # HP mutations
@@ -108,7 +123,19 @@ def set_zone_setpoint(temp):
 
 
 def _graphql_request(query, variables=None, token=None, url=None):
-    """Execute a GraphQL request. Returns parsed JSON or None on failure."""
+    """Execute a GraphQL request. Returns parsed JSON or None on failure.
+
+    Transport hardening (INSTRUCTION-116):
+      - urlopen timeout reduced from 15 s to REQUEST_TIMEOUT_SECONDS (5 s, first
+        estimate — see constant definition for review schedule). A 30 s
+        HardwareController cycle cannot absorb a single 15 s timeout plus
+        a subsequent HA fallback call without risking cycle overrun.
+      - One intra-cycle retry on socket.timeout (only). HTTP 5xx, URLError, and
+        other failures fall through to the caller on first occurrence so the
+        existing _consecutive_failures backoff still converges.
+      - Successful responses log elapsed wall time at INFO so we can calibrate
+        REQUEST_TIMEOUT_SECONDS after one week of production data.
+    """
     payload = {"query": query}
     if variables:
         payload["variables"] = variables
@@ -120,29 +147,52 @@ def _graphql_request(query, variables=None, token=None, url=None):
     data = json.dumps(payload).encode("utf-8")
     req = Request(url or API_URL, data=data, headers=headers, method="POST")
 
-    try:
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            if body.get("errors"):
-                for err in body["errors"]:
-                    code = err.get("extensions", {}).get("errorCode", "???")
-                    msg = err.get("message", "")
-                    logging.warning(f"Octopus API error [{code}]: {msg}")
-            return body
-    except HTTPError as e:
-        err_body = ""
+    attempts = 2 if REQUEST_RETRY_ON_TIMEOUT else 1
+    for attempt in range(1, attempts + 1):
         try:
-            err_body = e.read().decode("utf-8")[:200]
-        except Exception:
-            pass
-        logging.error(f"Octopus API HTTP {e.code}: {err_body}")
-        return None
-    except URLError as e:
-        logging.error(f"Octopus API connection error: {e.reason}")
-        return None
-    except Exception as e:
-        logging.error(f"Octopus API unexpected error: {e}")
-        return None
+            t0 = time.monotonic()
+            with urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                elapsed = time.monotonic() - t0
+                logging.info(f"Octopus API OK in {elapsed:.2f}s (attempt {attempt}/{attempts})")
+                if body.get("errors"):
+                    for err in body["errors"]:
+                        code = err.get("extensions", {}).get("errorCode", "???")
+                        msg = err.get("message", "")
+                        logging.warning(f"Octopus API error [{code}]: {msg}")
+                return body
+        except HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8")[:200]
+            except Exception:
+                # Best-effort error-body read; the HTTP status we already have is sufficient.
+                pass
+            logging.error(f"Octopus API HTTP {e.code}: {err_body}")
+            return None
+        except socket.timeout:
+            if attempt < attempts:
+                logging.warning(
+                    f"Octopus API timeout ({REQUEST_TIMEOUT_SECONDS}s) on attempt {attempt}, retrying once"
+                )
+                continue
+            logging.error(f"Octopus API: timed out after {attempts} attempt(s)")
+            return None
+        except URLError as e:
+            # urllib wraps socket.timeout inside URLError when TLS is involved; handle both.
+            if isinstance(e.reason, socket.timeout) and attempt < attempts:
+                logging.warning(
+                    f"Octopus API TLS-wrapped timeout on attempt {attempt}, retrying once"
+                )
+                continue
+            logging.error(f"Octopus API connection error: {e.reason}")
+            return None
+        except Exception as e:
+            # Catches Exception subclasses only; SystemExit/KeyboardInterrupt propagate.
+            # (T-14 convention — explicit annotation on broad catch in network-edge code.)
+            logging.error(f"Octopus API unexpected error: {e}")
+            return None
+    return None  # pragma: no cover — unreachable; every loop body path returns. Retained so the function signature remains stable under future refactor and to keep static analysers quiet.
 
 
 def _ensure_token():
@@ -339,6 +389,20 @@ def set_zone_mode(desired_mode, skip_if_current=True):
         transaction_id string on success via direct API,
         'ha_fallback' if fell back to HA service call,
         None on failure
+
+    Compound-failure policy (INSTRUCTION-116):
+      When direct + retry + fallback all fail within a single call:
+        1. _set_zone_mode_graphql returns None and increments
+           _consecutive_failures once (existing behaviour).
+        2. _set_zone_mode_ha is called; if it also returns None, set_zone_mode
+           returns None. _consecutive_failures is NOT incremented a second
+           time — the fallback does not recurse through _graphql_request.
+        3. HardwareController observes applied_mode was not set to optimal_mode.
+        4. On subsequent cycles, observed_mode != optimal_mode increments
+           ctx.readback_mismatch_count; after READBACK_MISMATCH_ALARM_THRESHOLD
+           cycles the frontend alarm trips.
+        5. The Octopus backoff gates subsequent direct attempts for the
+           duration determined by _consecutive_failures.
     """
     global _consecutive_failures
 
@@ -349,16 +413,17 @@ def set_zone_mode(desired_mode, skip_if_current=True):
             logging.debug(f"HP mode already '{desired_mode}' - skipping API call")
             return "skipped"
 
-    # Direct GraphQL only - NO HA fallback (HA service resets setpoint)
+    # Primary path: direct GraphQL (avoids the historical BottlecapDave setpoint-reset bug).
+    # Fallback path: HA service call — safe on BottlecapDave v17.1.1+ (bug fixed 31 Oct 2025).
     if _initialised and _account_number:
         txid = _set_zone_mode_graphql(desired_mode)
         if txid:
             return txid
-        logging.error("Octopus API: zone mode change failed (no HA fallback - would reset setpoint)")
-        return None
+        logging.warning("Octopus API direct mutation failed — falling back to HA service call")
+        return _set_zone_mode_ha(desired_mode)
 
-    logging.error("Octopus API: not initialised, cannot change zone mode (no HA fallback)")
-    return None
+    logging.warning("Octopus API not initialised — using HA service fallback for zone mode")
+    return _set_zone_mode_ha(desired_mode)
 
 
 def _set_zone_mode_graphql(desired_mode):
@@ -456,8 +521,11 @@ def _set_zone_mode_ha(desired_mode):
     """
     Fallback: set zone mode via HA service call.
 
-    Note: This may trigger the setpoint reset bug in older versions
-    of the BottlecapDave integration (< v17.1.1).
+    Safe on BottlecapDave HomeAssistant-OctopusEnergy v17.1.1 or later
+    (bug "changing hvac mode incorrectly set temperature" fixed 31-Oct-2025).
+    If the install is on an earlier version, set_hvac_mode may re-bundle and
+    clobber the zone target temperature — upgrade is required before relying
+    on this path.
     """
     try:
         from .integration import set_ha_service

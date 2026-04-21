@@ -15,6 +15,9 @@ import logging
 from .integration import fetch_ha_entity, set_ha_service
 
 
+READBACK_MISMATCH_ALARM_THRESHOLD = 5  # consecutive cycles where observed != optimal before operator alarm
+
+
 # ========================================================================
 # FLOW TEMPERATURE CONTROL (per control method)
 # ========================================================================
@@ -167,6 +170,7 @@ def apply_hardware_control(
     dfan_control,
     trv_offset_tracker=None,
     hp_power_kw=None,
+    prev_mismatch_count=0,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -179,12 +183,21 @@ def apply_hardware_control(
       trvs_only    -- TRV control only, no heat source control
 
     Returns:
-        The mode actually applied to the HP. If debounce prevented a mode
-        change, returns prev_mode (what the HP is still doing).
+        (applied_mode, new_mismatch_count)
+          applied_mode -- the mode actually applied to the HP. If debounce
+            prevented a mode change, this is prev_mode (what the HP is still
+            doing). If a readback is available, this is the observed mode
+            derived from hp_power_kw.
+          new_mismatch_count -- the consecutive-cycle readback mismatch count
+            after this cycle. Increments when observed_mode != optimal_mode
+            regardless of should_update_mode (alarm semantics are about
+            intent-vs-reality, not debouncer state). Resets to zero when they
+            match. Unchanged when readback unavailable (hp_power_kw is None)
+            or optimal_mode is None.
     """
     if not dfan_control:
         logging.debug("SHADOW MODE: No hardware control")
-        return prev_mode
+        return prev_mode, prev_mismatch_count
 
     should_update_mode = debouncer.should_update_mode(optimal_mode, prev_mode, current_time, urgent=urgent)
 
@@ -272,24 +285,40 @@ def apply_hardware_control(
     if not should_update_mode and not should_update_flow and not should_update_trvs:
         logging.debug("Hardware update skipped (debounced)")
 
-    # Readback: derive applied_mode from HP power draw, not from command
-    if hp_power_kw is not None:
+    # Readback: derive applied_mode from HP power draw, not from command.
+    # Mismatch counter is degated from should_update_mode (see INSTRUCTION-116 D1):
+    # a 600s debouncer window would otherwise make the alarm unreachable during
+    # a real outage. Log severity still uses should_update_mode to distinguish
+    # "we just tried and it didn't stick" (WARNING) from "quiescent mismatch"
+    # (INFO), and ERROR is raised on threshold crossing.
+    new_mismatch_count = prev_mismatch_count
+    if hp_power_kw is not None and optimal_mode is not None:
         observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
         if observed_mode != optimal_mode:
-            if should_update_mode:
+            new_mismatch_count = prev_mismatch_count + 1
+            if new_mismatch_count >= READBACK_MISMATCH_ALARM_THRESHOLD:
+                logging.error(
+                    "Mode readback mismatch persisted for %d cycles "
+                    "(threshold %d) — HP not responding to commanded '%s'. "
+                    "Check Octopus API status and HP connectivity.",
+                    new_mismatch_count, READBACK_MISMATCH_ALARM_THRESHOLD, optimal_mode,
+                )
+            elif should_update_mode:
                 logging.warning(
-                    "Mode readback mismatch: commanded %s but HP power=%.2fkW (observed %s)",
-                    optimal_mode, hp_power_kw, observed_mode,
+                    "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
+                    new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
                 )
             else:
                 logging.info(
-                    "Mode readback: optimal=%s but HP power=%.2fkW (observed %s) — "
+                    "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
                     "will trigger re-command next cycle",
-                    optimal_mode, hp_power_kw, observed_mode,
+                    new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
                 )
+        else:
+            new_mismatch_count = 0
         applied_mode = observed_mode
 
-    return applied_mode
+    return applied_mode, new_mismatch_count
 
 
 def set_heat_source_mode(config, mode, dfan_control=True):

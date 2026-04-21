@@ -7,7 +7,11 @@ interface HardwareTelemetryProps {
   deltaT?: number
   flowRate?: number
   powerKw?: number
-  cop?: number
+  // INSTRUCTION-120C: `number | null` — null means the backend has gated
+  // the value (HP off or performance in sensor-loss fallback). `0` is a
+  // legitimate value to render (e.g. genuine zero-ratio readings) and
+  // must NOT be suppressed — only `null`/`undefined` map to '—'.
+  cop?: number | null
   outdoorTemp?: number
   /** Set of sensor keys that are configured. When provided, only configured sensors are shown. */
   configured?: Set<string>
@@ -48,7 +52,7 @@ export const HardwareTelemetry = memo(function HardwareTelemetry({
   if (show('cop'))
     items.push(
       <TelemetryItem key="cop" icon={<Zap size={16} className="text-[var(--green)]" />}
-        label="COP" value={cop != null && cop > 0 ? cop.toFixed(1) : '—'} />
+        label="COP" value={cop != null ? cop.toFixed(1) : '—'} />
     )
   if (show('outdoor_temp'))
     items.push(

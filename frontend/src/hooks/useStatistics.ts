@@ -45,15 +45,28 @@ export function useStatistics(
 
   const available = measData?.available ?? true
 
+  // INSTRUCTION-117E Task 6c: query source-portable metric names. Pull
+  // the legacy HP fields alongside so historical HP data still feeds the
+  // KPI panel on installs that have been running since before 117E
+  // shipped — the reader below prefers the new field and falls back to
+  // the legacy one when absent.
   const meanQuery = useHistorianQuery(
     available ? 'qsh_system' : '',
-    available ? ['cop', 'hp_power_kw', 'tariff_rate'] : [],
+    available
+      ? [
+          'active_source_performance_value',
+          'active_source_input_kw',
+          'cop',
+          'hp_power_kw',
+          'tariff_rate',
+        ]
+      : [],
     { timeFrom, timeTo, interval, aggregation: 'mean' },
   )
 
   const maxQuery = useHistorianQuery(
     available ? 'qsh_system' : '',
-    available ? ['hp_power_kw'] : [],
+    available ? ['active_source_input_kw', 'hp_power_kw'] : [],
     { timeFrom, timeTo, interval, aggregation: 'max' },
   )
 
@@ -74,7 +87,7 @@ export function useStatistics(
     let copCount = 0
 
     for (const p of points) {
-      const power = p.hp_power_kw
+      const power = p.active_source_input_kw ?? p.hp_power_kw
       if (typeof power === 'number' && power !== null) {
         totalEnergy += power * hours
         const tariff = p.tariff_rate
@@ -82,9 +95,11 @@ export function useStatistics(
           totalCost += power * tariff * hours * 100
         }
       }
-      const cop = p.cop
-      if (typeof cop === 'number' && cop !== null) {
-        copSum += cop
+      // Performance metric: prefer source-portable value; fall back to
+      // legacy `cop` for HP-only historical data.
+      const perf = p.active_source_performance_value ?? p.cop
+      if (typeof perf === 'number' && perf !== null) {
+        copSum += perf
         copCount++
       }
     }
@@ -93,7 +108,7 @@ export function useStatistics(
     let peakPower: number | null = null
     if (maxPoints && maxPoints.length > 0) {
       for (const p of maxPoints) {
-        const v = p.hp_power_kw
+        const v = p.active_source_input_kw ?? p.hp_power_kw
         if (typeof v === 'number' && v !== null) {
           if (peakPower === null || v > peakPower) peakPower = v
         }

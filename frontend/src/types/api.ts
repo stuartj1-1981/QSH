@@ -12,7 +12,28 @@ export interface RoomState {
 
 export interface HpState {
   power_kw: number
-  cop: number
+  // INSTRUCTION-120B: null when HP is off or performance is in sensor-loss
+  // fallback. Render sites must treat null as '—'. Matches the backend
+  // `_resolve_snapshot_hp_cop` gate — never a positive fallback baseline.
+  cop: number | null
+  flow_temp: number
+  return_temp: number
+  delta_t: number
+  flow_rate: number
+}
+
+// INSTRUCTION-117E Task 3a: flat HeatSourceState with closed Literal `type`
+// enum. `performance.source` carries provenance ("live" = measured ratio
+// this cycle or within the 5-cycle HP hold window; "config" = fallback to
+// caps.performance_baseline). Rendering label ("COP" vs "η") is derived at
+// the UI layer from `type` alone — 1:1 derivable, so a `performance.kind`
+// discriminator is information redundancy per parent 117 V5.
+export interface HeatSourceState {
+  type: 'heat_pump' | 'gas_boiler' | 'lpg_boiler' | 'oil_boiler'
+  input_power_kw: number
+  thermal_output_kw: number | null
+  thermal_output_source: 'measured' | 'computed' | 'unknown'
+  performance: { value: number; source: 'live' | 'config' }
   flow_temp: number
   return_temp: number
   delta_t: number
@@ -92,13 +113,19 @@ export interface StatusResponse {
   applied_flow: number
   optimal_mode: string
   applied_mode: string
+  readback_mismatch_count?: number
+  readback_mismatch_threshold?: number
+  last_readback_mismatch_alarm_time?: number
   total_demand: number
   outdoor_temp: number
   recovery_time_hours: number
   capacity_pct: number
   hp_capacity_kw: number
   min_load_pct: number
-  hp: HpState
+  heat_source: HeatSourceState
+  // INSTRUCTION-117E Task 3b: legacy shim; populated only when
+  // heat_source.type === 'heat_pump'.
+  hp: HpState | null
   rooms_total: number
   rooms_below_target: number
   comfort_pct: number
@@ -135,6 +162,9 @@ export interface CycleMessage {
     applied_flow: number
     optimal_mode: string
     applied_mode: string
+    readback_mismatch_count?: number
+    readback_mismatch_threshold?: number
+    last_readback_mismatch_alarm_time?: number
     total_demand: number
     outdoor_temp: number
     recovery_time_hours: number
@@ -142,16 +172,11 @@ export interface CycleMessage {
     capacity_pct: number
     hp_capacity_kw: number
     min_load_pct: number
-    hp_power_kw: number
-    hp_cop: number
+    heat_source: HeatSourceState
     comfort_pct: number
   }
-  hp?: {
-    flow_temp: number
-    return_temp: number
-    delta_t: number
-    flow_rate: number
-  }
+  // INSTRUCTION-117E Task 3b: legacy shim; null on non-HP installs.
+  hp?: HpState | null
   rooms?: Record<string, RoomState>
   energy?: {
     current_rate: number

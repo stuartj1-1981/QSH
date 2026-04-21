@@ -17,6 +17,7 @@ import {
   useHistorianTags,
   useHistorianFields,
 } from '../hooks/useHistorian'
+import { useStatus } from '../hooks/useStatus'
 
 const LINE_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b']
 
@@ -73,7 +74,30 @@ export function Historian() {
   const [customTo, setCustomTo] = useState(() => toLocalDatetime(new Date()))
 
   const { rooms } = useHistorianTags(measurement)
-  const { fields: availableFields, loading: fieldsLoading } = useHistorianFields(measurement)
+  const { fields: rawFields, loading: fieldsLoading } = useHistorianFields(measurement)
+
+  // INSTRUCTION-117E Task 5d: gate legacy HP-only metrics out of the
+  // selector list on non-HP installs. On HP installs the legacy
+  // `hp_power_kw` entry gets a "(legacy)" suffix to signal future removal.
+  const { data: statusData } = useStatus()
+  const sourceType = statusData?.heat_source?.type
+  const availableFields = useMemo(() => {
+    if (measurement !== 'qsh_system') return rawFields
+    return rawFields
+      .filter((f) => sourceType === 'heat_pump' || (f !== 'hp_power_kw' && f !== 'cop'))
+      .map((f) =>
+        sourceType === 'heat_pump' && (f === 'hp_power_kw' || f === 'cop')
+          ? `${f} (legacy)`
+          : f,
+      )
+  }, [rawFields, measurement, sourceType])
+
+  // Field toggles operate on the display label; strip "(legacy)" before
+  // sending to the query API.
+  const canonicalField = useCallback(
+    (label: string): string => label.replace(/ \(legacy\)$/, ''),
+    [],
+  )
 
   const { data: queryData, loading: queryLoading, error: queryError, refetch } = useHistorianQuery(
     measurement,
@@ -87,13 +111,14 @@ export function Historian() {
     setRoom(undefined)
   }, [])
 
-  const handleFieldToggle = useCallback((field: string) => {
+  const handleFieldToggle = useCallback((label: string) => {
+    const field = canonicalField(label)
     setSelectedFields((prev) => {
       if (prev.includes(field)) return prev.filter((f) => f !== field)
       if (prev.length >= 4) return prev
       return [...prev, field]
     })
-  }, [])
+  }, [canonicalField])
 
   const handlePreset = useCallback((preset: typeof TIME_PRESETS[number]) => {
     setUseCustomRange(false)
@@ -291,20 +316,23 @@ export function Historian() {
             <p className="text-xs text-[var(--text-muted)]">Loading fields...</p>
           ) : (
             <div className="flex flex-wrap gap-1.5">
-              {availableFields.map((f) => (
-                <button
-                  key={f}
-                  onClick={() => handleFieldToggle(f)}
-                  className={cn(
-                    'px-2.5 py-1 rounded-md text-xs font-medium transition-colors border',
-                    selectedFields.includes(f)
-                      ? 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]'
-                      : 'border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)]/30',
-                  )}
-                >
-                  {f}
-                </button>
-              ))}
+              {availableFields.map((label) => {
+                const f = canonicalField(label)
+                return (
+                  <button
+                    key={label}
+                    onClick={() => handleFieldToggle(label)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-xs font-medium transition-colors border',
+                      selectedFields.includes(f)
+                        ? 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]'
+                        : 'border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)]/30',
+                    )}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

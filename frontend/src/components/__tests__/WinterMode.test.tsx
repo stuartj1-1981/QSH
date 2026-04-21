@@ -12,8 +12,17 @@ describe('StatusBanner winter colour', () => {
         appliedFlow={35}
         appliedMode="heat"
         outdoorTemp={4}
-        hpPowerKw={2.0}
-        hpCop={3.5}
+        heatSource={{
+          type: 'heat_pump',
+          input_power_kw: 2.0,
+          thermal_output_kw: 7.0,
+          thermal_output_source: 'measured',
+          performance: { value: 3.5, source: 'live' },
+          flow_temp: 35,
+          return_temp: 30,
+          delta_t: 5,
+          flow_rate: 0.3,
+        }}
       />
     )
     const dot = container.querySelector('.bg-\\[var\\(--blue\\)\\]')
@@ -29,8 +38,17 @@ describe('StatusBanner winter colour', () => {
         appliedFlow={33}
         appliedMode="heat"
         outdoorTemp={4}
-        hpPowerKw={1.5}
-        hpCop={4.0}
+        heatSource={{
+          type: 'heat_pump',
+          input_power_kw: 1.5,
+          thermal_output_kw: 6.0,
+          thermal_output_source: 'measured',
+          performance: { value: 4.0, source: 'live' },
+          flow_temp: 33,
+          return_temp: 29,
+          delta_t: 4,
+          flow_rate: 0.28,
+        }}
       />
     )
     const dot = container.querySelector('.bg-\\[var\\(--blue\\)\\]')

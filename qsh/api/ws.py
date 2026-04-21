@@ -15,7 +15,7 @@ from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .state import shared_state
+from .state import build_heat_source_payload, build_hp_shim, shared_state
 
 logger = logging.getLogger(__name__)
 
@@ -110,20 +110,14 @@ def _format_snapshot(snap) -> dict:
             "applied_mode": snap.applied_mode,
             "total_demand": round(snap.total_demand, 2),
             "outdoor_temp": round(snap.outdoor_temp, 1),
-            "hp_power_kw": snap.hp_power_kw,
-            "hp_cop": round(snap.hp_cop, 1),
+            "heat_source": build_heat_source_payload(snap),
             "comfort_pct": round((1 - rooms_below / max(len(snap.rooms), 1)) * 100, 0),
             "recovery_time_hours": snap.recovery_time_hours,
             "capacity_pct": snap.capacity_pct,
             "hp_capacity_kw": snap.hp_capacity_kw,
             "min_load_pct": snap.min_load_pct,
         },
-        "hp": {
-            "flow_temp": round(snap.hp_flow_temp, 1),
-            "return_temp": round(snap.hp_return_temp, 1),
-            "delta_t": round(snap.delta_t, 1),
-            "flow_rate": round(snap.flow_rate, 2),
-        },
+        "hp": build_hp_shim(snap),
         "rooms": snap.rooms,
         "energy": {
             "current_rate": snap.current_rate,

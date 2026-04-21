@@ -65,14 +65,21 @@ export function useLiveViewData(): {
     const hasCylinder = hwPlan !== 'C' && hwPlan !== 'Combi'
     const dhw: LiveViewDHW = { hwPlan, hasCylinder }
 
+    // INSTRUCTION-117E Task 6b: read source-portable power + performance
+    // from the WS status.heat_source block. `cop` is populated only on HP
+    // installs; on boilers the performance value is η and semantically
+    // not a COP — the 3D view's legacy field is left at 0 so nothing
+    // downstream renders a misleading COP figure.
+    const hs = live.status?.heat_source
+    const isHp = hs?.type === 'heat_pump'
     return {
       rooms,
       hp: {
-        power_kw: live.status?.hp_power_kw ?? 0,
+        power_kw: hs?.input_power_kw ?? 0,
         capacity_kw: live.status?.hp_capacity_kw ?? 8.0,
-        cop: live.status?.hp_cop ?? 0,
-        flow_temp: live.hp?.flow_temp ?? 0,
-        return_temp: live.hp?.return_temp ?? 0,
+        cop: isHp ? hs?.performance.value ?? 0 : 0,
+        flow_temp: hs?.flow_temp ?? 0,
+        return_temp: hs?.return_temp ?? 0,
         outdoor_temp: live.status?.outdoor_temp ?? 0,
       },
       state,
