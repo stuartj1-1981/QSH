@@ -18,9 +18,16 @@ logger = logging.getLogger(__name__)
 # 24h at 30s cycles = 2880 entries per metric
 DEFAULT_MAXLEN = 2880
 
-# System-level metrics extracted from CycleSnapshot
+# System-level metrics extracted from CycleSnapshot.
+# INSTRUCTION-117E Task 2a: add source-aware fields. Legacy `hp_power_kw`
+# and `hp_cop` remain for HP installs (type-gated at the historian writer —
+# boiler installs do not emit them). `active_source_input_kw` is the new
+# source-portable canonical.
 SYSTEM_METRICS = [
     "outdoor_temp",
+    "active_source_input_kw",
+    "active_source_thermal_output_kw",
+    "active_source_performance_value",
     "hp_power_kw",
     "hp_cop",
     "hp_flow_temp",
@@ -35,6 +42,9 @@ ROOM_METRICS = ["temp", "target", "valve"]
 # Mapping from metric name to InfluxDB measurement + field
 _INFLUX_METRIC_MAP: Dict[str, tuple] = {
     "outdoor_temp": ("qsh_system", "outdoor_temp"),
+    "active_source_input_kw": ("qsh_system", "active_source_input_kw"),
+    "active_source_thermal_output_kw": ("qsh_system", "active_source_thermal_output_kw"),
+    "active_source_performance_value": ("qsh_system", "active_source_performance_value"),
     "hp_power_kw": ("qsh_system", "hp_power_kw"),
     "hp_cop": ("qsh_system", "cop"),
     "hp_flow_temp": ("qsh_system", "flow_temp"),
@@ -82,10 +92,16 @@ class TrendBuffer:
     def append(self, snapshot: Any) -> None:
         """Extract metrics from a CycleSnapshot and append to buffers."""
         ts = snapshot.timestamp
+        is_hp = getattr(snapshot, "active_source_type", "heat_pump") == "heat_pump"
         with self._lock:
             # System metrics
             for metric in SYSTEM_METRICS:
-                val = getattr(snapshot, metric, None)
+                # INSTRUCTION-117E Task 2b: hp_power_kw / hp_cop are
+                # type-gated — HP-only. Skip on boiler installs so the ring
+                # buffer doesn't accumulate meaningless zero points.
+                if metric in ("hp_power_kw", "hp_cop") and not is_hp:
+                    continue
+                val = _resolve_metric_value(snapshot, metric)
                 if val is not None:
                     self._get_system_deque(metric).append({"t": ts, "v": val})
 
@@ -164,6 +180,9 @@ class TrendBuffer:
         """Query system metrics from InfluxDB and populate buffers."""
         fields = [
             "outdoor_temp",
+            "active_source_input_kw",
+            "active_source_thermal_output_kw",
+            "active_source_performance_value",
             "hp_power_kw",
             "cop AS hp_cop",
             "flow_temp AS hp_flow_temp",
@@ -189,6 +208,9 @@ class TrendBuffer:
 
                 _map = {
                     "outdoor_temp": "outdoor_temp",
+                    "active_source_input_kw": "active_source_input_kw",
+                    "active_source_thermal_output_kw": "active_source_thermal_output_kw",
+                    "active_source_performance_value": "active_source_performance_value",
                     "hp_power_kw": "hp_power_kw",
                     "hp_cop": "hp_cop",
                     "hp_flow_temp": "hp_flow_temp",
@@ -234,6 +256,23 @@ class TrendBuffer:
                             self._get_room_deque(room, metric_name).append(
                                 {"t": ts, "v": float(val)}
                             )
+
+
+def _resolve_metric_value(snapshot: Any, metric: str) -> Optional[float]:
+    """Resolve a SYSTEM_METRICS value from a CycleSnapshot.
+
+    Source-aware metrics (INSTRUCTION-117E Task 2a) are derived from the
+    source-aware snapshot fields; the legacy metrics continue to read their
+    flat snapshot attribute directly.
+    """
+    if metric == "active_source_input_kw":
+        return getattr(snapshot, "active_source_input_power_kw", None)
+    if metric == "active_source_thermal_output_kw":
+        return getattr(snapshot, "active_source_thermal_output_kw", None)
+    if metric == "active_source_performance_value":
+        perf = getattr(snapshot, "active_source_performance", None)
+        return perf.value if perf is not None else None
+    return getattr(snapshot, metric, None)
 
 
 def _parse_influx_time(time_str: Optional[str]) -> Optional[float]:

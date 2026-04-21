@@ -81,7 +81,10 @@ export function Statistics() {
   const costRateData = useMemo(() => {
     if (!trendData.length) return []
     return trendData.map((p) => {
-      const power = p.hp_power_kw
+      // INSTRUCTION-117E Task 5c: read source-portable input power. Fall
+      // back to legacy `hp_power_kw` so historical HP data still charts on
+      // the cost-rate overlay.
+      const power = p.active_source_input_kw ?? p.hp_power_kw
       const tariff = p.tariff_rate
       const cost_rate =
         typeof power === 'number' && power !== null &&
@@ -262,7 +265,7 @@ export function Statistics() {
                 labelFormatter={(label) => new Date(Number(label) * 1000).toLocaleString()}
                 formatter={(value) => [typeof value === 'number' ? value.toFixed(2) : String(value), 'kW']}
               />
-              <Line type="monotone" dataKey="hp_power_kw" stroke="#ef4444" strokeWidth={1.5} dot={false} connectNulls />
+              <Line type="monotone" dataKey="active_source_input_kw" stroke="#ef4444" strokeWidth={1.5} dot={false} connectNulls />
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>

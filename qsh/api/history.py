@@ -29,7 +29,10 @@ class HistoryEntry:
     optimal_mode: str = ""
     outdoor_temp: float = 0.0
     hp_power_kw: float = 0.0
-    hp_cop: float = 0.0
+    # INSTRUCTION-120B: None (→ JSON null) when HP off or performance in
+    # sensor-loss fallback — carries the gated `snap.hp_cop` value
+    # unchanged.
+    hp_cop: Optional[float] = None
     hp_flow_temp: float = 0.0
     hp_return_temp: float = 0.0
     delta_t: float = 0.0

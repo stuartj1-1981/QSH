@@ -6,7 +6,7 @@ Pure data containers (SensorData, TrvOffsetTracker) remain in sensors.py.
 
 import logging
 import time
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from .integration import fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
@@ -501,6 +501,43 @@ def fetch_energy_data(config: Dict) -> Dict[str, float]:
             result["has_battery"] = False
 
     return result
+
+
+def fetch_source_raw_values(config: Dict) -> Dict[str, Any]:
+    """Fetch raw source-power sensor values for the SourceResolver.
+
+    INSTRUCTION-117A Task 4. Returns a dict with the six optional slots
+    consumed by `qsh.pipeline.source_resolver.SourceResolver.resolve()`:
+      * hp_energy_rate    — HP electrical input (kW) — existing HP slot
+      * hp_thermal_output — HP heat output (kW) — new optional slot
+      * hp_cop            — HP pre-computed COP — existing HP slot
+      * boiler_power_input   — boiler fuel-input (kW) — new optional slot
+      * boiler_thermal_output — boiler heat output (kW) — new optional slot
+
+    Contract (NEW-H1): values may be any HA-native type (str, "unknown",
+    "unavailable", None, float, int). The fetcher is a thin passthrough;
+    `SourceResolver` handles coercion via `safe_float`. No entity staleness
+    handling or unit auto-detection here — those belong to
+    `fetch_heat_source_status()` for the HP-specific legacy pipeline.
+    """
+    from typing import Any as _Any  # local to keep module imports tidy
+
+    entities = config.get("entities", {}) or {}
+    slot_map = {
+        "hp_energy_rate": "hp_energy_rate",
+        "hp_thermal_output": "hp_thermal_output",
+        "hp_cop": "hp_cop",
+        "boiler_power_input": "boiler_power_input",
+        "boiler_thermal_output": "boiler_thermal_output",
+    }
+    out: Dict[str, _Any] = {}
+    for slot, key in slot_map.items():
+        entity_id = entities.get(key)
+        if not entity_id:
+            out[slot] = None
+            continue
+        out[slot] = fetch_ha_entity(entity_id, default=None)
+    return out
 
 
 def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:

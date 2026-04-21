@@ -47,14 +47,23 @@ export function Engineering() {
         cascadeActive={eng?.cascade_active}
       />
 
-      {/* Hardware Telemetry */}
+      {/* Hardware Telemetry — INSTRUCTION-117E: source-aware. Pull flow /
+          return / delta_t / flow_rate / power from the WS status.heat_source
+          block. INSTRUCTION-120C: COP comes from the legacy `hp` shim
+          (live.hp.cop) because that is the field gated by 120B's
+          `_resolve_snapshot_hp_cop` — null when HP off or in sensor-loss
+          fallback. Reading `heat_source.performance.value` directly would
+          bypass the gate and leak the 2.5 fallback baseline (Bug C). On
+          non-HP installs `live.hp` is null so `hp?.cop` is undefined and
+          HardwareTelemetry renders '—'. Note `live.hp` sits at the outer
+          CycleMessage level, not nested under `live.status`. */}
       <HardwareTelemetry
-        flowTemp={live?.hp?.flow_temp}
-        returnTemp={live?.hp?.return_temp}
-        deltaT={live?.hp?.delta_t}
-        flowRate={live?.hp?.flow_rate}
-        powerKw={status?.hp_power_kw}
-        cop={status?.hp_cop}
+        flowTemp={status?.heat_source?.flow_temp}
+        returnTemp={status?.heat_source?.return_temp}
+        deltaT={status?.heat_source?.delta_t}
+        flowRate={status?.heat_source?.flow_rate}
+        powerKw={status?.heat_source?.input_power_kw}
+        cop={live?.hp?.cop}
         outdoorTemp={status?.outdoor_temp}
         configured={configuredSensors}
       />

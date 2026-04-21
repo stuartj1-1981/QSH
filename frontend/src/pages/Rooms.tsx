@@ -24,6 +24,8 @@ export function Rooms({ engineering }: RoomsProps) {
 
   const rooms = live?.rooms ?? initial?.rooms ?? {}
   const boostRooms = live?.boost?.rooms ?? {}
+  const comfortTempActive =
+    live?.status?.comfort_temp_active ?? live?.status?.comfort_temp ?? null
 
   return (
     <div className="max-w-5xl">
@@ -39,6 +41,7 @@ export function Rooms({ engineering }: RoomsProps) {
             onClick={() => setSelectedRoom(name)}
             entityIds={entityMap?.rooms[name]}
             engineering={engineering}
+            comfortTempActive={comfortTempActive}
           />
         ))}
       </div>

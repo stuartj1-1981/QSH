@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
-import type { RoomState, DriverStatus } from '../types/api'
+import type { RoomState, DriverStatus, HeatSourceState } from '../types/api'
 import { EntityValue } from './EntityValue'
 
 const PAUSE_STRATEGIES = [
@@ -15,8 +15,10 @@ interface StatusBannerProps {
   appliedFlow: number
   appliedMode: string
   outdoorTemp: number
-  hpPowerKw: number
-  hpCop: number
+  // INSTRUCTION-117E Task 4: source-aware power display. The banner now
+  // takes the whole HeatSourceState and branches on `type` for the icon,
+  // performance label, and thermal-output prefix.
+  heatSource: HeatSourceState
   optimalMode?: string
   boostActive?: boolean
   boostRoomCount?: number
@@ -28,6 +30,9 @@ interface StatusBannerProps {
   }
   engineering?: boolean
   driverStatus?: DriverStatus
+  readbackMismatchCount?: number
+  readbackMismatchThreshold?: number
+  lastReadbackMismatchAlarmTime?: number
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -36,8 +41,7 @@ export const StatusBanner = memo(function StatusBanner({
   appliedFlow,
   appliedMode,
   outdoorTemp,
-  hpPowerKw,
-  hpCop,
+  heatSource,
   optimalMode,
   boostActive,
   boostRoomCount,
@@ -45,6 +49,9 @@ export const StatusBanner = memo(function StatusBanner({
   entityMap,
   engineering,
   driverStatus,
+  readbackMismatchCount = 0,
+  readbackMismatchThreshold = 5,
+  lastReadbackMismatchAlarmTime = 0,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -53,6 +60,38 @@ export const StatusBanner = memo(function StatusBanner({
   const fallbackRooms = rooms
     ? Object.entries(rooms).filter(([, r]) => r.occupancy_source?.includes('unavailable'))
     : []
+
+  // Task 4a: icon branches on source type.
+  const isHeatPump = heatSource.type === 'heat_pump'
+  const SourceIcon = isHeatPump ? Zap : Flame
+  const sourceIconClass = isHeatPump ? 'text-[var(--amber)]' : 'text-orange-500'
+
+  // Task 4b: Input · Output thermal-output prefix. Computed output renders
+  // with a "≈ " prefix; measured output has no prefix. Tooltip is
+  // flicker-free on HP (no numeric) and surfaces the η constant on boilers.
+  const inputKw = heatSource.input_power_kw
+  const outputKw = heatSource.thermal_output_kw
+  const isComputed = heatSource.thermal_output_source === 'computed'
+  const outputText = outputKw == null ? '--' : `${outputKw.toFixed(1)} kW`
+  const outputPrefix = isComputed && outputKw != null ? '≈ ' : ''
+  const outputTooltip = isComputed
+    ? isHeatPump
+      ? 'estimated from live COP'
+      : `estimated from η = ${heatSource.performance.value.toFixed(2)}`
+    : undefined
+
+  // Task 4c: performance label derived from source type.
+  const perfLabel = isHeatPump
+    ? `COP ${heatSource.performance.value.toFixed(1)}`
+    : `η ${heatSource.performance.value.toFixed(2)}`
+  // INSTRUCTION-119 Task 6: COP label displays only when performance is
+  // live-sourced on HP installs. `performance.source === "config"` flags the
+  // sensor-loss fallback baseline (2.5 on HP) — a degraded state that must
+  // not render as a live-COP-style label. Boiler installs keep the existing
+  // value > 0 gate (η is always config-sourced per the resolver contract).
+  const showPerfLabel = isHeatPump
+    ? heatSource.performance.source === 'live'
+    : heatSource.performance.value > 0
 
   return (
     <>
@@ -116,13 +155,19 @@ export const StatusBanner = memo(function StatusBanner({
               </EntityValue>
             </div>
             <div className="flex items-center gap-1.5">
-              <Zap size={16} className="text-[var(--amber)]" />
+              <SourceIcon size={16} className={sourceIconClass} />
               <EntityValue entityId={entityMap?.hp_power} engineering={engineering}>
-                <span>{hpPowerKw.toFixed(1)}kW</span>
+                <span>
+                  {inputKw.toFixed(1)} kW in
+                  {' · '}
+                  <span title={outputTooltip}>
+                    {outputPrefix}{outputText} out
+                  </span>
+                </span>
               </EntityValue>
-              {hpCop > 0 && (
+              {showPerfLabel && (
                 <EntityValue entityId={entityMap?.hp_cop} engineering={engineering}>
-                  <span className="text-[var(--text-muted)]">COP {hpCop.toFixed(1)}</span>
+                  <span className="text-[var(--text-muted)]">{perfLabel}</span>
                 </EntityValue>
               )}
             </div>
@@ -139,6 +184,23 @@ export const StatusBanner = memo(function StatusBanner({
             <strong>{fallbackRooms.map(([name]) => name.replace(/_/g, ' ')).join(', ')}</strong>
             {' '}&mdash; using schedule fallback
           </span>
+        </div>
+      )}
+
+      {/* Readback mismatch alarm — HP not responding to commanded mode for N cycles */}
+      {readbackMismatchCount >= readbackMismatchThreshold && (
+        <div
+          role="alert"
+          data-testid="readback-mismatch-alarm"
+          className="rounded-xl border p-3 mt-1 bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 text-sm font-medium"
+        >
+          HP not responding to commanded mode ({readbackMismatchCount} cycles).
+          Check Octopus API status.
+          {lastReadbackMismatchAlarmTime > 0 && (
+            <span className="ml-1 opacity-75">
+              First alarmed at {new Date(lastReadbackMismatchAlarmTime * 1000).toLocaleTimeString()}.
+            </span>
+          )}
         </div>
       )}
     </>

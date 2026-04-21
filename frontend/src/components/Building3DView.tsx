@@ -33,16 +33,20 @@ function cycleToBuildingLive(msg: CycleMessage): BuildingLiveData {
     }
   }
   const status = msg.status
-  const hp = msg.hp
+  // INSTRUCTION-117E: read source-aware power + performance from the
+  // heat_source block. The 3D view's `cop` slot is HP-only semantics —
+  // leave it at 0 on boilers so nothing renders a misleading COP figure.
+  const hs = status?.heat_source
+  const isHp = hs?.type === 'heat_pump'
   return {
     rooms,
     system: {
       outdoor_temp: status?.outdoor_temp ?? 0,
-      flow_temp: hp?.flow_temp ?? 0,
-      return_temp: hp?.return_temp ?? 0,
-      delta_t: hp?.delta_t ?? 0,
-      power_kw: status?.hp_power_kw ?? 0,
-      cop: status?.hp_cop ?? 0,
+      flow_temp: hs?.flow_temp ?? 0,
+      return_temp: hs?.return_temp ?? 0,
+      delta_t: hs?.delta_t ?? 0,
+      power_kw: hs?.input_power_kw ?? 0,
+      cop: isHp ? hs?.performance.value ?? 0 : 0,
       mode: status?.applied_mode ?? '',
     },
     cycle_number: msg.cycle_number ?? 0,

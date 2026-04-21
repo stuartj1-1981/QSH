@@ -126,9 +126,25 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const comfortTemp = status?.comfort_temp ?? initial?.comfort_temp ?? 21.0
   const appliedFlow = status?.applied_flow ?? initial?.applied_flow ?? 0
   const appliedMode = status?.applied_mode ?? initial?.applied_mode ?? 'off'
+  const readbackMismatchCount = status?.readback_mismatch_count ?? initial?.readback_mismatch_count ?? 0
+  const readbackMismatchThreshold = status?.readback_mismatch_threshold ?? initial?.readback_mismatch_threshold ?? 5
+  const lastReadbackMismatchAlarmTime = status?.last_readback_mismatch_alarm_time ?? initial?.last_readback_mismatch_alarm_time ?? 0
   const outdoorTemp = status?.outdoor_temp ?? initial?.outdoor_temp ?? 0
-  const hpPowerKw = status?.hp_power_kw ?? initial?.hp?.power_kw ?? 0
-  const hpCop = status?.hp_cop ?? initial?.hp?.cop ?? 0
+  // INSTRUCTION-117E: source-aware heat source state. WebSocket status
+  // block and REST endpoint both carry `heat_source` now — read from
+  // whichever is populated. Fall back to a safe placeholder shape so the
+  // banner renders during the initial handshake before either has arrived.
+  const heatSource = status?.heat_source ?? initial?.heat_source ?? {
+    type: 'heat_pump' as const,
+    input_power_kw: 0,
+    thermal_output_kw: null,
+    thermal_output_source: 'unknown' as const,
+    performance: { value: 0, source: 'config' as const },
+    flow_temp: 0,
+    return_temp: 0,
+    delta_t: 0,
+    flow_rate: 0,
+  }
 
   const recoveryTimeHours = status?.recovery_time_hours ?? initial?.recovery_time_hours ?? 0
   const capacityPct = status?.capacity_pct ?? initial?.capacity_pct ?? 0
@@ -251,8 +267,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         appliedFlow={appliedFlow}
         appliedMode={appliedMode}
         outdoorTemp={outdoorTemp}
-        hpPowerKw={hpPowerKw}
-        hpCop={hpCop}
+        heatSource={heatSource}
         optimalMode={optimalMode}
         boostActive={live?.boost?.active}
         boostRoomCount={live?.boost?.rooms ? Object.keys(live.boost.rooms).length : 0}
@@ -260,6 +275,9 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         entityMap={entityMap ?? undefined}
         engineering={engineering}
         driverStatus={initial?.driver}
+        readbackMismatchCount={readbackMismatchCount}
+        readbackMismatchThreshold={readbackMismatchThreshold}
+        lastReadbackMismatchAlarmTime={lastReadbackMismatchAlarmTime}
       />
 
       {/* Comfort temperature & shadow/live toggle */}
@@ -342,7 +360,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
       {displayRooms && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
           {Object.entries(displayRooms).map(([name, room]) => (
-            <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} />
+            <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} comfortTempActive={comfortTempActive} />
           ))}
         </div>
       )}

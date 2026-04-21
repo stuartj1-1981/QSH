@@ -1,10 +1,52 @@
 """System status and per-room state endpoints."""
 
-from fastapi import APIRouter
+from typing import Literal, Optional
 
-from ..state import shared_state
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from ..state import (
+    build_heat_source_payload,
+    build_hp_shim,
+    shared_state,
+)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Pydantic schema (INSTRUCTION-117E Task 1c) — flat HeatSourceState with a
+# closed Literal `type` discriminator. No discriminated-union wrapper: native
+# Literal-enum validation rejects bad `type` and bad `performance.source`
+# strings without any `Annotated[Union[...], Field(discriminator=...)]`
+# plumbing. Per parent 117 V5 representation simplification.
+# ---------------------------------------------------------------------------
+
+
+class _Performance(BaseModel):
+    value: float
+    source: Literal["live", "config"]
+
+
+class HeatSourceState(BaseModel):
+    type: Literal["heat_pump", "gas_boiler", "lpg_boiler", "oil_boiler"]
+    input_power_kw: float
+    thermal_output_kw: Optional[float]
+    thermal_output_source: Literal["measured", "computed", "unknown"]
+    performance: _Performance
+    flow_temp: float
+    return_temp: float
+    delta_t: float
+    flow_rate: float
+
+
+class HpState(BaseModel):
+    power_kw: float
+    cop: float
+    flow_temp: float
+    return_temp: float
+    delta_t: float
+    flow_rate: float
 
 
 @router.get("/status")
@@ -36,14 +78,8 @@ def get_status():
         "capacity_pct": snap.capacity_pct,
         "hp_capacity_kw": snap.hp_capacity_kw,
         "min_load_pct": snap.min_load_pct,
-        "hp": {
-            "power_kw": snap.hp_power_kw,
-            "cop": round(snap.hp_cop, 1),
-            "flow_temp": round(snap.hp_flow_temp, 1),
-            "return_temp": round(snap.hp_return_temp, 1),
-            "delta_t": round(snap.delta_t, 1),
-            "flow_rate": round(snap.flow_rate, 2),
-        },
+        "heat_source": build_heat_source_payload(snap),
+        "hp": build_hp_shim(snap),
         "rooms_total": len(snap.rooms),
         "rooms_below_target": rooms_below,
         "comfort_pct": round(

@@ -13,10 +13,12 @@ Public API:
 """
 
 import os
+from pathlib import Path
 
 from qsh.paths import find_state_file
 from .context import CycleContext
 from .controller import Controller
+from .cycle_protection import CycleProtectionGate, CycleProtectionState
 from .orchestrator import run_cycle, save_pipeline_state, restore_pipeline_state
 
 from .controllers import (
@@ -272,16 +274,36 @@ def build_pipeline(config, **kwargs):
     else:
         kw = _resolve_driver_defaults(kwargs, driver_type)
 
+    # INSTRUCTION-117D Task 3b: validate installer flow_limits override against
+    # the active source's capability envelope at startup. Out-of-envelope
+    # values raise ConfigValidationError (fail-hard, process exits non-zero).
+    from .controllers.flow_controller import validate_flow_limits
+    validate_flow_limits(config)
+
     valve = ValveController(
         room_control_state=kw.get("room_control_state"),
         apply_dissipation_fn=kw.get("apply_dissipation_fn"),
         apply_hybrid_fn=kw.get("apply_hybrid_fn"),
         calc_flow_adjust_fn=kw.get("calc_flow_adjust_fn"),
     )
+    # INSTRUCTION-117D Task 2d: single pipeline-owned CycleProtectionState /
+    # CycleProtectionGate. One physical heat source → one pair of timers.
+    # Same gate instance is injected into both ShoulderController and
+    # SummerController so cross-arbiter coherence is enforced at the state
+    # level, not at an arbiter-local level.
+    cycle_protection_path = Path(find_state_file("cycle_protection.json"))
+    cycle_protection_state = CycleProtectionState.load_or_default(cycle_protection_path)
+    cycle_protection_gate = CycleProtectionGate(
+        cycle_protection_state, cycle_protection_path
+    )
     shoulder = ShoulderController(
         room_control_state=valve.room_control_state,
+        cycle_protection_gate=cycle_protection_gate,
     )
-    summer = SummerController(shoulder_controller=shoulder)
+    summer = SummerController(
+        shoulder_controller=shoulder,
+        cycle_protection_gate=cycle_protection_gate,  # SAME instance
+    )
     boost = BoostController()
     controllers = [
         SensorController(
@@ -295,6 +317,7 @@ def build_pipeline(config, **kwargs):
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),
         ),
         EnergyController(
+            config=config,
             fetch_ha_entity_fn=kw.get("fetch_ha_entity_fn"),
             parse_rates_array_fn=kw.get("parse_rates_array_fn"),
             get_current_rate_fn=kw.get("get_current_rate_fn"),

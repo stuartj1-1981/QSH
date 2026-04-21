@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..drivers.ha.hardware_dispatch import READBACK_MISMATCH_ALARM_THRESHOLD
+
 
 @dataclass
 class ControlSource:
@@ -32,6 +34,9 @@ class CycleSnapshot:
     applied_flow: float = 0.0
     optimal_mode: str = "off"
     applied_mode: str = "off"
+    readback_mismatch_count: int = 0                                            # consecutive cycles where observed_mode != optimal_mode
+    readback_mismatch_threshold: int = READBACK_MISMATCH_ALARM_THRESHOLD        # single source of truth: hardware_dispatch.READBACK_MISMATCH_ALARM_THRESHOLD
+    last_readback_mismatch_alarm_time: float = 0.0                              # Unix epoch seconds (wall-clock) of the cycle the alarm first fired
     det_flow: float = 0.0
     total_demand: float = 0.0
     outdoor_temp: float = 0.0
@@ -49,7 +54,11 @@ class CycleSnapshot:
 
     # HP telemetry (all normalised to kW in SharedState.update())
     hp_power_kw: float = 0.0
-    hp_cop: float = 0.0
+    # INSTRUCTION-120B: `hp_cop` is None whenever the HP is off OR performance
+    # is in sensor-loss fallback. The gate lives in `_resolve_snapshot_hp_cop`
+    # — render sites must treat None as '—' and never second-guess positive
+    # values. JSON serialises None as null.
+    hp_cop: Optional[float] = None
     hp_flow_temp: float = 0.0
     hp_return_temp: float = 0.0
     delta_t: float = 0.0
@@ -103,6 +112,17 @@ class CycleSnapshot:
     # Control sources (external value visibility — 36C Task 4)
     control_sources: List[Any] = field(default_factory=list)
 
+    # Source foundation (INSTRUCTION-117A — pass-through from CycleContext).
+    # 117A's snapshot shape is pass-through only; /api/status response shape
+    # is unchanged (reshape deferred to 117E).
+    active_source_type: str = "heat_pump"
+    source_caps: Optional[Any] = None
+    active_source_input_power_kw: float = 0.0
+    active_source_thermal_output_kw: Optional[float] = None
+    active_source_thermal_output_source: str = "unknown"
+    active_source_performance: Optional[Any] = None
+    peak_thermal_demand_kw: float = 0.0
+
 
 def _resolve_operating_state(ctx) -> str:
     """Extract operating_state with clear priority and fallback.
@@ -134,6 +154,86 @@ def _normalise_power_kw(raw: float) -> float:
     if raw > 100:
         return round(raw / 1000, 3)
     return round(raw, 3)
+
+
+def build_heat_source_payload(snap: "CycleSnapshot") -> Dict[str, Any]:
+    """Build the source-aware `heat_source` payload from a CycleSnapshot.
+
+    INSTRUCTION-117E Task 1a: flat shape across all source types, with
+    `performance: {value, source}` carrying provenance. No per-source-type
+    branching — the resolver has already unified the representation.
+    """
+    perf = snap.active_source_performance
+    perf_value = float(perf.value) if perf is not None else 0.0
+    perf_source = perf.source if perf is not None else "config"
+    return {
+        "type": snap.active_source_type,
+        "input_power_kw": round(snap.active_source_input_power_kw, 3),
+        "thermal_output_kw": (
+            round(snap.active_source_thermal_output_kw, 3)
+            if snap.active_source_thermal_output_kw is not None
+            else None
+        ),
+        "thermal_output_source": snap.active_source_thermal_output_source,
+        "performance": {
+            "value": round(perf_value, 3),
+            "source": perf_source,
+        },
+        "flow_temp": round(snap.hp_flow_temp, 1),
+        "return_temp": round(snap.hp_return_temp, 1),
+        "delta_t": round(snap.delta_t, 1),
+        "flow_rate": round(snap.flow_rate, 2),
+    }
+
+
+def build_hp_shim(snap: "CycleSnapshot") -> Optional[Dict[str, Any]]:
+    """Build the legacy `hp` shim payload or return None on non-HP installs.
+
+    INSTRUCTION-117E Task 1b: populated only when the active source is a
+    heat pump. Never assigns an η value to `cop` — the `type` check is the
+    guard, not `performance.source`. INSTRUCTION-120B: `cop` is null-
+    preserving against `snap.hp_cop` — when the data-layer gate
+    `_resolve_snapshot_hp_cop` has suppressed the value (HP off or in
+    sensor-loss fallback), `cop` is JSON null rather than the fallback
+    baseline (2.5 for HP).
+    """
+    if snap.active_source_type != "heat_pump":
+        return None
+    return {
+        "power_kw": round(snap.active_source_input_power_kw, 3),
+        "cop": None if snap.hp_cop is None else round(snap.hp_cop, 1),
+        "flow_temp": round(snap.hp_flow_temp, 1),
+        "return_temp": round(snap.hp_return_temp, 1),
+        "delta_t": round(snap.delta_t, 1),
+        "flow_rate": round(snap.flow_rate, 2),
+    }
+
+
+def _resolve_snapshot_hp_cop(ctx) -> Optional[float]:
+    """Emit COP for display only when it is live-sourced and meaningful.
+
+    INSTRUCTION-120B: single source of truth for `snap.hp_cop`. Returns
+    None (→ JSON null, → frontend '—') when:
+    - ctx.inputs is unavailable, OR
+    - HP is off (hp_power < caps.off_power_threshold_kw), OR
+    - The active source is a heat pump and performance is in fallback
+      (performance.source == "config" — sensor-loss fallback per 117A M8).
+
+    Returns the numeric COP value only when all three guards pass. Render
+    sites MUST treat None as '—' and never second-guess positive values.
+    Boilers are not gated on `performance.source` — η is always
+    config-sourced per the resolver contract, so the HP-only gate avoids
+    nulling out the (unrendered) boiler value as a side-effect.
+    """
+    if ctx.inputs is None:
+        return None
+    caps = ctx.source_caps
+    if ctx.inputs.hp_power < caps.off_power_threshold_kw:
+        return None
+    perf = ctx.active_source_performance
+    if caps.source_type == "heat_pump" and perf.source == "config":
+        return None
+    return ctx.live_cop if ctx.live_cop else ctx.inputs.hp_cop
 
 
 class SharedState:
@@ -232,15 +332,17 @@ class SharedState:
             applied_flow=ctx.applied_flow,
             optimal_mode=ctx.optimal_mode,
             applied_mode=ctx.applied_mode,
+            readback_mismatch_count=getattr(ctx, "readback_mismatch_count", 0),
+            readback_mismatch_threshold=getattr(ctx, "readback_mismatch_threshold", READBACK_MISMATCH_ALARM_THRESHOLD),
+            last_readback_mismatch_alarm_time=getattr(ctx, "last_readback_mismatch_alarm_time", 0.0),
             det_flow=ctx.det_flow,
             total_demand=ctx.smoothed_total_demand if hasattr(ctx, 'smoothed_total_demand') else ctx.smoothed_demand,
             outdoor_temp=ctx.sensor_data.outdoor_temp if ctx.sensor_data else 0.0,
             hp_power_kw=_normalise_power_kw(ctx.inputs.hp_power) if ctx.inputs else 0.0,
-            # Only report COP when HP is actually drawing power (>=0.1 kW).
-            # Off-period fallback values (3.5 from config default) are meaningless
-            # and mislead the frontend display.  Matches historian gate (INSTRUCTION-43).
-            hp_cop=(ctx.live_cop if ctx.live_cop else (ctx.inputs.hp_cop if ctx.inputs else 0.0))
-                   if (ctx.inputs and ctx.inputs.hp_power >= 0.1) else 0.0,
+            # INSTRUCTION-120B: data-layer gate. None (→ JSON null) when HP is
+            # off, inputs missing, or performance is in sensor-loss fallback.
+            # Single source of truth for all downstream consumers.
+            hp_cop=_resolve_snapshot_hp_cop(ctx),
             hp_flow_temp=ctx.inputs.hp_flow_temp if ctx.inputs else 0.0,
             hp_return_temp=ctx.inputs.hp_return_temp if ctx.inputs else 0.0,
             delta_t=ctx.inputs.delta_t if ctx.inputs else 0.0,
@@ -275,6 +377,13 @@ class SharedState:
             away_days=ctx.inputs.away_days if ctx.inputs else 0.0,
             comfort_schedule_active=getattr(ctx, 'comfort_schedule_active', False),
             comfort_temp_active=getattr(ctx, 'comfort_temp_active', ctx.target_temp if hasattr(ctx, 'target_temp') else 21.0),
+            active_source_type=getattr(ctx, 'active_source_type', 'heat_pump'),
+            source_caps=getattr(ctx, 'source_caps', None),
+            active_source_input_power_kw=getattr(ctx, 'active_source_input_power_kw', 0.0),
+            active_source_thermal_output_kw=getattr(ctx, 'active_source_thermal_output_kw', None),
+            active_source_thermal_output_source=getattr(ctx, 'active_source_thermal_output_source', 'unknown'),
+            active_source_performance=getattr(ctx, 'active_source_performance', None),
+            peak_thermal_demand_kw=getattr(ctx, 'peak_thermal_demand_kw', 0.0),
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──

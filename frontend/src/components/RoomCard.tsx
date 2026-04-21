@@ -4,6 +4,11 @@ import { cn, formatTemp, statusColor, statusBg } from '../lib/utils'
 import type { RoomState, BoostRoom } from '../types/api'
 import { EntityValue } from './EntityValue'
 
+const COMFORT_DISPLAY_DECIMALS = 1
+
+const GENERIC_TARGET_TOOLTIP =
+  'Active control target. Differs from Comfort when the room is unoccupied, in a scheduled setback, or in away mode.'
+
 interface RoomCardProps {
   name: string
   room: RoomState
@@ -15,12 +20,39 @@ interface RoomCardProps {
     occupancy_sensor?: string
   }
   engineering?: boolean
+  /**
+   * Active post-schedule comfort setpoint (`comfort_temp_active` from the
+   * pipeline's `CycleMessage.status`) — post-schedule, pre-occupancy,
+   * pre-setback. This is the value the pipeline used as the base for
+   * room-target derivation, so the tooltip delta matches what the
+   * controller just did. Do NOT pass the static configured
+   * `comfort_temp` here — during a scheduled override that value is
+   * stale and the tooltip delta will be wrong.
+   */
+  comfortTempActive?: number | null
 }
 
-export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering }: RoomCardProps) {
+export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive }: RoomCardProps) {
   const displayName = name
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
+
+  const roundToDisplay = (v: number) => Number(v.toFixed(COMFORT_DISPLAY_DECIMALS))
+
+  let targetTooltip = GENERIC_TARGET_TOOLTIP
+  if (comfortTempActive != null && room.target != null) {
+    const comfortDisp = roundToDisplay(comfortTempActive)
+    const targetDisp = roundToDisplay(room.target)
+    if (!Number.isFinite(comfortDisp) || !Number.isFinite(targetDisp)) {
+      targetTooltip = GENERIC_TARGET_TOOLTIP
+    } else if (comfortDisp === targetDisp) {
+      targetTooltip = `Target matches Comfort (${comfortDisp.toFixed(1)}°).`
+    } else if (targetDisp < comfortDisp) {
+      targetTooltip = `Target ${targetDisp.toFixed(1)}° = Comfort ${comfortDisp.toFixed(1)}° − ${(comfortDisp - targetDisp).toFixed(1)}° setback. Unoccupied rooms, scheduled setbacks, and away mode reduce the target below Comfort to save energy.`
+    } else {
+      targetTooltip = `Target ${targetDisp.toFixed(1)}° is above Comfort ${comfortDisp.toFixed(1)}° — set by a per-room override or persistent-zone TRV setpoint.`
+    }
+  }
 
   return (
     <button
@@ -59,7 +91,8 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
           </EntityValue>
         ) : room.target !== null ? (
           <EntityValue entityId={entityIds?.trv_entity} engineering={engineering}>
-            <span className="text-sm text-[var(--text-muted)]">
+            {/* title= intentionally shadows the outer EntityValue title on the target element; the TRV entity id remains discoverable on the "Valve {room.valve}%" span below. */}
+            <span className="text-sm text-[var(--text-muted)]" title={targetTooltip}>
               / {formatTemp(room.target)}
             </span>
           </EntityValue>

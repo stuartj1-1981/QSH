@@ -58,8 +58,17 @@ describe('StatusBanner boost indicator', () => {
         appliedFlow={35}
         appliedMode="heat"
         outdoorTemp={4}
-        hpPowerKw={2.0}
-        hpCop={3.5}
+        heatSource={{
+          type: 'heat_pump',
+          input_power_kw: 2.0,
+          thermal_output_kw: 7.0,
+          thermal_output_source: 'measured',
+          performance: { value: 3.5, source: 'live' },
+          flow_temp: 35,
+          return_temp: 30,
+          delta_t: 5,
+          flow_rate: 0.3,
+        }}
         boostActive={true}
         boostRoomCount={2}
       />
@@ -75,8 +84,17 @@ describe('StatusBanner boost indicator', () => {
         appliedFlow={35}
         appliedMode="heat"
         outdoorTemp={4}
-        hpPowerKw={2.0}
-        hpCop={3.5}
+        heatSource={{
+          type: 'heat_pump',
+          input_power_kw: 2.0,
+          thermal_output_kw: 7.0,
+          thermal_output_source: 'measured',
+          performance: { value: 3.5, source: 'live' },
+          flow_temp: 35,
+          return_temp: 30,
+          delta_t: 5,
+          flow_rate: 0.3,
+        }}
         boostActive={false}
         boostRoomCount={0}
       />
