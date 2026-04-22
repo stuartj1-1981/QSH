@@ -214,8 +214,22 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
     if resolved.get("apply_hardware_control_fn") is None:
 
         def _noop_hw(*args, **kw):
-            # Return applied_mode — default to the optimal_mode (arg[1])
-            return args[1] if len(args) > 1 else "heat"
+            # HardwareController expects (applied_mode, new_mismatch_count).
+            # MQTT and mock drivers have no hardware readback — mismatch is always 0.
+            # `applied_mode` is the commanded optimal_mode (args[1] per the caller
+            # contract at qsh/pipeline/controllers/hardware_controller.py:114–131).
+            #
+            # No silent fallback. HardwareController always supplies 13 positional
+            # args; any shorter call is by construction a DI signature drift event
+            # and must fail loudly so it is caught by tests and startup smoke,
+            # not by misleading shadow-mode state downstream.
+            if len(args) < 2:
+                raise RuntimeError(
+                    "_noop_hw called with fewer than 2 positional args — "
+                    "DI signature drift at apply_hardware_control boundary"
+                )
+            applied_mode = args[1]
+            return applied_mode, 0
 
         resolved["apply_hardware_control_fn"] = _noop_hw
 

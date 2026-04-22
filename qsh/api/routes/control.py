@@ -87,10 +87,20 @@ def _update_config_key(key_path: str, value) -> Callable[[dict], dict]:
     key_path supports dot notation for nested keys:
     - "comfort_temp" -> raw["comfort_temp"] = value
     - "antifrost.oat_threshold" -> raw["antifrost"]["oat_threshold"] = value
+
+    Raises HTTPException(503) on template/empty configs — callers MUST
+    NOT succeed silently when the write cannot land. See INSTRUCTION-125
+    review finding M1.
     """
     def transform(raw: dict) -> dict:
         if not raw.get("rooms"):
-            return raw  # Guard: don't persist to empty/template config
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Cannot persist {key_path}: config is template/empty. "
+                    "Complete initial setup before writing."
+                ),
+            )
         parts = key_path.split(".")
         target = raw
         for part in parts[:-1]:
@@ -248,8 +258,8 @@ def set_control_mode(body: ControlModeBody):
         in pending_ha_syncs; the ShadowController retries on the next cycle.
       - HA driver without dfan entity configured: no external write. The
         pipeline's read_inputs() uses resolve_value() with internal key
-        `dfan_control_internal`, which this endpoint also writes. The next
-        cycle picks up the new internal value.
+        `control_enabled` (INSTRUCTION-125), which this endpoint also
+        writes. The next cycle picks up the new internal value.
       - MQTT driver (control_method == "mqtt"): publishes the new value
         on {prefix}/control/dfan_control with retain=True.
 
@@ -259,26 +269,24 @@ def set_control_mode(body: ControlModeBody):
 
     Config prerequisites:
       - Any driver that expects MQTT retained publishes to propagate the
-        toggle MUST set `control_method: mqtt` in qsh.yaml. Without it,
-        `set_control_mode` writes yaml and in-memory config only. The
-        MQTTDriver's internal fallback (dfan_control_internal) picks up
-        the change, but any external MQTT publisher on the
-        {prefix}/control/dfan_control topic will clobber the internal
-        value on its next publish. This is intentional "external wins"
-        semantics; it is not a bug. Set control_method=mqtt if you want
-        the UI to propagate to external MQTT consumers.
+        toggle to external consumers MUST set `control_method: mqtt` in
+        qsh.yaml. Without it, `set_control_mode` writes yaml and
+        in-memory config only. The drivers' internal fallback reads
+        `control_enabled` directly (INSTRUCTION-125) and picks up the
+        change on the next cycle. Any external MQTT publisher on the
+        {prefix}/control/dfan_control topic still wins via cache-first
+        resolution — intentional "external wins" semantics.
     """
     # 1. Update in-memory config (live effect, no restart)
     config = shared_state.get_config()
     if config is not None:
         config["control_enabled"] = body.enabled
-        # Keep dfan_control_internal in sync so the read_inputs() internal fallback
-        # path reflects the latest toggle for installations without a dfan HA entity.
-        config["dfan_control_internal"] = body.enabled
 
     # 2. Persist to YAML (survives restart)
     try:
         _read_modify_write(_update_config_key("control_enabled", body.enabled))
+    except HTTPException:
+        raise  # Task 6: safety-critical — caller must see 503
     except Exception as e:
         logger.warning("Failed to persist control_enabled: %s", e)
 
@@ -449,24 +457,27 @@ class DfanControlBody(BaseModel):
 
 @router.patch("/dfan-control")
 def set_dfan_control_internal(body: DfanControlBody):
-    """Set the internal dfan_control flag.
+    """Set the shadow/live toggle via PATCH.
 
-    This is the same as /mode but uses the PATCH pattern and
-    includes MQTT write-back.
+    Functionally identical to POST /api/control/mode — retained as a
+    separate endpoint for clients that prefer the PATCH pattern and for
+    the MQTT write-back side-effect below. Returns
+    {"control_enabled": bool}.
     """
     config = shared_state.get_config()
     if config is not None:
         config["control_enabled"] = body.enabled
-        config["dfan_control_internal"] = body.enabled
 
     try:
         _read_modify_write(_update_config_key("control_enabled", body.enabled))
+    except HTTPException:
+        raise  # Task 6: safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist dfan_control_internal: %s", e)
+        logger.warning("Failed to persist control_enabled: %s", e)
 
     _mqtt_writeback("dfan_control", str(body.enabled).lower())
 
-    return {"dfan_control_internal": body.enabled}
+    return {"control_enabled": body.enabled}
 
 
 def _mqtt_writeback(control_key: str, payload: str) -> None:
