@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { BuildingLayout } from '../components/settings/BuildingLayout'
+import { useEnvelope } from '../hooks/useEnvelope'
 import type { RoomConfigYaml } from '../types/config'
 
 // Mock useRawConfig — the hook that BuildingLayout uses to fetch rooms.
@@ -17,8 +18,31 @@ vi.mock('../hooks/useConfig', () => ({
   }),
 }))
 
+// Delegate useEnvelope to the real implementation by default; individual tests
+// may call vi.mocked(useEnvelope).mockImplementationOnce(...) to override.
+const envelopeHolder = vi.hoisted(() => ({
+  real: null as typeof import('../hooks/useEnvelope').useEnvelope | null,
+}))
+vi.mock('../hooks/useEnvelope', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useEnvelope')>(
+    '../hooks/useEnvelope',
+  )
+  envelopeHolder.real = actual.useEnvelope
+  return {
+    ...actual,
+    useEnvelope: vi.fn((args: Parameters<typeof actual.useEnvelope>[0]) =>
+      actual.useEnvelope(args),
+    ),
+  }
+})
+const realUseEnvelope = (args: Parameters<typeof useEnvelope>[0]) => {
+  if (!envelopeHolder.real) throw new Error('real useEnvelope not captured')
+  return envelopeHolder.real(args)
+}
+
 beforeEach(() => {
   mockConfig.rooms = {}
+  vi.mocked(useEnvelope).mockImplementation((args) => realUseEnvelope(args))
 })
 
 describe('BuildingLayout', () => {
@@ -89,13 +113,79 @@ describe('BuildingLayout', () => {
     expect(screen.queryByText(/South wall/)).toBeNull()
   })
 
-  it('17. Save button is disabled when nothing is dirty', () => {
+  it('17a. Save button is disabled when not dirty', () => {
     mockConfig.rooms = {
       lounge: { area_m2: 20, facing: 'N', floor: 0 },
     }
     render(<BuildingLayout />)
-    const btn = screen.getByRole('button', { name: /Save Building Layout/ })
+    const btn = screen.getByRole('button', { name: /^Save$/ })
     expect((btn as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('17b. Save & Apply is enabled when pendingApply && !dirty', () => {
+    vi.mocked(useEnvelope).mockImplementation((args) => {
+      const r = realUseEnvelope(args)
+      return { ...r, dirty: false, pendingApply: true }
+    })
+
+    mockConfig.rooms = {
+      lounge: { area_m2: 20, facing: 'N', floor: 0 },
+    }
+    render(<BuildingLayout />)
+    const saveBtn = screen.getByRole('button', { name: /^Save$/ })
+    const saveApplyBtn = screen.getByRole('button', { name: /Save & Apply/ })
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(true)
+    expect((saveApplyBtn as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('17c. both buttons render with distinct accessible names', () => {
+    mockConfig.rooms = {
+      lounge: { area_m2: 20, facing: 'N', floor: 0 },
+    }
+    render(<BuildingLayout />)
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeDefined()
+    expect(screen.getByRole('button', { name: /Save & Apply/ })).toBeDefined()
+  })
+
+  it('17d. Save & Apply dispatches apply() when pendingApply && !dirty', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup()
+    const applySpy = vi.fn().mockResolvedValue({ restart_required: true })
+    const saveSpy = vi.fn().mockResolvedValue({ updated: [], warnings: [], restart_required: true })
+
+    vi.mocked(useEnvelope).mockImplementation((args) => {
+      const r = realUseEnvelope(args)
+      return { ...r, dirty: false, pendingApply: true, apply: applySpy, save: saveSpy }
+    })
+
+    mockConfig.rooms = {
+      lounge: { area_m2: 20, facing: 'N', floor: 0 },
+    }
+    render(<BuildingLayout />)
+    const btn = screen.getByRole('button', { name: /Save & Apply/ })
+    await user.click(btn)
+    expect(applySpy).toHaveBeenCalledOnce()
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  it('17e. Save & Apply dispatches save(true) when dirty', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup()
+    const applySpy = vi.fn().mockResolvedValue({ restart_required: true })
+    const saveSpy = vi.fn().mockResolvedValue({ updated: [], warnings: [], restart_required: true })
+
+    vi.mocked(useEnvelope).mockImplementation((args) => {
+      const r = realUseEnvelope(args)
+      return { ...r, dirty: true, pendingApply: false, apply: applySpy, save: saveSpy }
+    })
+
+    mockConfig.rooms = {
+      lounge: { area_m2: 20, facing: 'N', floor: 0 },
+    }
+    render(<BuildingLayout />)
+    const btn = screen.getByRole('button', { name: /Save & Apply/ })
+    await user.click(btn)
+    expect(saveSpy).toHaveBeenCalledOnce()
+    expect(saveSpy).toHaveBeenCalledWith(true)
+    expect(applySpy).not.toHaveBeenCalled()
   })
 
   // 112C UI tests: multi-room face editor
