@@ -616,8 +616,8 @@ class MQTTDriver:
         dfan_rv = self._resolve_mqtt_control(
             cache,
             "control/dfan_control",
-            "dfan_control_internal",
-            default=True,
+            "control_enabled",
+            default=False,
             validate=_parse_bool_payload,
         )
         self._last_resolved["dfan_control"] = dfan_rv
@@ -742,9 +742,16 @@ class MQTTDriver:
         if not self._mqtt or not self._topic_map:
             return
 
+        # INSTRUCTION-125: fail-closed default as defence-in-depth. Primary
+        # path is config.py YAML load which defaults missing control_enabled
+        # to True on load; this fallback only activates on in-memory
+        # corruption.
         control_enabled = config.get("control_enabled")
         if control_enabled is None:
-            control_enabled = True
+            logger.warning(
+                "control_enabled missing from config — defaulting to shadow (defence-in-depth)"
+            )
+            control_enabled = False
 
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
 

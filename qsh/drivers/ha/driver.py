@@ -25,7 +25,7 @@ def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
         None  — entity is missing, HA returned no state, or the state is a
                 transient sentinel ('unavailable' / 'unknown'). The resolver
                 interprets None as "fall back to internal key
-                dfan_control_internal". Critical for installs that do not
+                control_enabled". Critical for installs that do not
                 configure the entity at all and for transient HA outages.
     """
     from .integration import fetch_ha_entity
@@ -117,20 +117,19 @@ class HADriver:
         sensor_data = fetch_all_sensor_data(config, target_temp)
 
         # dfan_control: read from HA entity if configured, else fall back to
-        # config["dfan_control_internal"] (default True).
+        # config["control_enabled"]. INSTRUCTION-125: collapsed from
+        # dfan_control_internal. default=False as defence-in-depth fallback
+        # for the pathological case where both sources are absent.
         from ..resolve import resolve_value as _resolve_value
         control_enabled = _resolve_value(
             config,
             entity_key="entities.dfan_control_toggle",
-            internal_key="dfan_control_internal",
-            default=True,
+            internal_key="control_enabled",
+            default=False,
             read_fn=_read_dfan_control_state,
         ).value
-        # Ensure we have a definite bool (resolve_value may return None if
-        # config key is absent and default wasn't used — shouldn't happen, but
-        # be explicit for downstream callers that check truthiness).
         if control_enabled is None:
-            control_enabled = True
+            control_enabled = False
 
         # Fetch tariff rates
         rates_entity = config["entities"].get("current_day_rates")
@@ -295,9 +294,16 @@ class HADriver:
 
     def write_outputs(self, outputs: OutputBlock, config: Dict) -> None:
         """Dispatch control outputs to Home Assistant."""
+        # INSTRUCTION-125: fail-closed default as defence-in-depth. Primary
+        # path is config.py YAML load which defaults missing control_enabled
+        # to True on load; this fallback only activates on in-memory
+        # corruption.
         control_enabled = config.get("control_enabled")
         if control_enabled is None:
-            control_enabled = True
+            logging.warning(
+                "control_enabled missing from config — defaulting to shadow (defence-in-depth)"
+            )
+            control_enabled = False
 
         # ── Hardware commands (HP flow/mode + TRV setpoints) ──
         if outputs.hardware_changed:

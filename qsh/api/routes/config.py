@@ -197,7 +197,6 @@ def patch_config_section(section: str, body: dict):
             "flow_min_internal",
             "flow_max_internal",
             "pid_target_internal",
-            "dfan_control_internal",
         }
 
         def _apply_root(raw: dict) -> dict:
@@ -209,6 +208,11 @@ def patch_config_section(section: str, body: dict):
                         config = shared_state.get_config()
                         if config is not None:
                             config[key] = value
+                    else:
+                        logger.info(
+                            "config/root: dropping unknown key '%s' (not in _ROOT_ALLOWED)",
+                            key,
+                        )
             return raw
 
         _read_modify_write(_apply_root)

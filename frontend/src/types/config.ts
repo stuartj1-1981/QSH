@@ -333,7 +333,6 @@ export interface QshConfigYaml {
   // Internal value overrides (36C — HA helper decoupling)
   flow_min_internal?: number
   flow_max_internal?: number
-  dfan_control_internal?: boolean
   pid_target_internal?: number
   publish_mqtt_shadow?: boolean
 }

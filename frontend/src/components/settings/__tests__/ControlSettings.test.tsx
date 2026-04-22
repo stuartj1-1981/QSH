@@ -21,7 +21,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{}}
-        rootConfig={{ dfan_control_internal: true }}
+        rootConfig={{}}
         driver="ha"
         onRefetch={() => {}}
       />
@@ -78,7 +78,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{}}
-        rootConfig={{ dfan_control_internal: true }}
+        rootConfig={{}}
         driver="ha"
         onRefetch={() => {}}
       />
@@ -90,7 +90,7 @@ describe('ControlSettings', () => {
     render(
       <ControlSettings
         control={{}}
-        rootConfig={{ dfan_control_internal: true }}
+        rootConfig={{}}
         driver="ha"
         onRefetch={() => {}}
       />
