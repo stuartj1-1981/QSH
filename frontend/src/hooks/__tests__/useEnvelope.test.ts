@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { useEnvelope } from '../useEnvelope'
 import type { RoomConfigYaml } from '../../types/config'
 
@@ -194,5 +194,190 @@ describe('useEnvelope — 112C multi-room face support', () => {
       expect(v11).toHaveLength(10)
       expect(v11.map((r) => r.room)).not.toContain('bed11')
     }
+  })
+})
+
+describe('useEnvelope — INSTRUCTION-121 split Save / Save & Apply', () => {
+  const baseRooms: Record<string, RoomConfigYaml> = {
+    lounge: { area_m2: 20, floor: 0 },
+    bed1: { area_m2: 12, floor: 1 },
+  }
+
+  const mockPatchOk = () =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ updated: ['lounge'], warnings: [], restart_required: false }),
+    } as Response)
+
+  const mockPatchOkApply = () =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ updated: ['lounge'], warnings: [], restart_required: true }),
+    } as Response)
+
+  const mockApplyOk = () =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ restart_required: true }),
+    } as Response)
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('save(false) posts PATCH with ?apply=false and pendingApply becomes true', async () => {
+    const rooms = { ...baseRooms }
+    const fetchSpy = mockPatchOk()
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    expect(result.current.dirty).toBe(true)
+
+    await act(async () => {
+      await result.current.save(false)
+    })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, opts] = fetchSpy.mock.calls[0]
+    expect(String(url)).toContain('apply=false')
+    expect((opts as RequestInit).method).toBe('PATCH')
+    await waitFor(() => {
+      expect(result.current.dirty).toBe(false)
+      expect(result.current.pendingApply).toBe(true)
+    })
+  })
+
+  it('save(true) posts PATCH with ?apply=true and pendingApply becomes false', async () => {
+    const rooms = { ...baseRooms }
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ updated: ['lounge'], warnings: [], restart_required: false }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ updated: ['lounge'], warnings: [], restart_required: true }),
+      } as Response)
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    await act(async () => {
+      await result.current.save(false)
+    })
+    await waitFor(() => expect(result.current.pendingApply).toBe(true))
+
+    act(() => {
+      result.current.setFace('lounge', 'west_wall', 'external')
+    })
+    await act(async () => {
+      await result.current.save(true)
+    })
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [url, opts] = fetchSpy.mock.calls[1]
+    expect(String(url)).toContain('apply=true')
+    expect((opts as RequestInit).method).toBe('PATCH')
+    await waitFor(() => expect(result.current.pendingApply).toBe(false))
+  })
+
+  it('save() default posts ?apply=true', async () => {
+    const rooms = { ...baseRooms }
+    const fetchSpy = mockPatchOkApply()
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    await act(async () => {
+      await result.current.save()
+    })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url] = fetchSpy.mock.calls[0]
+    expect(String(url)).toContain('apply=true')
+    await waitFor(() => expect(result.current.pendingApply).toBe(false))
+  })
+
+  it('editing after save(false) suppresses pendingApply via derived formula', async () => {
+    const rooms = { ...baseRooms }
+    mockPatchOk()
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    await act(async () => {
+      await result.current.save(false)
+    })
+    await waitFor(() => expect(result.current.pendingApply).toBe(true))
+
+    act(() => {
+      result.current.setFace('lounge', 'north_wall', 'external')
+    })
+    expect(result.current.dirty).toBe(true)
+    expect(result.current.pendingApply).toBe(false)
+  })
+
+  it('apply() posts POST /api/rooms/envelope/apply with no body and clears pendingApply', async () => {
+    const rooms = { ...baseRooms }
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ updated: ['lounge'], warnings: [], restart_required: false }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ restart_required: true }),
+      } as Response)
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    await act(async () => {
+      await result.current.save(false)
+    })
+    await waitFor(() => expect(result.current.pendingApply).toBe(true))
+
+    await act(async () => {
+      await result.current.apply()
+    })
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [url, opts] = fetchSpy.mock.calls[1]
+    expect(String(url)).toContain('api/rooms/envelope/apply')
+    expect((opts as RequestInit).method).toBe('POST')
+    expect((opts as RequestInit).body).toBeUndefined()
+    await waitFor(() => expect(result.current.pendingApply).toBe(false))
+  })
+
+  it('apply() while dirty does not touch dirty state', async () => {
+    const rooms = { ...baseRooms }
+    const fetchSpy = mockApplyOk()
+    const { result } = renderHook(() => useEnvelope({ rooms }))
+
+    act(() => {
+      result.current.setFace('lounge', 'east_wall', 'external')
+    })
+    expect(result.current.dirty).toBe(true)
+    expect(result.current.pendingApply).toBe(false)
+
+    await act(async () => {
+      await result.current.apply()
+    })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [, opts] = fetchSpy.mock.calls[0]
+    expect((opts as RequestInit).method).toBe('POST')
+    await waitFor(() => {
+      expect(result.current.dirty).toBe(true)
+      expect(result.current.pendingApply).toBe(false)
+    })
   })
 })

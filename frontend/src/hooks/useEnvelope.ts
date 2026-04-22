@@ -260,9 +260,13 @@ export interface UseEnvelopeResult {
   removeRoomFromFace: (room: string, face: FaceKey, targetRoom: string) => void
   /** Returns true when the face was populated by the auto-symmetry engine. */
   isAutoSet: (room: string, face: FaceKey) => boolean
-  save: () => Promise<EnvelopePatchResponse | null>
+  save: (apply?: boolean) => Promise<EnvelopePatchResponse | null>
+  /** Signal a pipeline restart to adopt a previously persisted envelope. */
+  apply: () => Promise<{ restart_required: boolean } | null>
   saving: boolean
   dirty: boolean
+  /** True when the last save persisted YAML without signalling apply and no new edits have been made since. */
+  pendingApply: boolean
   warnings: string[]
   error: string | null
 }
@@ -285,6 +289,7 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
   const [saving, setSaving] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [lastSaveWasPersistOnly, setLastSaveWasPersistOnly] = useState(false)
 
   // Re-hydrate from incoming rooms when they change — but only while not dirty.
   // Once the user edits we hold local state until save().
@@ -362,7 +367,7 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
     [state.autoSet],
   )
 
-  const save = useCallback(async (): Promise<EnvelopePatchResponse | null> => {
+  const save = useCallback(async (apply: boolean = true): Promise<EnvelopePatchResponse | null> => {
     setSaving(true)
     setError(null)
     try {
@@ -376,7 +381,7 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
         body.rooms[name] = entry
       }
 
-      const resp = await fetch(apiUrl('api/rooms/envelope'), {
+      const resp = await fetch(apiUrl(`api/rooms/envelope?apply=${apply ? 'true' : 'false'}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -389,6 +394,7 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
       setWarnings(payload.warnings ?? [])
       setDirty(false)
       setState((prev) => ({ ...prev, autoSet: {} }))
+      setLastSaveWasPersistOnly(!apply)
       onSaved?.()
       return payload
     } catch (e: unknown) {
@@ -399,6 +405,30 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
     }
   }, [state, onSaved])
 
+  const apply = useCallback(async (): Promise<{ restart_required: boolean } | null> => {
+    setSaving(true)
+    setError(null)
+    try {
+      const resp = await fetch(apiUrl('api/rooms/envelope/apply'), {
+        method: 'POST',
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
+        throw new Error(err.detail || `HTTP ${resp.status}`)
+      }
+      const payload = (await resp.json()) as { restart_required: boolean }
+      setLastSaveWasPersistOnly(false)
+      return payload
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Unknown error')
+      return null
+    } finally {
+      setSaving(false)
+    }
+  }, [])
+
+  const pendingApply = lastSaveWasPersistOnly && !dirty && !saving
+
   return {
     rooms: state.rooms,
     roomNames,
@@ -408,8 +438,10 @@ export function useEnvelope({ rooms, onSaved }: UseEnvelopeArgs): UseEnvelopeRes
     removeRoomFromFace,
     isAutoSet,
     save,
+    apply,
     saving,
     dirty,
+    pendingApply,
     warnings,
     error,
   }

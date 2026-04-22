@@ -310,12 +310,18 @@ def delete_room(room_name: str):
 
 
 @router.patch("/rooms/envelope")
-def bulk_update_envelope(req: RoomEnvelopeBulkRequest):
+def bulk_update_envelope(req: RoomEnvelopeBulkRequest, apply: bool = True):
     """Bulk update `floor` and `envelope` on multiple rooms.
 
     Validates all rooms exist, cross-room references are consistent,
     auto-populates symmetric ceiling/floor and compass-reciprocal wall faces,
     then writes to qsh.yaml in a single atomic transaction.
+
+    When ``apply=true`` (default) this endpoint additionally signals a
+    pipeline restart in the same operation. When ``apply=false`` only the
+    YAML write occurs; callers wishing to adopt a previously persisted
+    envelope should invoke ``POST /api/rooms/envelope/apply`` rather than
+    re-PATCHing.
     """
     warnings: List[str] = []
     updated: List[str] = []
@@ -412,8 +418,22 @@ def bulk_update_envelope(req: RoomEnvelopeBulkRequest):
         missing = str(e).strip("'\"")
         raise HTTPException(status_code=404, detail=f"Room '{missing}' not found")
 
+    if apply:
+        _signal_restart()
+    return {"updated": updated, "warnings": warnings, "restart_required": apply}
+
+
+@router.post("/rooms/envelope/apply")
+def apply_envelope():
+    """Signal a pipeline restart to adopt the currently persisted envelope.
+
+    This is the apply-only counterpart to PATCH /rooms/envelope. It performs no
+    YAML write; it only drops the restart flag file so the main loop restarts
+    the pipeline on its next tick. Intended for use after a prior PATCH with
+    apply=false, when the caller is ready to accept the restart lockout.
+    """
     _signal_restart()
-    return {"updated": updated, "warnings": warnings, "restart_required": True}
+    return {"restart_required": True}
 
 
 def _apply_auto_symmetry(
@@ -434,9 +454,6 @@ def _apply_auto_symmetry(
     }
 
     for rn, env in list(envelopes.items()):
-        room_facing = (rooms_raw.get(rn) or {}).get("facing", "interior")
-        is_interior = isinstance(room_facing, str) and room_facing.lower() == "interior"
-
         for face_key, face_val in list(env.items()):
             refs = _normalise_yaml_face_refs(face_val)
             if not refs:
@@ -455,20 +472,9 @@ def _apply_auto_symmetry(
                     peer_face = CEILING_FACE_KEY
                     expected = {"room": rn, "type": "floor_ceiling"}
                 elif face_key in reciprocal_wall:
-                    if is_interior:
-                        logger.info(
-                            "Room '%s' is interior — wall auto-symmetry skipped "
-                            "(user must declare both sides in Building Layout editor).",
-                            rn,
-                        )
-                        continue
-                    peer_facing = (rooms_raw.get(peer) or {}).get("facing", "interior")
-                    if isinstance(peer_facing, str) and peer_facing.lower() == "interior":
-                        logger.info(
-                            "Peer '%s' is interior — wall auto-symmetry skipped for %s.%s",
-                            peer, rn, face_key,
-                        )
-                        continue
+                    # Compass reciprocity is purely geometric — mirror regardless of the
+                    # source or peer room's solar classification. `facing == "interior"`
+                    # controls solar gain only, not topology.
                     peer_face = reciprocal_wall[face_key]
                     expected = {"room": rn, "type": btype}
                 else:
@@ -483,14 +489,32 @@ def _apply_auto_symmetry(
                     )
                 elif _face_contains_room(existing_peer, rn):
                     pass  # already references this room (scalar or within array)
-                else:
-                    suffix = (
-                        " User must resolve in Building Layout editor."
-                        if face_key in reciprocal_wall else ""
+                elif face_key in (CEILING_FACE_KEY, FLOOR_FACE_KEY):
+                    # Multi-peer floor/ceiling is legitimate (e.g. bedroom above hall + dining).
+                    # Promote scalar to list, or append to existing list. INFO-level only —
+                    # successful symmetrisation is not a user-visible warning.
+                    if isinstance(existing_peer, dict):
+                        peer_env[peer_face] = [existing_peer, expected]
+                    elif isinstance(existing_peer, list):
+                        peer_env[peer_face] = [*existing_peer, expected]
+                    else:
+                        logger.warning(
+                            "Auto-symmetry: unexpected existing type %r on %s.%s — "
+                            "cannot aggregate %s",
+                            type(existing_peer).__name__, peer, peer_face, rn,
+                        )
+                        continue
+                    logger.info(
+                        "Auto-populated envelope (multi-peer): %s.%s += %s (symmetric from %s.%s)",
+                        peer, peer_face, rn, rn, face_key,
                     )
+                else:
+                    # Walls: one cardinal face = one peer room by construction.
+                    # Two different source rooms on the same compass wall of a peer
+                    # indicates a missing partition in the user's model.
                     warnings.append(
                         f"Auto-symmetry conflict: {peer}.{peer_face} already assigned, "
-                        f"cannot assign {rn}.{suffix}"
+                        f"cannot assign {rn}. User must resolve in Building Layout editor."
                     )
 
 

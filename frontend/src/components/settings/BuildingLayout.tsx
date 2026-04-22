@@ -222,8 +222,19 @@ export function BuildingLayout({ onRefetch }: BuildingLayoutProps) {
 
   const doSave = async () => {
     setPendingSaveError(null)
-    const result = await env.save()
+    const result = await env.save(false)
     if (!result) setPendingSaveError(env.error)
+  }
+
+  const doSaveAndApply = async () => {
+    setPendingSaveError(null)
+    if (env.dirty) {
+      const result = await env.save(true)
+      if (!result) setPendingSaveError(env.error)
+    } else if (env.pendingApply) {
+      const result = await env.apply()
+      if (!result) setPendingSaveError(env.error)
+    }
   }
 
   if (loading) {
@@ -249,18 +260,32 @@ export function BuildingLayout({ onRefetch }: BuildingLayoutProps) {
             Assign rooms to floors, then declare the 6 faces of each room&rsquo;s envelope.
           </p>
         </div>
-        <button
-          onClick={doSave}
-          disabled={!env.dirty || env.saving}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {env.saving ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <Save size={14} />
-          )}
-          Save Building Layout
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={doSave}
+            disabled={!env.dirty || env.saving}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text)] text-sm font-medium hover:bg-[var(--bg)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {env.saving ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Save size={14} />
+            )}
+            Save
+          </button>
+          <button
+            onClick={doSaveAndApply}
+            disabled={(!env.dirty && !env.pendingApply) || env.saving}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {env.saving ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Save size={14} />
+            )}
+            Save & Apply
+          </button>
+        </div>
       </div>
 
       {(pendingSaveError || env.error) && (
@@ -383,12 +408,17 @@ export function BuildingLayout({ onRefetch }: BuildingLayoutProps) {
         env={env.rooms}
       />
 
-      {env.dirty && (
+      {env.dirty ? (
         <div className="flex items-center justify-end gap-2 text-xs text-[var(--text-muted)]">
           <CheckCircle2 size={12} />
-          Unsaved changes — click Save Building Layout to apply.
+          Unsaved changes.
         </div>
-      )}
+      ) : env.pendingApply ? (
+        <div className="flex items-center justify-end gap-2 text-xs text-[var(--amber,#d97706)]">
+          <CheckCircle2 size={12} />
+          Saved. Apply to restart pipeline.
+        </div>
+      ) : null}
     </div>
   )
 }
