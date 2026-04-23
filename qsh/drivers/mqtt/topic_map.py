@@ -388,9 +388,16 @@ SYSTEM_INPUT_FIELDS = {
 # These are parsed outside the numeric `parse_payload` path — see driver.read_inputs.
 SYSTEM_STRING_INPUT_FIELDS = {
     "hot_water_active": "hot_water_active",
+    "hot_water_boolean": "hot_water_boolean",
 }
 
-# Fields that indicate capabilities when received
+# Fields that indicate capabilities when received.
+# Hot-water capability ("has_live_hot_water") is intentionally NOT registered
+# here — it is written exactly once, post-loop, in driver.read_inputs using
+# the shared three-valued classifier (see qsh/drivers/hot_water_payloads.py
+# and INSTRUCTION-126). Registering it here would re-fire the write inside
+# the per-mapping loop on UNAVAILABLE payloads and re-introduce the V2
+# signal-quality bug.
 CAPABILITY_FIELDS = {
     "hp_flow_temp": "has_live_flow",
     "hp_cop": "has_live_cop",
@@ -399,7 +406,6 @@ CAPABILITY_FIELDS = {
     "flow_rate": "has_live_flow_rate",
     "solar_production": "has_solar",
     "battery_soc": "has_battery",
-    "hot_water_active": "has_live_hot_water",
 }
 
 

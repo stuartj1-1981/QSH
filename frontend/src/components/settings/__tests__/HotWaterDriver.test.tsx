@@ -29,28 +29,19 @@ describe('HotWaterSettings driver branching', () => {
     expect(screen.getByDisplayValue('temps/hwBotTemp')).toBeInTheDocument()
   })
 
-  it('MQTT driver: water_heater_entity row hidden', () => {
-    render(
-      <HotWaterSettings
-        hwPlan="W"
-        hwTank={{ volume_litres: 200, target_temperature: 50, water_heater_entity: 'water_heater.hp' }}
-        driver="mqtt"
-        onRefetch={noop}
-      />
-    )
-    expect(screen.queryByText('Water Heater Entity')).toBeNull()
-  })
-
-  it('HA driver: water_heater_entity row visible', () => {
-    render(
-      <HotWaterSettings
-        hwPlan="W"
-        hwTank={{ volume_litres: 200, target_temperature: 50, water_heater_entity: 'water_heater.hp' }}
-        driver="ha"
-        onRefetch={noop}
-      />
-    )
-    expect(screen.getByText('Water Heater Entity')).toBeInTheDocument()
+  it('water_heater_entity control is not rendered in either driver mode (127B consolidation)', () => {
+    ;(['ha', 'mqtt'] as const).forEach((driver) => {
+      const { unmount } = render(
+        <HotWaterSettings
+          hwPlan="W"
+          hwTank={{ volume_litres: 200, target_temperature: 50, water_heater_entity: 'water_heater.hp' }}
+          driver={driver}
+          onRefetch={noop}
+        />
+      )
+      expect(screen.queryByLabelText(/water heater entity/i)).toBeNull()
+      unmount()
+    })
   })
 
   it('MQTT driver: schedule source hides HA entity option', () => {

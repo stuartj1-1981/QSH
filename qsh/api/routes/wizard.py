@@ -291,6 +291,19 @@ def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
         if "heat_pump" in eid_lower or "cylinder" in eid_lower or "dhw" in eid_lower:
             score += 10
 
+    elif slot == "hot_water_boolean":
+        if not (eid.startswith("binary_sensor.")
+                or eid.startswith("input_boolean.")
+                or eid.startswith("switch.")
+                or eid.startswith("climate.")):
+            return 0
+        score += 15
+        if "hot_water" in eid_lower or "dhw" in eid_lower \
+                or "tank" in eid_lower or "cylinder" in eid_lower:
+            score += 10
+        if "demand" in eid_lower or "boost" in eid_lower or "call" in eid_lower:
+            score += 5
+
     elif slot == "hw_tank_top":
         if not eid.startswith("sensor."):
             return 0
@@ -410,6 +423,7 @@ def scan_entities(req: EntityScanRequest = EntityScanRequest()):
         "battery_soc": _scan_for_slot(all_entities, "battery_soc"),
         "grid_power": _scan_for_slot(all_entities, "grid_power"),
         "water_heater": _scan_for_slot(all_entities, "water_heater"),
+        "hot_water_boolean": _scan_for_slot(all_entities, "hot_water_boolean"),
         "hw_tank_top": _scan_for_slot(all_entities, "hw_tank_top"),
         "hw_tank_bottom": _scan_for_slot(all_entities, "hw_tank_bottom"),
         "hw_schedule_entity": _scan_for_slot(all_entities, "hw_schedule_entity"),

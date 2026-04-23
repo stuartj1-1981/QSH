@@ -407,6 +407,40 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
         )}
       </div>
 
+      {/* Hot Water Signals — OR'd at the driver (see INSTRUCTION-126). */}
+      <div className="space-y-4">
+        <h3 className="text-sm font-medium text-[var(--text)]">Hot Water Signals</h3>
+        <div>
+          <TopicPicker
+            label="DHW Active (primary)"
+            value={getInputTopic('hot_water_active')}
+            format={inputs.hot_water_active?.format}
+            jsonPath={inputs.hot_water_active?.json_path}
+            onChange={(topic, fmt, jp) => updateInput('hot_water_active', topic, fmt, jp)}
+            scanResults={scanResults}
+          />
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            Writes to <code>mqtt.inputs.hot_water_active</code>. Accepts on / true / 1 / heat /
+            high_demand as ON. Live OFF payloads assert the liveness capability;
+            unavailable / unknown do not.
+          </p>
+        </div>
+        <div>
+          <TopicPicker
+            label="DHW Active Boolean (optional OR)"
+            value={getInputTopic('hot_water_boolean')}
+            format={inputs.hot_water_boolean?.format}
+            jsonPath={inputs.hot_water_boolean?.json_path}
+            onChange={(topic, fmt, jp) => updateInput('hot_water_boolean', topic, fmt, jp)}
+            scanResults={scanResults}
+          />
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            Writes to <code>mqtt.inputs.hot_water_boolean</code>. OR&apos;d with the primary.
+            Either ON ⇒ hot_water_active = True. Same payload semantics as the primary.
+          </p>
+        </div>
+      </div>
+
       {/* Solar & Battery */}
       <div className="space-y-4">
         <h3 className="text-sm font-medium text-[var(--text)]">Solar & Battery (optional)</h3>

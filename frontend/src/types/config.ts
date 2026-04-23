@@ -158,6 +158,7 @@ export interface HeatSourceYaml {
     return_temp?: string
     flow_rate?: string
     water_heater?: string
+    hot_water_boolean?: string
     pump_power?: string
   }
 }

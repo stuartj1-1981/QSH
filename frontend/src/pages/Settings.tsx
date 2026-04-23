@@ -129,6 +129,8 @@ export function Settings({ onRunWizard }: SettingsProps) {
             hwSchedule={data.hw_schedule}
             hwTank={data.hw_tank}
             hwPrecharge={data.hw_precharge}
+            heatSource={data.heat_source}
+            mqtt={data.mqtt}
             driver={driver}
             onRefetch={refetch}
           />

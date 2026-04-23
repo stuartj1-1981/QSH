@@ -8,7 +8,7 @@ import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { HelpTip } from '../HelpTip'
 import { HEAT_SOURCE } from '../../lib/helpText'
-import type { HeatSourceYaml, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
+import type { HeatSourceYaml, SourceSelectionYaml, QshConfigYaml, MqttConfig, MqttTopicInput, Driver } from '../../types/config'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
 
@@ -22,13 +22,17 @@ interface HeatSourceSettingsProps {
   onRefetch: () => void
 }
 
-export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, rootConfig, mqtt: _mqtt, driver, onRefetch }: HeatSourceSettingsProps) {
+export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, rootConfig, mqtt, driver, onRefetch }: HeatSourceSettingsProps) {
   const [hs, setHs] = useState<HeatSourceYaml>(heatSource)
+  const [mqttInputs, setMqttInputs] = useState<Record<string, MqttTopicInput>>(
+    mqtt?.inputs ?? {}
+  )
   const { patch, saving } = usePatchConfig()
   const [showSensors, setShowSensors] = useState(false)
   const [showFlowControl, setShowFlowControl] = useState(false)
 
   useEffect(() => { setHs(heatSource) }, [heatSource])
+  useEffect(() => { setMqttInputs(mqtt?.inputs ?? {}) }, [mqtt])
 
   const entityIds = useMemo(
     () => {
@@ -73,9 +77,33 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
     setHs(prev => ({ ...prev, sensors: { ...prev.sensors, [key]: value || undefined } }))
   }
 
+  const updateMqttInput = (key: string, topic: string) => {
+    setMqttInputs(prev => {
+      const next = { ...prev }
+      if (topic) {
+        next[key] = { topic, format: 'plain' }
+      } else {
+        delete next[key]
+      }
+      return next
+    })
+  }
+
   const save = async () => {
-    const result = await patch('heat_source', hs)
-    if (result) onRefetch()
+    const r1 = await patch('heat_source', hs)
+    if (!r1) return
+
+    if (driver === 'mqtt') {
+      // Full-section PATCH: _restore_redacted iterates incoming keys only,
+      // so the body MUST be the complete mqtt object. Redacted fields
+      // (password, etc.) arrive from the `mqtt` prop as ***REDACTED***
+      // and are restored server-side by _restore_redacted.
+      const mqttBody = { ...mqtt, inputs: mqttInputs }
+      const r2 = await patch('mqtt', mqttBody)
+      if (!r2) return
+    }
+
+    onRefetch()
   }
 
   const method = hs.flow_control?.method || 'ha_service'
@@ -476,7 +504,6 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
                   ['return_temp', 'Return Temperature', 'heat_pump/return_temp'],
                   ['flow_rate', 'Flow Rate', 'heat_pump/flow_rate'],
                   ['delta_t', 'Delta-T', 'heat_pump/delta_t'],
-                  ['water_heater', 'Water Heater', 'heat_pump/water_heater'],
                 ] as const).map(([key, label, placeholder]) => (
                   <TopicField
                     key={key}
@@ -486,6 +513,32 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
                     placeholder={placeholder}
                   />
                 ))}
+                {/* Hot Water Signals — MQTT (INSTRUCTION-127A) */}
+                <div className="pt-2 mt-2 border-t border-[var(--border)]">
+                  <p className="text-xs font-medium text-[var(--text-muted)] mb-2">
+                    Hot Water Signals
+                  </p>
+                  <TopicField
+                    label="DHW Active (primary)"
+                    value={mqttInputs.hot_water_active?.topic || ''}
+                    onChange={(v) => updateMqttInput('hot_water_active', v)}
+                    placeholder="heat_pump/dhw/active"
+                  />
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Writes to <code>mqtt.inputs.hot_water_active</code>. Accepts on / true / 1 /
+                    heat / high_demand as ON.
+                  </p>
+                  <TopicField
+                    label="DHW Active Boolean (optional OR)"
+                    value={mqttInputs.hot_water_boolean?.topic || ''}
+                    onChange={(v) => updateMqttInput('hot_water_boolean', v)}
+                    placeholder="heat_pump/dhw/demand_bool"
+                  />
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Writes to <code>mqtt.inputs.hot_water_boolean</code>. OR&apos;d with primary.
+                    Same payload semantics.
+                  </p>
+                </div>
               </>
             ) : (
               <>
