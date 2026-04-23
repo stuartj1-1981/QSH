@@ -12,6 +12,7 @@ from .integration import fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
 from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
 from ..resolve import resolve_value, deep_get
+from ..hot_water_payloads import classify_hot_water_payload
 
 
 # =========================================================================
@@ -595,11 +596,26 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.has_battery = energy_data["has_battery"]
 
     water_heater_entity = config["entities"].get("water_heater")
+    hw_boolean_entity = config["entities"].get("hot_water_boolean")
+
+    wh_value: Optional[bool] = None
+    wh_live: bool = False
+    bool_value: Optional[bool] = None
+    bool_live: bool = False
+
     if water_heater_entity:
-        hot_water_state = fetch_ha_entity(water_heater_entity, default="off")
-        data.hot_water_active = hot_water_state == "high_demand"
-    else:
-        data.hot_water_active = False
+        wh_raw = fetch_ha_entity(water_heater_entity, default=None)
+        wh_value, wh_live = classify_hot_water_payload(wh_raw)
+
+    if hw_boolean_entity:
+        bool_raw = fetch_ha_entity(hw_boolean_entity, default=None)
+        bool_value, bool_live = classify_hot_water_payload(bool_raw)
+
+    contributions = [v for v in (wh_value, bool_value) if v is not None]
+    data.hot_water_active = any(contributions) if contributions else False
+
+    if water_heater_entity or hw_boolean_entity:
+        data.has_live_hot_water = wh_live or bool_live
 
     data.stale_sensors = sensor_health.get_stale_sensors()
     data.stale_rooms = sensor_health.get_stale_rooms(config)

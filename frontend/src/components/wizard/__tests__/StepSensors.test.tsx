@@ -123,3 +123,63 @@ describe('StepReview — flow_rate summary row', () => {
     expect(screen.getByText(/Not configured \(capability fallback\)/i)).toBeDefined()
   })
 })
+
+/**
+ * INSTRUCTION-127A — MQTT Hot Water Signals section: DHW primary +
+ * secondary-OR TopicPickers render always-visible in StepSensors.MqttSensors,
+ * and editing dispatches onUpdate('mqtt', ...) preserving other inputs keys.
+ */
+describe('StepSensors — Hot Water Signals (INSTRUCTION-127A)', () => {
+  it('MQTT driver: DHW Active (primary) TopicPicker renders (not collapsed)', () => {
+    const config = {
+      driver: 'mqtt',
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByText('DHW Active (primary)')).toBeInTheDocument()
+    // YAML-key reference is rendered in the helper text via <code>.
+    expect(screen.getByText('mqtt.inputs.hot_water_active')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: DHW Active Boolean (optional OR) TopicPicker renders', () => {
+    const config = {
+      driver: 'mqtt',
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByText('DHW Active Boolean (optional OR)')).toBeInTheDocument()
+    const boolHelpers = screen.getAllByText(/OR'd with the primary/i)
+    expect(boolHelpers.length).toBeGreaterThan(0)
+  })
+
+  it('MQTT driver: typing the primary topic dispatches onUpdate(\'mqtt\', ...) preserving other inputs keys', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt',
+      mqtt: {
+        broker: 'localhost',
+        port: 1883,
+        inputs: {
+          outdoor_temp: { topic: 'sensors/outdoor_temp', format: 'plain' },
+        },
+      },
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+
+    // Find the primary DHW input by proximity to its label.
+    const label = screen.getByText('DHW Active (primary)')
+    const labelWrapper = label.closest('div')?.parentElement
+    expect(labelWrapper).not.toBeNull()
+    const input = labelWrapper!.querySelector('input[type="text"]') as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    fireEvent.change(input, { target: { value: 'heat_pump/dhw/active' } })
+
+    expect(onUpdate).toHaveBeenCalledWith('mqtt', expect.objectContaining({
+      inputs: expect.objectContaining({
+        outdoor_temp: expect.objectContaining({ topic: 'sensors/outdoor_temp' }),
+        hot_water_active: expect.objectContaining({ topic: 'heat_pump/dhw/active' }),
+      }),
+    }))
+  })
+})

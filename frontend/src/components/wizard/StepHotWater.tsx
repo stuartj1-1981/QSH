@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { useEntityScan } from '../../hooks/useEntityScan'
-import type { HwPlanType, HwScheduleYaml, HwTankYaml, HwPrechargeYaml, QshConfigYaml } from '../../types/config'
+import type { HwPlanType, HwScheduleYaml, HwTankYaml, HwPrechargeYaml, QshConfigYaml, HeatSourceYaml, MqttConfig } from '../../types/config'
 
 type ProbeConfig = 'none' | 'single' | 'dual'
 
@@ -266,23 +266,37 @@ export function StepHotWater({ config, onUpdate }: StepHotWaterProps) {
 
             {isMqtt ? (
               <TopicPicker
-                label="Water Heater State Topic"
-                value={hwTank.water_heater_entity || ''}
-                onChange={(v) =>
-                  onUpdate('hw_tank', { ...hwTank, water_heater_entity: v || undefined })
+                label="Hot Water Active (Boolean) Topic — optional, OR'd with water heater"
+                value={
+                  ((config.mqtt as MqttConfig | undefined)?.inputs?.hot_water_boolean as string | undefined) || ''
                 }
+                onChange={(v) => {
+                  const mqttCfg = (config.mqtt as MqttConfig | undefined) || ({} as MqttConfig)
+                  onUpdate('mqtt', {
+                    ...mqttCfg,
+                    inputs: { ...(mqttCfg.inputs || {}), hot_water_boolean: v || undefined },
+                  })
+                }}
               />
             ) : (
               <EntityPicker
-                slot="water_heater"
-                label="Water Heater Entity"
-                value={hwTank.water_heater_entity || ''}
-                onChange={(v) =>
-                  onUpdate('hw_tank', { ...hwTank, water_heater_entity: v || undefined })
-                }
-                candidates={candidates.water_heater || []}
+                slot="hot_water_boolean"
+                label="Hot Water Boolean (optional, OR'd with water heater)"
+                value={(config.heat_source as HeatSourceYaml | undefined)?.sensors?.hot_water_boolean || ''}
+                onChange={(v) => {
+                  const hs = (config.heat_source as HeatSourceYaml | undefined) || ({ type: 'heat_pump' } as HeatSourceYaml)
+                  onUpdate('heat_source', {
+                    ...hs,
+                    sensors: { ...(hs.sensors || {}), hot_water_boolean: v || undefined },
+                  })
+                }}
+                candidates={candidates.hot_water_boolean || []}
               />
             )}
+            <p className="text-xs text-[var(--text-muted)]">
+              Accepts any entity whose state is one of: on, true, 1, heat, high_demand.
+              Reports as live signal on ON or recognised OFF; unavailable/unknown do not assert liveness.
+            </p>
             {/* Temperature probes — adjustable 0/1/2 */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">

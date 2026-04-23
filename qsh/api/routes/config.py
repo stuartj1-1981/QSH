@@ -180,6 +180,7 @@ def patch_config_section(section: str, body: dict):
         "source_selection",
         "telemetry",
         "disclaimer_accepted",
+        "mqtt",
         "root",
     }
 

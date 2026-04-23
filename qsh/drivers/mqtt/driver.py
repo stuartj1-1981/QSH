@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ...signal_bus import InputBlock, OutputBlock
 from .client import MQTTClient, MQTTClientConfig
 from ..resolve import ResolvedValue, deep_get, _validate_range
+from ..hot_water_payloads import classify_hot_water_payload
 from .topic_map import (
     CAPABILITY_FIELDS,
     SYSTEM_INPUT_FIELDS,
@@ -411,6 +412,10 @@ class MQTTDriver:
         # System-level fields with defaults from InputBlock
         system_values: Dict[str, float] = {}
         hot_water_active: bool = False  # overridden below if the topic is configured and has a live payload
+        hw_active_value: Optional[bool] = None
+        hw_active_live: bool = False
+        hw_boolean_value: Optional[bool] = None
+        hw_boolean_live: bool = False
 
         if tm:
             staleness_defaults = tm.staleness_defaults
@@ -474,16 +479,20 @@ class MQTTDriver:
                     # Store in shadow dict, not InputBlock
                     self._shadow[mapping.field] = payload_str
                 elif mapping.field in SYSTEM_STRING_INPUT_FIELDS.values():
-                    # Boolean/enum payload — parse raw string, NOT through parse_payload.
-                    payload_normalised = payload_str.strip().lower()
+                    # Boolean/enum payload — parse via the shared three-valued
+                    # classifier. Capability flag is written once post-loop.
                     if mapping.field == "hot_water_active":
-                        if payload_normalised in _ON_PAYLOADS:
-                            hot_water_active = True
-                            capabilities["has_live_hot_water"] = True
-                        elif payload_normalised in _OFF_PAYLOADS:
-                            hot_water_active = False
-                            capabilities["has_live_hot_water"] = True
-                        # Anything else (garbage payload): leave at default False, no capability set
+                        val, live = classify_hot_water_payload(payload_str)
+                        if val is not None:
+                            hw_active_value = val
+                        if live:
+                            hw_active_live = True
+                    elif mapping.field == "hot_water_boolean":
+                        val, live = classify_hot_water_payload(payload_str)
+                        if val is not None:
+                            hw_boolean_value = val
+                        if live:
+                            hw_boolean_live = True
                 elif value is not None:
                     _system_value_candidates.setdefault(mapping.field, []).append(
                         (value, quality, mapping)
@@ -548,6 +557,17 @@ class MQTTDriver:
 
         else:
             pass  # away/control resolved below via _resolve_mqtt_control
+
+        # ── OR resolution for DHW demand (INSTRUCTION-126) ─────────────
+        # hot_water_active is True iff at least one configured source
+        # returned an ON-set payload. has_live_hot_water is asserted iff
+        # at least one source produced an ON or LIVE-OFF reading —
+        # UNAVAILABLE and UNRECOGNISED do not count. Single-sited write.
+        _hw_contributions = [v for v in (hw_active_value, hw_boolean_value) if v is not None]
+        if _hw_contributions:
+            hot_water_active = any(_hw_contributions)
+        if hw_active_live or hw_boolean_live:
+            capabilities["has_live_hot_water"] = True
 
         # ── Check delta_t capability (derived from return temp + flow temp) ──
         has_live_flow = capabilities.get("has_live_flow", False)
