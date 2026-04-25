@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 import time as _time
 
-from ...telemetry import CloudFlareTransport, DEFAULT_ENDPOINT
+from ...paths import YAML_PATH
 
 try:
     import paho.mqtt.client as _paho_mqtt
@@ -34,8 +34,6 @@ def _get_ha_headers():
     url = "http://supervisor/core"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     return url, token, headers
-
-YAML_PATH = "/config/qsh.yaml"  # Primary write path (addon_config:rw mount)
 
 
 # ── Pydantic models ──
@@ -1030,31 +1028,12 @@ def deploy_config(req: WizardDeployRequest):
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
-    # ── Telemetry registration (best-effort, single write-back for api_token) ──
-    if telemetry_cfg.get("agreed"):
-        install_id = telemetry_cfg["install_id"]
-        region = telemetry_cfg.get("region", "")
-        try:
-            endpoint = telemetry_cfg.get("endpoint", DEFAULT_ENDPOINT)
-            transport = CloudFlareTransport(endpoint)
-            api_token = transport.register(install_id, region)
-
-            if api_token:
-                # Single read-modify-write for api_token only
-                try:
-                    with open(YAML_PATH, "r") as f:
-                        written_config = yaml.safe_load(f) or {}
-                    written_config.setdefault("telemetry", {})["api_token"] = api_token
-                    yaml_out = yaml.dump(written_config, default_flow_style=False,
-                                          allow_unicode=True, sort_keys=False)
-                    with open(YAML_PATH, "w") as f:
-                        f.write(header + yaml_out)
-                    logger.info("Wizard: telemetry registered (token received)")
-                except Exception as e:
-                    logger.warning("Wizard: failed to write api_token: %s", e)
-        except Exception as e:
-            # Registration failure is non-fatal — will retry on startup
-            logger.warning("Wizard: telemetry registration failed: %s — will retry on startup", e)
+    # Telemetry registration is intentionally NOT triggered here.
+    # TelemetryService is the sole owner of the api_token lifecycle (set on
+    # successful /register inside _push_worker, cleared on AUTH_FAILED). Calling
+    # register() from the wizard before the pipeline runs creates "probe"
+    # installs that hit the backend but never produce a real payload — see
+    # INSTRUCTION-130 Cohort 1 for the failure mode this delete eliminates.
 
     # 3. Signal restart and force process exit
     #    In normal operation the main loop picks up the restart flag within 30s.
