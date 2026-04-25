@@ -3,8 +3,6 @@
 import copy
 import logging
 import os
-import tempfile
-import threading
 import yaml
 from typing import Callable
 
@@ -13,13 +11,20 @@ from pydantic import BaseModel
 
 from ..state import shared_state
 
-_yaml_lock = threading.Lock()
+# YAML I/O primitives live in qsh.config_io so non-HTTP modules can update
+# qsh.yaml without importing from this routes package (INSTRUCTION-130 Task 0).
+# Re-exported under their original underscore-private names so existing internal
+# call sites — and test patches at @patch("qsh.api.routes.config._atomic_write_yaml")
+# — continue to work unchanged.
+from qsh.config_io import (
+    yaml_lock as _yaml_lock,
+    atomic_write_yaml as _atomic_write_yaml,
+)
+from qsh.paths import YAML_PATH
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-YAML_PATH = "/config/qsh.yaml"
 
 YAML_SEARCH_PATHS = [
     "/config/qsh.yaml",
@@ -57,50 +62,26 @@ def _load_raw_yaml():
         return None
 
 
-def _atomic_write_yaml(data: dict, path: str) -> None:
-    """Write YAML atomically via temp-file-then-rename. MUST only be called under _yaml_lock.
-
-    mkstemp in same dir ensures os.replace is same-filesystem (atomic on POSIX).
-    """
-    yaml_content = yaml.dump(
-        data, default_flow_style=False, allow_unicode=True, sort_keys=False
-    )
-    dir_name = os.path.dirname(path)
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".yaml.tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(yaml_content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
 def _read_modify_write(transform: Callable[[dict], dict]) -> dict:
-    """Thread-safe config update: load -> transform -> atomic save.
+    """Thread-safe config update for HTTP route callers.
 
-    The transform function receives the current config dict and returns
-    the modified dict (or the same dict mutated in place). The entire
-    load-transform-save cycle runs under _yaml_lock — no caller can
-    interleave.
+    Resolves the YAML path via the search-list (the alpha-install backwards-
+    compat affordance) and uses the local _load_raw_yaml / _atomic_write_yaml
+    references — both are patchable for tests at qsh.api.routes.config.
 
-    Returns the transformed config dict.
+    Non-HTTP callers should use qsh.config_io.read_modify_write, which resolves
+    directly against qsh.paths.YAML_PATH and skips the search list.
     """
     path = _find_yaml_path()
     with _yaml_lock:
         raw = _load_raw_yaml()
-        # Guard: if load failed but file exists with content, something is wrong
         if raw is None and os.path.isfile(path) and os.path.getsize(path) > 0:
             raise RuntimeError(
                 f"Config file {path} exists ({os.path.getsize(path)} bytes) "
                 f"but _load_raw_yaml returned None — refusing to overwrite"
             )
         if raw is None:
-            raw = {}  # File doesn't exist or is empty — start fresh
+            raw = {}
         result = transform(raw)
         _atomic_write_yaml(result, path)
     return result
