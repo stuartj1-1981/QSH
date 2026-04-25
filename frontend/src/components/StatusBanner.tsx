@@ -84,14 +84,30 @@ export const StatusBanner = memo(function StatusBanner({
   const perfLabel = isHeatPump
     ? `COP ${heatSource.performance.value.toFixed(1)}`
     : `η ${heatSource.performance.value.toFixed(2)}`
-  // INSTRUCTION-119 Task 6: COP label displays only when performance is
-  // live-sourced on HP installs. `performance.source === "config"` flags the
-  // sensor-loss fallback baseline (2.5 on HP) — a degraded state that must
-  // not render as a live-COP-style label. Boiler installs keep the existing
-  // value > 0 gate (η is always config-sourced per the resolver contract).
+  // INSTRUCTION-128B: performance label gate is source-type-aware.
+  // HP: label is meaningful only when `performance.source === 'live'` —
+  //   post-INSTRUCTION-128A backend fix, the resolver correctly emits
+  //   "config" for HP-off and sensor-loss-fallback states, and the
+  //   frontend trusts that provenance.
+  // Boiler: η is always `'config'`-sourced per the resolver contract
+  //   (it's a config constant, not measured). The useful gate is
+  //   "boiler is actually running" — input_power above the off
+  //   threshold (0.5 kW per source_capabilities.ts / caps registry).
+  //   Without this gate the label renders continuously including when
+  //   the boiler is idle, which is semantically wrong and identical in
+  //   spirit to the HP bug closed by 128A Finding 1.
+  // Canonical home for this threshold is
+  // qsh/pipeline/source_capabilities.py::SOURCE_CAPABILITIES["gas_boiler"]
+  // .off_power_threshold_kw (and the three other boiler source types,
+  // all 0.5). Duplicated here because the frontend has no shared-consts
+  // module with the backend. Also duplicated at qsh/historian.py (per
+  // INSTRUCTION-128A Task 3). If this value ever changes, grep for
+  // "off_power_threshold_kw" and update all three sites.
+  const BOILER_OFF_THRESHOLD_KW = 0.5
   const showPerfLabel = isHeatPump
     ? heatSource.performance.source === 'live'
     : heatSource.performance.value > 0
+      && heatSource.input_power_kw >= BOILER_OFF_THRESHOLD_KW
 
   return (
     <>

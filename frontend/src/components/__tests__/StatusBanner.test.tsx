@@ -236,3 +236,114 @@ describe('StatusBanner HP COP gate and off-state rendering', () => {
     expect(screen.queryByText(/COP/)).toBeNull()
   })
 })
+
+describe('StatusBanner performance label gating', () => {
+  const hpBaseProps = {
+    ...baseProps,
+    heatSource: {
+      ...baseProps.heatSource,
+      type: 'heat_pump' as const,
+    },
+  }
+
+  const boilerBaseProps = {
+    ...baseProps,
+    heatSource: {
+      type: 'gas_boiler' as const,
+      input_power_kw: 8.0,
+      thermal_output_kw: 6.8,
+      thermal_output_source: 'computed' as const,
+      performance: { value: 0.85, source: 'config' as const },
+      flow_temp: 65,
+      return_temp: 50,
+      delta_t: 15,
+      flow_rate: 0.4,
+    },
+  }
+
+  it('HP running live: renders COP label', () => {
+    render(
+      <StatusBanner
+        {...hpBaseProps}
+        heatSource={{
+          ...hpBaseProps.heatSource,
+          input_power_kw: 2.1,
+          performance: { value: 3.6, source: 'live' },
+        }}
+      />
+    )
+    expect(screen.getByText(/COP 3\.6/)).toBeDefined()
+  })
+
+  it('HP off (post-128A fix): suppresses COP label', () => {
+    render(
+      <StatusBanner
+        {...hpBaseProps}
+        heatSource={{
+          ...hpBaseProps.heatSource,
+          input_power_kw: 0.0,
+          performance: { value: 2.5, source: 'config' },
+        }}
+      />
+    )
+    expect(screen.queryByText(/COP/)).toBeNull()
+  })
+
+  it('HP sensor-loss fallback: suppresses COP label', () => {
+    render(
+      <StatusBanner
+        {...hpBaseProps}
+        heatSource={{
+          ...hpBaseProps.heatSource,
+          input_power_kw: 2.1,
+          performance: { value: 2.5, source: 'config' },
+        }}
+      />
+    )
+    expect(screen.queryByText(/COP/)).toBeNull()
+  })
+
+  it('Boiler running: renders η label', () => {
+    render(<StatusBanner {...boilerBaseProps} />)
+    expect(screen.getByText(/η 0\.85/)).toBeDefined()
+  })
+
+  it('Boiler off (input below 0.5 kW threshold): suppresses η label — 128B Finding 4', () => {
+    render(
+      <StatusBanner
+        {...boilerBaseProps}
+        heatSource={{
+          ...boilerBaseProps.heatSource,
+          input_power_kw: 0.0,
+        }}
+      />
+    )
+    expect(screen.queryByText(/η/)).toBeNull()
+  })
+
+  it('Boiler just above off threshold (0.5 kW): renders η label', () => {
+    render(
+      <StatusBanner
+        {...boilerBaseProps}
+        heatSource={{
+          ...boilerBaseProps.heatSource,
+          input_power_kw: 0.5,
+        }}
+      />
+    )
+    expect(screen.getByText(/η 0\.85/)).toBeDefined()
+  })
+
+  it('Boiler just below off threshold (0.49 kW): suppresses η label', () => {
+    render(
+      <StatusBanner
+        {...boilerBaseProps}
+        heatSource={{
+          ...boilerBaseProps.heatSource,
+          input_power_kw: 0.49,
+        }}
+      />
+    )
+    expect(screen.queryByText(/η/)).toBeNull()
+  })
+})

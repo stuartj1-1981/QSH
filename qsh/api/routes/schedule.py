@@ -150,6 +150,71 @@ def _internal_to_week_schedule(internal) -> dict:
     return {day: list(blocks) for day in ALL_DAYS}
 
 
+def _room_occupancy_sensor_descriptor(
+    config: dict, room: str
+) -> tuple[bool, str | None]:
+    """Return (has_sensor, sensor_entity_or_topic) for a room.
+
+    Driver-agnostic. Recognises both:
+      • HA driver:   top-level config['room_occupancy_sensors'][room]
+                     (string entity_id, or {'entity': '...'} dict)
+      • MQTT driver: config['room_mqtt_topics'][room]['occupancy_sensor']
+                     (post-loaded canonical shape — qsh/config.py:1028
+                     extracts inline `rooms.<room>.mqtt_topics` from yaml
+                     into this top-level mapping; consumed by
+                     qsh/drivers/mqtt/topic_map.py:496);
+                     also tolerates the inline yaml shape
+                     config['rooms'][room]['mqtt_topics']['occupancy_sensor']
+                     for tests / pre-load callers.
+                     (string topic, or mapping dict with 'topic'/'raw' keys)
+
+    Precedence (locked in by tests in this instruction): when both sources
+    declare the same room — a partially-migrated install — the HA path wins
+    to preserve historic behaviour. Falsy HA entries (empty string, None,
+    {'entity': None}, {}) fall through to the MQTT path so a half-edited
+    HA stub does not mask a live MQTT topic.
+
+    For an MQTT mapping dict missing both 'topic' and 'raw' keys, the
+    sensor is still considered declared but the entity label is reported
+    as None — config-validation should normally prevent this shape.
+
+    Returns (False, None) when neither source declares a sensor for the room.
+    """
+    # HA-style: top-level mapping written by qsh/drivers/ha/driver.py.
+    ha_map = config.get("room_occupancy_sensors", {}) or {}
+    ha_cfg = ha_map.get(room)
+    if ha_cfg:
+        if isinstance(ha_cfg, dict):
+            entity = ha_cfg.get("entity")
+            if entity:
+                return True, entity
+            # falsy entity → fall through to MQTT path
+        else:
+            return True, str(ha_cfg)
+
+    # MQTT-style: post-loaded canonical location is config['room_mqtt_topics'].
+    # Fall back to the inline yaml shape config['rooms'][room]['mqtt_topics']
+    # in case a caller passes pre-load data (e.g. a test fixture).
+    mqtt_topics = (config.get("room_mqtt_topics", {}) or {}).get(room) or {}
+    if not isinstance(mqtt_topics, dict):
+        mqtt_topics = {}
+    if "occupancy_sensor" not in mqtt_topics:
+        room_cfg = (config.get("rooms", {}) or {}).get(room)
+        if isinstance(room_cfg, dict):
+            inline = room_cfg.get("mqtt_topics", {}) or {}
+            if isinstance(inline, dict):
+                mqtt_topics = inline
+
+    occ = mqtt_topics.get("occupancy_sensor")
+    if occ:
+        if isinstance(occ, dict):
+            label = occ.get("topic") or occ.get("raw")
+            return True, (str(label) if label else None)
+        return True, str(occ)
+
+    return False, None
+
+
 # ── Routes ──
 
 
@@ -167,7 +232,6 @@ def get_all_schedules():
     all_rooms = store.get_all()
     rooms_in_config = list(config.get("rooms", {}).keys())
     snap = shared_state.get_snapshot()
-    occupancy_sensors = config.get("room_occupancy_sensors", {})
 
     result = {}
     for room in rooms_in_config:
@@ -187,11 +251,7 @@ def get_all_schedules():
             room_data = snap.rooms.get(room, {})
             current_state = room_data.get("occupancy", "occupied")
 
-        has_sensor = room in occupancy_sensors
-        sensor_entity = None
-        if has_sensor:
-            sensor_cfg = occupancy_sensors[room]
-            sensor_entity = sensor_cfg.get("entity") if isinstance(sensor_cfg, dict) else sensor_cfg
+        has_sensor, sensor_entity = _room_occupancy_sensor_descriptor(config, room)
 
         result[room] = {
             "enabled": enabled,
