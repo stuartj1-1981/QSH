@@ -2,10 +2,12 @@
 0eecc180d8303b00988661472de60869944e89299abcc07e22ca7f71900ad93e  ./pipeline/controllers/valve_controller.cpython-312-x86_64-linux-gnu.so
 0fe5fbe01e2322db089a27e4e6f57fa03f11954322002e0e81ac8b6a551f7ad9  ./pipeline/controllers/thermal_controller.cpython-312-x86_64-linux-gnu.so
 150f847695aaa327a8fb7cc280706f807c19bd6bbb7d1b8d428402639e5ca67d  ./pipeline/controllers/shadow_controller.cpython-312-aarch64-linux-gnu.so
+1679c78164858d0218fab8182f253302c615c79d29ffb4dca4bfbdd6afc8321e  ./config_io.cpython-312-x86_64-linux-gnu.so
 1b26fa7e6d72bc1bd3f7e16b1de5d51b19daa109dcf43057c694b38b3d1111b2  ./telemetry.cpython-312-aarch64-linux-gnu.so
 1ff3e8ff528e3483fa2c7c9daaaee82f4ceb4f0542dced485995121777c880cd  ./pipeline/controllers/cost_controller.cpython-312-aarch64-linux-gnu.so
 203af4768f2b5e05ae6ce4b650ee4d22ad649e541e9b56a4d2984829494a70b9  ./pipeline/controllers/shoulder_controller.cpython-312-aarch64-linux-gnu.so
 20ddfe6ee0891c39a284ddb28f8c0ede75a9790973fb5a00265517efaed9a259  ./cycle_detection.cpython-312-x86_64-linux-gnu.so
+216a2a85a9fc3ac1b42f3ad63d6f16ddac0c75c32b92959e42a234894b0ee63b  ./config_io.cpython-312-aarch64-linux-gnu.so
 237a88d987487748fcb6b9c41b79ec4364ab377c4fc329cba5f89e128eaa4d39  ./config.cpython-312-aarch64-linux-gnu.so
 288083649835641ae742d1d4d7c1dad30bf58437530ea1cc48e6ce74ff633143  ./pipeline/controllers/boost_controller.cpython-312-x86_64-linux-gnu.so
 290f4277a2bb89f80204a354d0a1090567fe4809dd3b6d080607d080432d50da  ./pipeline/controllers/antifrost_override.cpython-312-x86_64-linux-gnu.so
