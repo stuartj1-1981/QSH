@@ -2,6 +2,127 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.7] — 2026-04-25
+
+### Fixed
+- Telemetry: fail-silently scenario corrected so transient telemetry errors no longer surface as user-visible failures
+
+## [1.2.6] — 2026-04-25
+
+### Fixed
+- Font and backend fixes for MQTT installs
+
+## [1.2.5] — 2026-04-23
+
+### Changed
+- Hot Water cycle detection sensor can now be a boolean
+
+## [1.2.4] — 2026-04-22
+
+### Fixed
+- MQTT: stub fix
+- Mode: restart persistence improvement
+- Historian: mode fix
+
+## [1.2.3] — 2026-04-22
+
+### Changed
+- Split Building Layout save into separate **Save** and **Save & Apply** buttons so edits can be captured without triggering an immediate add-on restart
+
+### Fixed
+- Auto-symmetry conflict that wrongly blocked multiple rooms from sharing the same floor/ceiling boundary (issues #29, #30)
+
+## [1.2.2] — 2026-04-21
+
+### Changed
+- Octopus Energy API hardening; back end overhaul
+- Gas/LPG heat source UX improvements
+
+## [1.2.1] — 2026-04-19
+
+### Fixed
+- UX: fix to building layout
+- MQTT: persistence fix on addition of sensors
+
+## [1.2.0] — 2026-04-18
+
+### Added
+- Room topology configuration: new configuration page in settings to define adjacent rooms
+
+## [1.1.16] — 2026-04-16
+
+### Changed
+- Improved MQTT signal quality reporting for multi-source devices (best-of resolution)
+- Tariff rate display now matches Octopus 2dp precision
+
+## [1.1.15] — 2026-04-16
+
+### Changed
+- MQTT driver now persists previous mode and comfort temperature across restarts
+- Minor UX polish and MQTT outdoor-temp validation
+
+## [1.1.14] — 2026-04-16
+
+### Changed
+- Telemetry cadence improvements
+- MQTT signal quality improvements
+- UX improvements
+
+## [1.1.13] — 2026-04-15
+
+### Changed
+- MQTT driver hardening
+- UX: MQTT fixes
+
+## [1.1.12] — 2026-04-15
+
+### Changed
+- MQTT: logging and staleness optimisation
+- UX: minor graphic improvements
+
+## [1.1.11] — 2026-04-14
+
+### Fixed
+- MQTT variant fixes
+- Telemetry send optimised
+
+## [1.1.10] — 2026-04-13
+
+### Changed
+- Web UX rebuild for MQTT variant
+
+## [1.1.9] — 2026-04-13
+
+### Fixed
+- MQTT driver fix
+
+## [1.1.8] — 2026-04-13
+
+### Fixed
+- Concurrent config write race condition
+- Telemetry endpoints
+
+## [1.1.7] — 2026-04-13
+
+### Fixed
+- Prevent system crash if MQTT (standalone) is not available on startup
+
+## [1.1.6] — 2026-04-12
+
+### Added
+- Option to use backup in Wizard
+
+## [1.1.5] — 2026-04-12
+
+### Fixed
+- Release-sync regressions
+- `__main__.py` fix
+
+## [1.1.4] — 2026-04-12
+
+### Fixed
+- Restore of existing configuration
+
 ## [1.1.3] — 2026-04-12
 
 ### Fixed
