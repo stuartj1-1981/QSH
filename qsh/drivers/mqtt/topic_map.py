@@ -1,7 +1,7 @@
 """Topic ↔ InputBlock/OutputBlock field mapping for the MQTT driver.
 
 Builds subscription lists and field mappings from QSH config.
-Handles plain numeric and JSON payload parsing.
+Handles plain and JSON payload parsing for both numeric and string fields.
 """
 
 from __future__ import annotations
@@ -161,6 +161,33 @@ def parse_payload(payload_str: str, fmt: str = "plain", json_path: Optional[str]
             return float(payload_str)
         except (ValueError, TypeError):
             return None
+
+
+def parse_payload_string(
+    payload_str: Optional[str],
+    fmt: str = "plain",
+    json_path: Optional[str] = None,
+) -> Optional[str]:
+    """Parse MQTT payload to a string, honouring format/json_path.
+
+    Plain: returns payload_str unchanged. Caller is responsible for
+        any case-folding or whitespace normalisation appropriate to the
+        downstream classifier.
+    JSON:  extracts the leaf at json_path via extract_json_value(...),
+        then str()-coerces the result. Returns None if the JSON cannot
+        be parsed or the path does not resolve.
+
+    Mirrors parse_payload (numeric) so string and numeric fields share
+    identical format/json_path semantics. Contract: never raises.
+    """
+    if payload_str is None:
+        return None
+    if fmt == "json" and json_path:
+        leaf = extract_json_value(payload_str, json_path)
+        if leaf is None:
+            return None
+        return str(leaf)
+    return payload_str
 
 
 def parse_payload_str(payload_str: str) -> str:
@@ -535,7 +562,8 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                     topic=_prefixed(prefix, raw),
                     field="occupancy_sensor",
                     room=room,
-                    payload_format="plain",
+                    payload_format=fmt,
+                    json_path=jp,
                     category=cat or infer_category("occupancy_sensor", "occupancy_sensor"),
                     availability=avail,
                     last_seen=ls,
