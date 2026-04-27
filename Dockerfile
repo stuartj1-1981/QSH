@@ -98,18 +98,58 @@ RUN test -d /app/qsh/drivers && \
     test "$LEAKED" -eq 0 && \
     echo "IP boundary assertion PASS (${SO_COUNT} .so files, zero leakage)"
 
-# --- T-13 production-layout import smoke test (build-time gate) ---
-# Verifies the per-submodule .so files import correctly on this platform.
-# A bad image never reaches the registry — this RUN fails the build.
+EXPOSE 9100
+CMD ["python", "-m", "qsh"]
+
+# --- Stage 3: validate (T-23 / T-24 deep import + boot-and-probe) ---
+# This stage is gating-only. Filesystem mutations (template YAML write,
+# /tmp state, ports bound) DO NOT propagate to the runtime image.
+# Build invocation must use --target validate to gate; the published image
+# is the `runtime` stage. See scripts/release/RELEASE-RUNBOOK.md Step 3.5.
+FROM runtime AS validate
+
+# Allow override for QEMU/ARM cold-boot under buildx (V2 Finding 10).
+ARG QSH_HEALTH_PROBE_TIMEOUT_S=60
+ENV QSH_HEALTH_PROBE_TIMEOUT_S=${QSH_HEALTH_PROBE_TIMEOUT_S}
+
+# Check A — deep import smoke. Imports qsh.config_io directly (the load-bearing
+# line — see INSTRUCTION-132 V2 Finding HIGH-1) and qsh.api.server, qsh.main,
+# qsh.telemetry. Importing start_api_server transitively loads every route
+# module via server.py line 15's `from .routes import ...` — V2 Finding 7
+# eliminated the previously-redundant explicit route-import line.
 RUN python -c "\
-import qsh; \
+import qsh.config_io; \
+from qsh.api.server import start_api_server; \
+import qsh.main; \
+import qsh.telemetry; \
 from qsh.sysid import SystemIdentifier; \
 from qsh.control import determine_hp_mode; \
 import qsh.pipeline; \
 import qsh.occupancy; \
 import qsh.drivers; \
-import qsh.api; \
-print('T-13 production-layout import smoke test PASS')"
+print('T-23 / T-24 Check A deep import smoke PASS')"
 
-EXPOSE 9100
-CMD ["python", "-m", "qsh"]
+# Check B — boot-and-probe. Boots `python -m qsh` (which takes the template-mode
+# branch in main.py line 206 because no /config/qsh.yaml exists in the build
+# container) and probes /api/health via urllib (no curl, no apt — V2 Finding 2).
+# urlopen raises on non-2xx; success exits 0; timeout exits 1.
+#
+# Port 9100 collision (V2 Finding 9): buildx allocates a fresh network namespace
+# per build step; 127.0.0.1:9100 inside this container does NOT share state with
+# the host or with concurrent buildx invocations. Bind is local-only and isolated.
+RUN set -eu && \
+    python -m qsh & \
+    QSH_PID=$! && \
+    DEADLINE=$(($(date +%s) + QSH_HEALTH_PROBE_TIMEOUT_S)) && \
+    while [ $(date +%s) -lt $DEADLINE ]; do \
+        sleep 1; \
+        if python -c "import urllib.request, sys; urllib.request.urlopen('http://127.0.0.1:9100/api/health', timeout=2).read(); sys.exit(0)" 2>/dev/null; then \
+            ELAPSED=$((QSH_HEALTH_PROBE_TIMEOUT_S - (DEADLINE - $(date +%s)))); \
+            echo "T-24 Check B boot-and-probe smoke PASS (after ${ELAPSED}s)"; \
+            kill $QSH_PID 2>/dev/null; wait $QSH_PID 2>/dev/null || true; \
+            exit 0; \
+        fi; \
+    done; \
+    echo "T-24 Check B boot-and-probe smoke FAIL — /api/health did not respond within ${QSH_HEALTH_PROBE_TIMEOUT_S}s" >&2; \
+    kill $QSH_PID 2>/dev/null || true; \
+    exit 1

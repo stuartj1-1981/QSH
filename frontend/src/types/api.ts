@@ -135,6 +135,11 @@ export interface StatusResponse {
   source_selection?: SourceSelectionState
   migration_pending?: boolean
   driver?: DriverStatus
+  // INSTRUCTION-135: true when qsh.config.CONFIG_IS_TEMPLATE is set
+  // (placeholder qsh.yaml — wizard incomplete). Optional during the rollout
+  // window only; once 134 + 135 ship through one release cycle this should
+  // be flipped to required (V1 Finding 7 follow-up).
+  setup_mode?: boolean
 }
 
 export interface RoomsResponse {
