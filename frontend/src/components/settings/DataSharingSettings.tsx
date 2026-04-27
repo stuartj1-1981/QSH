@@ -248,7 +248,7 @@ export function DataSharingSettings({
 
       {/* Privacy policy link */}
       <a
-        href="https://github.com/stuartj1-1981/Quantum-Swarm-Heating/blob/main/docs/privacy.md"
+        href="https://github.com/stuartj1-1981/QSH/blob/main/docs/privacy.md"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-block text-xs text-[var(--accent)] hover:underline"

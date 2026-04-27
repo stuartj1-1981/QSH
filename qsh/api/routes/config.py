@@ -87,7 +87,7 @@ def _read_modify_write(transform: Callable[[dict], dict]) -> dict:
     return result
 
 
-def _restore_redacted(existing: dict, incoming: dict) -> dict:
+def restore_redacted(existing: dict, incoming: dict) -> dict:
     """Full-section overwrite with redacted field restoration.
 
     The incoming dict is the complete section as the UI intends it.
@@ -100,7 +100,7 @@ def _restore_redacted(existing: dict, incoming: dict) -> dict:
         if value == REDACTED_SENTINEL and key in existing:
             result[key] = existing[key]
         elif isinstance(value, dict) and isinstance(existing.get(key), dict):
-            result[key] = _restore_redacted(existing[key], value)
+            result[key] = restore_redacted(existing[key], value)
         else:
             result[key] = value
     return result
@@ -208,7 +208,7 @@ def patch_config_section(section: str, body: dict):
         existing_section = raw.get(section, {})
         # Restore redacted fields so secrets aren't overwritten with the sentinel
         if isinstance(existing_section, dict) and isinstance(incoming, dict):
-            raw[section] = _restore_redacted(existing_section, incoming)
+            raw[section] = restore_redacted(existing_section, incoming)
         else:
             raw[section] = incoming
         return raw

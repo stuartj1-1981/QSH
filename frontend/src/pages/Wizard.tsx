@@ -26,7 +26,7 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
   const handleNext = async () => {
     if (wizard.stepName === 'review') {
       const result = await wizard.deploy()
-      if (result?.deployed) {
+      if (result && 'deployed' in result && result.deployed) {
         // Redirect to home after a brief delay to show success
         setTimeout(() => onComplete(), 3000)
       }
@@ -134,6 +134,7 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
             validationWarnings={wizard.validationWarnings}
             isDeploying={wizard.isDeploying}
             onDeploy={wizard.deploy}
+            onForceDeploy={wizard.forceDeploy}
           />
         )
     }

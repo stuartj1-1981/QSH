@@ -380,6 +380,22 @@ export interface DeployResponse {
   warnings: string[]
 }
 
+/** 409 destructive-deploy refusal — wizard config would remove top-level
+ *  sections from the on-disk YAML. Surface a Force Deploy affordance.
+ *  See INSTRUCTION-137 Task 3. */
+export interface DestructiveDeployError {
+  kind: 'destructive'
+  removed_sections: string[]
+  existing_sections: string[]
+  incoming_sections: string[]
+}
+
+export function isDestructiveDeployError(
+  v: DeployResponse | DestructiveDeployError | null
+): v is DestructiveDeployError {
+  return !!v && (v as DestructiveDeployError).kind === 'destructive'
+}
+
 /** Response from POST /api/wizard/test-octopus (INSTRUCTION-90E direction filter). */
 export interface OctopusTestResponse {
   success: boolean

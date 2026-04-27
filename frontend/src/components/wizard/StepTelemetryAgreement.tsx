@@ -150,7 +150,7 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
 
       {/* Privacy policy link */}
       <a
-        href="https://github.com/stuarthunt/quantum-swarm-heating/blob/main/docs/privacy.md"
+        href="https://github.com/stuartj1-1981/QSH/blob/main/docs/privacy.md"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-block text-xs text-[var(--accent)] hover:underline"

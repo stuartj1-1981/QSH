@@ -7,11 +7,20 @@ Uses an asyncio.Event-based broadcast pattern:
 
 No per-connection polling. Clients receive data within milliseconds of
 the pipeline completing a cycle.
+
+The uvicorn loop reference is captured by the first WebSocket handler to run
+(`_ensure_initialised`). `notify_clients()` is callable from any thread and
+uses that captured reference — `asyncio.get_event_loop()` is **not** safe
+here because the pipeline thread has no running loop on Python 3.11+.
+
+`_loop` and `_cycle_event` are written once and read many. Concurrent first-
+connect coroutines on the same loop write identical values; CPython's GIL
+makes the idempotent first-write safe without explicit locking.
 """
 
 import asyncio
 import logging
-from typing import Set
+from typing import Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -23,30 +32,39 @@ router = APIRouter()
 
 # Broadcast infrastructure
 _clients: Set[WebSocket] = set()
-_cycle_event: asyncio.Event = None  # Created lazily in the uvicorn event loop
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_cycle_event: Optional[asyncio.Event] = None
 
 
-def _get_event() -> asyncio.Event:
-    """Get or create the broadcast event (must be called from the asyncio loop)."""
-    global _cycle_event
+def _ensure_initialised() -> asyncio.Event:
+    """Initialise the broadcast loop and event the first time a WS client connects.
+
+    Must be called from inside the WebSocket handler — i.e. from a coroutine
+    running on the uvicorn loop. asyncio.get_running_loop() is the supported
+    cross-version way to obtain that loop reference.
+    """
+    global _loop, _cycle_event
+    if _loop is None:
+        _loop = asyncio.get_running_loop()
     if _cycle_event is None:
         _cycle_event = asyncio.Event()
     return _cycle_event
 
 
-def notify_clients():
+def notify_clients() -> None:
     """Called from the pipeline thread after SharedState.update().
 
-    Thread-safe: uses call_soon_threadsafe to set the event in the
-    uvicorn asyncio loop.
+    Thread-safe. Uses the loop reference captured by the first WebSocket
+    handler — this avoids asyncio.get_event_loop() returning a non-running
+    loop (or raising RuntimeError) when called from the main thread on
+    Python 3.11+.
     """
-    if _cycle_event is None:
-        return  # No event loop yet (no clients have connected)
+    if _loop is None or _cycle_event is None:
+        return  # No client has connected yet — nothing to notify.
     try:
-        loop = asyncio.get_event_loop()
-        loop.call_soon_threadsafe(_cycle_event.set)
+        _loop.call_soon_threadsafe(_cycle_event.set)
     except RuntimeError:
-        pass  # No running loop (shutdown race)
+        pass  # Loop stopped during shutdown.
 
 
 @router.websocket("/ws/live")
@@ -54,7 +72,7 @@ async def websocket_live(ws: WebSocket):
     """Push cycle snapshot to client whenever the pipeline completes a cycle."""
     await ws.accept()
     _clients.add(ws)
-    event = _get_event()
+    event = _ensure_initialised()
     logger.info("WebSocket client connected (%d total)", len(_clients))
 
     try:
