@@ -2,12 +2,23 @@ import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { RoomState, DriverStatus, HeatSourceState } from '../types/api'
+import type { Page } from '../App'
 import { EntityValue } from './EntityValue'
 
 const PAUSE_STRATEGIES = [
   'hw active', 'hw pre-charge', 'hw recovery',
   'defrost', 'oil recovery', 'short cycle pause',
 ]
+
+// INSTRUCTION-135 V2 Finding 4: compile-time assertion that the wizard route
+// id is a valid member of App.tsx's Page union. The `as const` narrows the
+// literal so the onNavigate prop signature can stay tight (avoids forcing
+// contravariance widening on every parent that owns a Page-typed callback);
+// the dummy assignment to a Page-typed slot is the actual gate. If
+// App.tsx ever renames the wizard page id, tsc fails on _PAGE_TYPECHECK.
+export const SETUP_MODE_NAV_TARGET = 'wizard' as const
+const _PAGE_TYPECHECK: Page = SETUP_MODE_NAV_TARGET
+void _PAGE_TYPECHECK
 
 interface StatusBannerProps {
   operatingState: string
@@ -33,6 +44,12 @@ interface StatusBannerProps {
   readbackMismatchCount?: number
   readbackMismatchThreshold?: number
   lastReadbackMismatchAlarmTime?: number
+  // INSTRUCTION-135: setup-mode banner. The onNavigate prop is typed to the
+  // literal 'wizard' so any caller whose own onNavigate accepts a (possibly
+  // narrower) Page subset can be threaded through without widening — the
+  // banner only ever calls onNavigate(SETUP_MODE_NAV_TARGET).
+  setupMode?: boolean
+  onNavigate?: (page: typeof SETUP_MODE_NAV_TARGET) => void
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -52,6 +69,8 @@ export const StatusBanner = memo(function StatusBanner({
   readbackMismatchCount = 0,
   readbackMismatchThreshold = 5,
   lastReadbackMismatchAlarmTime = 0,
+  setupMode,
+  onNavigate,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -111,6 +130,32 @@ export const StatusBanner = memo(function StatusBanner({
 
   return (
     <>
+      {/* INSTRUCTION-135 setup-mode banner — non-dismissible, re-rendered on
+          every load while setup_mode === true. Disappears when the next
+          status poll returns setup_mode: false (post-wizard restart). Copy
+          locked to docs/install.md step 5. */}
+      {setupMode === true && (
+        <div
+          role="alert"
+          data-testid="setup-mode-banner"
+          className="rounded-xl border p-3 mb-2 bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <strong>Setup mode</strong> — complete the Setup Wizard to begin heating control.
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate(SETUP_MODE_NAV_TARGET)}
+                className="ml-2 font-medium underline hover:no-underline"
+              >
+                Open wizard
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Driver error banner — degraded mode (MQTT connection failure etc.) */}
       {driverStatus?.status === 'error' && (
         <div className="rounded-xl border p-4 mb-2 bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300 flex items-start gap-3 text-sm">

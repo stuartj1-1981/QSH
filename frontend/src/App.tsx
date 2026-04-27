@@ -14,7 +14,7 @@ import { LiveView } from './pages/LiveView'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
-type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics'
+export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics'
 
 export default function App() {
   const [page, setPage] = useState<Page>('home')

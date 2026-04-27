@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import { StatusBanner } from '../StatusBanner'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { StatusBanner, SETUP_MODE_NAV_TARGET } from '../StatusBanner'
 
 const baseProps = {
   operatingState: 'Winter (Heating)',
@@ -345,5 +345,39 @@ describe('StatusBanner performance label gating', () => {
       />
     )
     expect(screen.queryByText(/η/)).toBeNull()
+  })
+})
+
+// INSTRUCTION-135: setup-mode banner — Tasks 4a/4b/4c.
+describe('StatusBanner setup-mode banner', () => {
+  it('renders setup-mode banner when setup_mode is true', () => {
+    render(<StatusBanner {...baseProps} setupMode={true} onNavigate={() => {}} />)
+    const alert = screen.getByTestId('setup-mode-banner')
+    expect(alert).toBeDefined()
+    expect(alert.getAttribute('role')).toBe('alert')
+    expect(alert.textContent).toMatch(/Setup mode/)
+    expect(alert.textContent).toMatch(/complete the Setup Wizard to begin heating control/)
+    // Open wizard button is a child of the alert region.
+    const button = screen.getByRole('button', { name: /Open wizard/ })
+    expect(alert.contains(button)).toBe(true)
+  })
+
+  it('does not render setup-mode banner when setup_mode is false or undefined', () => {
+    const { rerender } = render(<StatusBanner {...baseProps} setupMode={false} />)
+    expect(screen.queryByTestId('setup-mode-banner')).toBeNull()
+
+    rerender(<StatusBanner {...baseProps} />)
+    expect(screen.queryByTestId('setup-mode-banner')).toBeNull()
+  })
+
+  it('Open wizard button calls onNavigate with SETUP_MODE_NAV_TARGET', () => {
+    const onNavigate = vi.fn()
+    render(<StatusBanner {...baseProps} setupMode={true} onNavigate={onNavigate} />)
+    fireEvent.click(screen.getByRole('button', { name: /Open wizard/ }))
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+    expect(onNavigate).toHaveBeenCalledWith(SETUP_MODE_NAV_TARGET)
+    // SETUP_MODE_NAV_TARGET is the runtime literal — type-checked against
+    // App.tsx's Page union at the StatusBanner module level.
+    expect(SETUP_MODE_NAV_TARGET).toBe('wizard')
   })
 })

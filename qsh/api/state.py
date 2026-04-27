@@ -5,6 +5,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import qsh.config  # noqa: F401 — module import (NOT `from qsh.config import CONFIG_IS_TEMPLATE`).
+                    # The bound-at-import form would capture the value at this module's
+                    # import time and miss any later placeholder-reroute write in
+                    # qsh.config (INSTRUCTION-134 Task 1b). The live-attribute-read
+                    # pattern in is_setup_mode() reads the current value per request.
+
 from ..drivers.ha.hardware_dispatch import READBACK_MISMATCH_ALARM_THRESHOLD
 
 
@@ -577,6 +583,17 @@ class SharedState:
     def get_driver_status(self) -> Dict[str, Any]:
         with self._lock:
             return {"status": self._driver_status, "error": self._driver_error}
+
+    def is_setup_mode(self) -> bool:
+        """Live read of qsh.config.CONFIG_IS_TEMPLATE for the /api/status setup_mode field.
+
+        Called per-request from the response-assembly site in routes/status.py.
+        The dotted-attribute access reads the current value of the module
+        attribute every call, so the placeholder-reroute write that happens
+        inside qsh.config's load sequence (INSTRUCTION-134) is observed
+        regardless of import order.
+        """
+        return qsh.config.CONFIG_IS_TEMPLATE
 
     def set_for_testing(self, snapshot: CycleSnapshot, config: dict = None, sysid=None):
         """Inject state directly for unit tests. Not for production use."""

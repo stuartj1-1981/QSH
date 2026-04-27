@@ -278,6 +278,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         readbackMismatchCount={readbackMismatchCount}
         readbackMismatchThreshold={readbackMismatchThreshold}
         lastReadbackMismatchAlarmTime={lastReadbackMismatchAlarmTime}
+        setupMode={initial?.setup_mode}
+        onNavigate={onNavigate}
       />
 
       {/* Comfort temperature & shadow/live toggle */}
