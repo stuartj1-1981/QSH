@@ -27,6 +27,7 @@ from .topic_map import (
     get_control_topics,
     parse_payload,
     parse_payload_str,
+    parse_payload_string,
     parse_timestamp,
     _prefixed,
 )
@@ -468,27 +469,45 @@ class MQTTDriver:
                     elif mapping.field == "valve_position" and value is not None:
                         valve_positions[mapping.room] = value
                     elif mapping.field == "occupancy_sensor":
-                        payload_normalised = payload_str.strip().lower()
-                        if payload_normalised in _ON_PAYLOADS:
-                            occupancy_sensor_states[mapping.room] = "on"
-                        elif payload_normalised in _OFF_PAYLOADS:
-                            occupancy_sensor_states[mapping.room] = "off"
-                        else:
+                        extracted = parse_payload_string(
+                            payload_str, mapping.payload_format, mapping.json_path
+                        )
+                        if extracted is None:
                             occupancy_sensor_states[mapping.room] = "unavailable"
+                        else:
+                            payload_normalised = extracted.strip().lower()
+                            if payload_normalised in _ON_PAYLOADS:
+                                occupancy_sensor_states[mapping.room] = "on"
+                            elif payload_normalised in _OFF_PAYLOADS:
+                                occupancy_sensor_states[mapping.room] = "off"
+                            else:
+                                occupancy_sensor_states[mapping.room] = "unavailable"
                 elif mapping.field.startswith("_shadow_"):
-                    # Store in shadow dict, not InputBlock
-                    self._shadow[mapping.field] = payload_str
+                    # Store in shadow dict, not InputBlock. JSON-extraction failure
+                    # leaves the prior shadow value untouched (mirrors parse_payload's
+                    # numeric semantics: None means "no usable reading this cycle").
+                    extracted = parse_payload_string(
+                        payload_str, mapping.payload_format, mapping.json_path
+                    )
+                    if extracted is not None:
+                        self._shadow[mapping.field] = extracted
                 elif mapping.field in SYSTEM_STRING_INPUT_FIELDS.values():
                     # Boolean/enum payload — parse via the shared three-valued
                     # classifier. Capability flag is written once post-loop.
+                    extracted = parse_payload_string(
+                        payload_str, mapping.payload_format, mapping.json_path
+                    )
+                    # Adding a new SYSTEM_STRING_INPUT_FIELDS entry requires a
+                    # corresponding elif here — silent extraction without a handler
+                    # would drop the field on the floor.
                     if mapping.field == "hot_water_active":
-                        val, live = classify_hot_water_payload(payload_str)
+                        val, live = classify_hot_water_payload(extracted)
                         if val is not None:
                             hw_active_value = val
                         if live:
                             hw_active_live = True
                     elif mapping.field == "hot_water_boolean":
-                        val, live = classify_hot_water_payload(payload_str)
+                        val, live = classify_hot_water_payload(extracted)
                         if val is not None:
                             hw_boolean_value = val
                         if live:
