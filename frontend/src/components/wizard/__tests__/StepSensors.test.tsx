@@ -78,6 +78,7 @@ describe('StepReview — flow_rate summary row', () => {
         validationWarnings={[]}
         isDeploying={false}
         onDeploy={async () => null}
+        onForceDeploy={async () => null}
       />,
     )
     expect(screen.getByText(/Flow rate sensor/i)).toBeDefined()
@@ -99,6 +100,7 @@ describe('StepReview — flow_rate summary row', () => {
         validationWarnings={[]}
         isDeploying={false}
         onDeploy={async () => null}
+        onForceDeploy={async () => null}
       />,
     )
     expect(screen.getByText(/Flow rate sensor/i)).toBeDefined()
@@ -117,6 +119,7 @@ describe('StepReview — flow_rate summary row', () => {
         validationWarnings={[]}
         isDeploying={false}
         onDeploy={async () => null}
+        onForceDeploy={async () => null}
       />,
     )
     expect(screen.getByText(/Flow rate sensor/i)).toBeDefined()

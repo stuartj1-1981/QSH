@@ -21,10 +21,11 @@ export function StepWelcome({ onSetConfig }: StepWelcomeProps) {
         if (data?.rooms && Object.keys(data.rooms).length > 0) {
           setHasExisting(true)
           setMode('existing')
+          onSetConfig(data)
         }
       })
       .catch(() => {})
-  }, [])
+  }, [onSetConfig])
 
   const handleMode = (m: 'fresh' | 'existing') => {
     setMode(m)

@@ -1,6 +1,11 @@
 import { useState, useCallback, useMemo } from 'react'
 import { apiUrl } from '../lib/api'
-import type { ValidationResponse, DeployResponse, QshConfigYaml } from '../types/config'
+import type {
+  ValidationResponse,
+  DeployResponse,
+  DestructiveDeployError,
+  QshConfigYaml,
+} from '../types/config'
 
 const HA_STEPS = [
   'restore_backup',
@@ -146,21 +151,44 @@ export function useWizard() {
     }))
   }, [steps.length])
 
-  const deploy = useCallback(async (): Promise<DeployResponse | null> => {
-    setState((prev) => ({ ...prev, isDeploying: true }))
-    try {
-      const resp = await fetch(apiUrl('api/wizard/deploy'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: state.config }),
-      })
-      return resp.json()
-    } catch {
-      return null
-    } finally {
-      setState((prev) => ({ ...prev, isDeploying: false }))
-    }
-  }, [state.config])
+  const _post = useCallback(
+    async (force: boolean): Promise<DeployResponse | DestructiveDeployError | null> => {
+      setState((prev) => ({ ...prev, isDeploying: true }))
+      try {
+        const resp = await fetch(apiUrl('api/wizard/deploy'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: state.config, force }),
+        })
+        if (resp.status === 409) {
+          const body = await resp.json()
+          const detail = (body?.detail ?? {}) as Record<string, unknown>
+          return {
+            kind: 'destructive',
+            removed_sections: (detail.removed_sections as string[]) ?? [],
+            existing_sections: (detail.existing_sections as string[]) ?? [],
+            incoming_sections: (detail.incoming_sections as string[]) ?? [],
+          }
+        }
+        return (await resp.json()) as DeployResponse
+      } catch {
+        return null
+      } finally {
+        setState((prev) => ({ ...prev, isDeploying: false }))
+      }
+    },
+    [state.config]
+  )
+
+  const deploy = useCallback(
+    () => _post(false),
+    [_post]
+  )
+
+  const forceDeploy = useCallback(
+    () => _post(true),
+    [_post]
+  )
 
   const stepLabels = useMemo(() => {
     const labels: Record<string, string> = {
@@ -194,5 +222,6 @@ export function useWizard() {
     back,
     goToStep,
     deploy,
+    forceDeploy,
   }
 }

@@ -1,12 +1,19 @@
 import { useState } from 'react'
 import { Download, AlertTriangle, Check, Loader2 } from 'lucide-react'
-import type { DeployResponse, QshConfigYaml, RoomConfigYaml } from '../../types/config'
+import type {
+  DeployResponse,
+  DestructiveDeployError,
+  QshConfigYaml,
+  RoomConfigYaml,
+} from '../../types/config'
+import { isDestructiveDeployError } from '../../types/config'
 
 interface StepReviewProps {
   config: Partial<QshConfigYaml>
   validationWarnings: string[]
   isDeploying: boolean
-  onDeploy: () => Promise<DeployResponse | null>
+  onDeploy: () => Promise<DeployResponse | DestructiveDeployError | null>
+  onForceDeploy: () => Promise<DeployResponse | DestructiveDeployError | null>
 }
 
 export function StepReview({
@@ -14,8 +21,12 @@ export function StepReview({
   validationWarnings,
   isDeploying,
   onDeploy,
+  onForceDeploy,
 }: StepReviewProps) {
   const [deployResult, setDeployResult] = useState<DeployResponse | null>(null)
+  const [destructive, setDestructive] = useState<DestructiveDeployError | null>(
+    null
+  )
 
   const rooms = config.rooms ?? {}
   const hs = config.heat_source
@@ -38,6 +49,20 @@ export function StepReview({
 
   const handleDeploy = async () => {
     const result = await onDeploy()
+    if (isDestructiveDeployError(result)) {
+      setDestructive(result)
+      return
+    }
+    if (result) setDeployResult(result)
+  }
+
+  const handleForceDeploy = async () => {
+    const result = await onForceDeploy()
+    if (isDestructiveDeployError(result)) {
+      setDestructive(result)
+      return
+    }
+    setDestructive(null)
     if (result) setDeployResult(result)
   }
 
@@ -215,6 +240,27 @@ export function StepReview({
         </SummarySection>
       </div>
 
+      {/* Destructive-deploy refusal banner (INSTRUCTION-137 Task 3) */}
+      {destructive && (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          role="alert"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Destructive deploy refused
+            </p>
+          </div>
+          <p className="text-sm text-[var(--amber)]">
+            This deploy would remove sections from your existing configuration.
+            Removed sections: {destructive.removed_sections.join(', ')}. Click
+            Back to load your existing config via Welcome → Edit Existing, or
+            click Force Deploy to overwrite.
+          </p>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex items-center gap-3 pt-4 border-t border-[var(--border)]">
         <button
@@ -238,6 +284,15 @@ export function StepReview({
             'Deploy Configuration'
           )}
         </button>
+        {destructive && (
+          <button
+            onClick={handleForceDeploy}
+            disabled={isDeploying}
+            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--amber)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+          >
+            Force Deploy
+          </button>
+        )}
       </div>
     </div>
   )

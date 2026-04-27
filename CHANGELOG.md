@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.9] — 2026-04-27
+
+### Fixed
+- Wizard: stop config being erased on deploy
+- Data Sharing: link to policy corrected
+
+### Changed
+- Web UX: assorted UI improvements
+
 ## [1.2.8.1] — 2026-04-27
 
 ### Fixed

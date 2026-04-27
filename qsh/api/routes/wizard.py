@@ -50,6 +50,7 @@ class WizardDeployRequest(BaseModel):
     """Complete config dict for deployment."""
 
     config: Dict[str, Any]
+    force: bool = False
 
 
 class OctopusTestRequest(BaseModel):
@@ -998,6 +999,45 @@ def deploy_config(req: WizardDeployRequest):
                 "errors": validation["errors"],
             },
         )
+
+    # Hydrate redacted secrets and run the section-preservation guard against
+    # the on-disk YAML BEFORE any write. The 409 path must short-circuit before
+    # yaml.dump, the file write, and the restart-flag write.
+    from .config import _load_raw_yaml, restore_redacted
+    existing = _load_raw_yaml() or {}
+
+    # Sentinel restore — secrets that the wizard read via /api/config/raw
+    # arrive as ***REDACTED*** and would clobber the real value on write.
+    req.config = restore_redacted(existing, req.config)
+
+    # Section-preservation guard — refuse a deploy that would drop any
+    # top-level section present in the on-disk YAML, unless force=True.
+    if existing:
+        removed_sections = set(existing.keys()) - set(req.config.keys())
+        if removed_sections and not req.force:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Refusing destructive deploy — existing top-level "
+                        "sections would be removed"
+                    ),
+                    "existing_sections": sorted(existing.keys()),
+                    "incoming_sections": sorted(req.config.keys()),
+                    "removed_sections": sorted(removed_sections),
+                    "hint": (
+                        "Re-enter the wizard via Welcome → Edit Existing to "
+                        "hydrate from the existing config, or POST /deploy "
+                        "with {force: true} to override."
+                    ),
+                },
+            )
+        if removed_sections and req.force:
+            logger.info(
+                "wizard/deploy: force=True override accepted — "
+                "existing_sections=%d, incoming_sections=%d, removed_sections=%s",
+                len(existing), len(req.config), sorted(removed_sections),
+            )
 
     # ── Telemetry: generate install_id before writing YAML (H1/H2 resolution) ──
     telemetry_cfg = req.config.get("telemetry", {})
