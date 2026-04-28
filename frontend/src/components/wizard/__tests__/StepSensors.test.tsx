@@ -4,9 +4,10 @@
  * so the operator always sees whether the capability fallback is in effect.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { StepSensors } from '../StepSensors'
 import { StepReview } from '../StepReview'
+import type { EntityCandidate } from '../../../types/config'
 
 beforeEach(() => {
   // useEntityScan auto-fires on mount (INSTRUCTION-90C); stub the fetch.
@@ -18,6 +19,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+const mkCandidate = (id: string): EntityCandidate => ({
+  entity_id: id,
+  friendly_name: id,
+  score: 30,
+  confidence: 'high',
+  state: '0',
+  device_class: '',
+  unit: '',
 })
 
 describe('StepSensors — flow_rate field visibility', () => {
@@ -184,5 +195,91 @@ describe('StepSensors — Hot Water Signals (INSTRUCTION-127A)', () => {
         hot_water_active: expect.objectContaining({ topic: 'heat_pump/dhw/active' }),
       }),
     }))
+  })
+})
+
+/**
+ * INSTRUCTION-145 — wizard scan-complete feedback and mandatory-field markers.
+ */
+describe('StepSensors — scan-complete feedback (INSTRUCTION-145)', () => {
+  it('HA path: shows green badge with plural after auto-scan resolves', async () => {
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: {
+          hp_flow_temp: [mkCandidate('sensor.flow_a'), mkCandidate('sensor.flow_b')],
+          hp_power: [mkCandidate('sensor.power_a')],
+        },
+        total_entities: 42,
+      }),
+    } as Response)
+
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Scanned — 3 candidates found/)).toBeInTheDocument()
+    })
+  })
+
+  it('HA path: shows green badge with singular for exactly one candidate', async () => {
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: { hp_flow_temp: [mkCandidate('sensor.flow_a')] },
+        total_entities: 5,
+      }),
+    } as Response)
+
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Scanned — 1 candidate found/)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Scanned — 1 candidates/)).toBeNull()
+  })
+})
+
+describe('StepSensors — mandatory markers (INSTRUCTION-145)', () => {
+  it('HA path: Flow Temperature, Power Input, Outdoor Temperature labels carry red asterisk', async () => {
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+    // Flush the auto-scan promise so post-render setState lands inside act().
+    await waitFor(() => expect(screen.getByText('Mandatory')).toBeInTheDocument())
+    for (const text of ['Flow Temperature', 'Power Input', 'Outdoor Temperature']) {
+      const labelEl = screen.getByText(text).closest('label')
+      expect(labelEl).not.toBeNull()
+      const star = Array.from(labelEl!.querySelectorAll('span')).find(
+        (s) => s.textContent === '*',
+      )
+      expect(star).toBeDefined()
+      expect(star!.className).toContain('text-[var(--red)]')
+    }
+  })
+
+  it('HA path: legend "Mandatory" is rendered with adjacent red asterisk', async () => {
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Mandatory')).toBeInTheDocument())
+    const legend = screen.getByText('Mandatory')
+    const prev = legend.previousElementSibling as HTMLElement | null
+    expect(prev).not.toBeNull()
+    expect(prev!.tagName).toBe('SPAN')
+    expect(prev!.textContent).toBe('*')
+    expect(prev!.className).toContain('text-[var(--red)]')
+  })
+
+  it('MQTT path: legend "Mandatory" is rendered with adjacent red asterisk', () => {
+    const config = {
+      driver: 'mqtt',
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    const legend = screen.getByText('Mandatory')
+    expect(legend).toBeInTheDocument()
+    const prev = legend.previousElementSibling as HTMLElement | null
+    expect(prev).not.toBeNull()
+    expect(prev!.tagName).toBe('SPAN')
+    expect(prev!.textContent).toBe('*')
+    expect(prev!.className).toContain('text-[var(--red)]')
   })
 })

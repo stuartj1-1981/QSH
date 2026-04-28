@@ -57,4 +57,37 @@ describe('WizardShell progress bar / label alignment', () => {
     expect(segGap).not.toBeNull()
     expect(labelGap).toBe(segGap)
   })
+
+  it('renders the progress bar inside a max-w-7xl container regardless of step count', () => {
+    // INSTRUCTION-146: the progress bar's inner container is widened to
+    // max-w-7xl so the 14-step MQTT path's longer labels ("Data Sharing",
+    // "MQTT Broker", "Heat Source") fit without truncation on standard
+    // laptop viewports. The 13-step path also benefits — the assertion is
+    // structural and independent of step count. Guards against accidental
+    // revert to max-w-4xl, which silently re-introduces ellipsisation.
+    const variants: string[][] = [
+      [
+        'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
+        'Sensors', 'Rooms', 'Tariff', 'Schedules', 'Thermal',
+        'Hot Water', 'Disclaimer', 'Review',
+      ],
+      [
+        'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
+        'MQTT Broker', 'Sensors', 'Rooms', 'Tariff', 'Schedules',
+        'Thermal', 'Hot Water', 'Disclaimer', 'Review',
+      ],
+    ]
+
+    for (const labels of variants) {
+      const { getByTestId, unmount } = render(
+        <WizardShell {...baseProps} totalSteps={labels.length} stepLabels={labels} />
+      )
+      const segRow = getByTestId('wizard-progress-segments')
+      const progressContainer = segRow.parentElement
+      expect(progressContainer).not.toBeNull()
+      expect(progressContainer!.className).toMatch(/\bmax-w-7xl\b/)
+      expect(progressContainer!.className).not.toMatch(/\bmax-w-4xl\b/)
+      unmount()
+    }
+  })
 })
