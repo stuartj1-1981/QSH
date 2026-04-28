@@ -2,6 +2,13 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.12] — 2026-04-28
+
+### Fixed
+- MQTT: sensor config backfill
+- Wizard: scan feedback, mandatory-point marker, and progress-bar fix
+- Crash: incompatible-config fix
+
 ## [1.2.11] — 2026-04-28
 
 ### Fixed

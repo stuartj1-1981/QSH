@@ -15,7 +15,14 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
   const rooms = config.rooms ?? ({} as Record<string, RoomConfigYaml>)
   const [newName, setNewName] = useState('')
   const [editingRoom, setEditingRoom] = useState<string | null>(null)
-  const { roomCandidates, loading: scanLoading, scanRoom } = useRoomEntityScan()
+  const {
+    roomCandidates,
+    loading: scanLoading,
+    scanRoom,
+    lastScanByRoom,
+    loadingByRoom,
+    errorByRoom,
+  } = useRoomEntityScan()
   const isMqtt = config.driver === 'mqtt'
   const mqtt: MqttConfig = (config.mqtt as MqttConfig) || { broker: '', port: 1883, inputs: {} }
   const [mqttScanResults, setMqttScanResults] = useState<MqttTopicCandidate[]>([])
@@ -134,6 +141,9 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
         <h2 className="text-xl font-bold text-[var(--text)] mb-2">Rooms</h2>
         <p className="text-sm text-[var(--text-muted)]">
           Define your rooms and map TRV/sensor entities. QSH needs at least one room.
+        </p>
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          <span className="text-[var(--red)]">*</span> <span>Mandatory</span>
         </p>
       </div>
 
@@ -428,18 +438,37 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                   ) : (
                     <>
                       {/* Scan button */}
-                      <button
-                        onClick={() => scanRoom(name)}
-                        disabled={scanLoading}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text)] hover:bg-[var(--bg)] disabled:opacity-50"
-                      >
-                        {scanLoading ? (
-                          <Loader2 size={12} className="animate-spin" />
-                        ) : (
-                          <Search size={12} />
-                        )}
-                        Scan for this room
-                      </button>
+                      {(() => {
+                        const roomCandidateCount = Object.values(
+                          roomCandidates[name] ?? {},
+                        ).reduce((n, arr) => n + arr.length, 0)
+                        return (
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => scanRoom(name)}
+                              disabled={scanLoading}
+                              className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text)] hover:bg-[var(--bg)] disabled:opacity-50"
+                            >
+                              {scanLoading ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Search size={12} />
+                              )}
+                              Scan for this room
+                            </button>
+                            {lastScanByRoom[name] && !loadingByRoom[name] && !errorByRoom[name] && (
+                              <span className="text-xs text-[var(--green)]">
+                                Scanned — {roomCandidateCount} candidate{roomCandidateCount === 1 ? '' : 's'} found
+                              </span>
+                            )}
+                            {errorByRoom[name] && (
+                              <span className="text-xs text-[var(--red)]">
+                                {errorByRoom[name]}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
 
                       {/* Entity pickers */}
                       <div className="space-y-3">
@@ -452,6 +481,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                               value={getPrimaryTrv(room)}
                               onChange={(v) => updateTrvAt(name, 0, v)}
                               candidates={candidates.trv_entity || []}
+                              required
                             />
                           </div>
                           <button
@@ -486,6 +516,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           updateRoom(name, { independent_sensor: v || undefined })
                         }
                         candidates={candidates.independent_sensor || []}
+                        required
                       />
                       <EntityPicker
                         slot="heating_entity"
@@ -496,6 +527,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           updateRoom(name, { heating_entity: v || undefined })
                         }
                         candidates={candidates.heating_entity || []}
+                        required
                       />
                       <EntityPicker
                         slot="occupancy_sensor"

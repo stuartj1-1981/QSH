@@ -74,6 +74,9 @@ export function useRoomEntityScan() {
   >({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastScanByRoom, setLastScanByRoom] = useState<Record<string, number>>({})
+  const [loadingByRoom, setLoadingByRoom] = useState<Record<string, boolean>>({})
+  const [errorByRoom, setErrorByRoom] = useState<Record<string, string | null>>({})
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -86,6 +89,8 @@ export function useRoomEntityScan() {
   const scanRoom = useCallback(async (roomName: string) => {
     setLoading(true)
     setError(null)
+    setLoadingByRoom((prev) => ({ ...prev, [roomName]: true }))
+    setErrorByRoom((prev) => ({ ...prev, [roomName]: null }))
     try {
       const resp = await fetch(apiUrl(`api/wizard/scan-entities/${roomName}`), {
         method: 'POST',
@@ -101,13 +106,28 @@ export function useRoomEntityScan() {
         ...prev,
         [roomName]: data.candidates,
       }))
+      setLastScanByRoom((prev) => ({ ...prev, [roomName]: Date.now() }))
     } catch (e: unknown) {
       if (!mountedRef.current) return
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      const message = e instanceof Error ? e.message : 'Unknown error'
+      setError(message)
+      setErrorByRoom((prev) => ({ ...prev, [roomName]: message }))
     } finally {
-      if (mountedRef.current) setLoading(false)
+      if (mountedRef.current) {
+        setLoading(false)
+        setLoadingByRoom((prev) => ({ ...prev, [roomName]: false }))
+      }
     }
   }, [])
 
-  return { roomCandidates, loading, error, scanRoom, refresh: scanRoom }
+  return {
+    roomCandidates,
+    loading,
+    error,
+    scanRoom,
+    refresh: scanRoom,
+    lastScanByRoom,
+    loadingByRoom,
+    errorByRoom,
+  }
 }

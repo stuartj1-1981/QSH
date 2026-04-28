@@ -483,6 +483,35 @@ def validate_config(req: WizardValidateRequest):
                 if not mqtt_topics.get("room_temp"):
                     errors.append(f"Room '{name}' missing mqtt_topics.room_temp")
 
+            # control_mode / trv_entity / valve_hardware consistency.
+            # Rule mirrors qsh/config.py:_validate_rooms (post-INSTRUCTION-147 Task 2).
+            # Default mode mirrors runtime: 'indirect' if a TRV is configured, else 'none'.
+            # Truthy checks (not key-existence) so empty-string slots from partially
+            # filled wizard forms are caught here rather than slipping to runtime.
+            has_trv = bool(rc.get("trv_entity"))
+            has_valve = bool(rc.get("valve_hardware"))
+            mode = rc.get("control_mode")
+            if mode is None:
+                mode = "indirect" if has_trv else "none"
+
+            # Independent rules \u2014 every violation surfaces in one validate cycle so the
+            # user is not forced into a redeploy-roundtrip per error.
+            if mode not in ("indirect", "direct", "none"):
+                errors.append(
+                    f"Room '{name}' has invalid control_mode '{mode}'. "
+                    f"Valid: indirect, direct, none"
+                )
+            if mode in ("indirect", "direct") and not has_trv:
+                errors.append(
+                    f"Room '{name}' has control_mode '{mode}' but no trv_entity. "
+                    f"Add a TRV entity or set this room to monitor-only."
+                )
+            if mode == "direct" and not has_valve:
+                errors.append(
+                    f"Room '{name}' has control_mode 'direct' but no valve_hardware. "
+                    f"Use 'direct_type1', 'direct_type2', or 'generic'."
+                )
+
     if req.step == "mqtt_broker" or (req.step is None and cfg.get("driver") == "mqtt"):
         mqtt_cfg = cfg.get("mqtt", {})
         broker = mqtt_cfg.get("broker", "")

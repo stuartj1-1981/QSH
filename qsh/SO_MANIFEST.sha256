@@ -21,6 +21,7 @@
 37f5c7d3a7060118ad86d14d299ba83d246f2013bf0bf43b1f0323542f717563  ./validate_yaml.cpython-312-x86_64-linux-gnu.so
 38d7b6990eba4ba46edee2f3da18fd8ca975e80dad9b93cb454d787d0e606067  ./pipeline/controllers/hw_controller.cpython-312-aarch64-linux-gnu.so
 39515f1e176c5c5481dd1dd254dbd4b1268c802d92cb6e82e0cf6de9ddbc26da  ./logging_utils.cpython-312-aarch64-linux-gnu.so
+3b1b59bb3ecea959b78627fc26423a2d263febb7ece794a858248e851d09d1cd  ./config.cpython-312-aarch64-linux-gnu.so
 3c5c1efd15b9e97a06cdb1cba7e180efcf410fb4b556e92d1d7bce7740593fe2  ./pipeline/cycle_protection.cpython-312-aarch64-linux-gnu.so
 44854719c3b4d8e312ac1eeffaea63468b6174f2f03a217bd542469f4aa8bfff  ./occupancy/schedule_store.cpython-312-aarch64-linux-gnu.so
 45e54470ff02a08785a6579b43eb87ee30383079cfa6e97b651257903403dd7f  ./pipeline/controllers/cascade_controller.cpython-312-x86_64-linux-gnu.so
@@ -38,6 +39,7 @@
 654e649d68f10d97d9a0e5d867da02589f8452dd67d1de25d67ac53c7c8895f4  ./balancing.cpython-312-x86_64-linux-gnu.so
 696d4b1f21f289e793d3e2a43849a06ec5e057596be9f12b33a1653494bc297d  ./pipeline/controllers/shoulder_controller.cpython-312-x86_64-linux-gnu.so
 71179df4d346c1aef5f40dd48d43dd224af6fcad016898c4bdc762806a88b97a  ./pipeline/controllers/hardware_controller.cpython-312-aarch64-linux-gnu.so
+77016a25d96dc3d9df9067048f106c8d206954614e2902370d50d6034ea544b1  ./config.cpython-312-x86_64-linux-gnu.so
 7a5ee0389ff9f6344f412e257a9e1dcf550169b1cf578cc2eff942117e4cf3ec  ./historian.cpython-312-x86_64-linux-gnu.so
 7e493928eec14458de59c5f09e871111dd255f8bf6af3d05891dbc0a54ca1d0b  ./utils.cpython-312-x86_64-linux-gnu.so
 7fa12c3e459e70d7299082cd3f8d6e22e4502cbbd865c3042f77afe29ee94911  ./main.cpython-312-aarch64-linux-gnu.so
@@ -55,7 +57,6 @@
 9396854b17b0876a98c886c30a3d7f66d8b3a8076b0bde194985eebe2559a57f  ./pipeline/controllers/thermal_controller.cpython-312-aarch64-linux-gnu.so
 93a60962531721d7af0e4fcc8720ffa25e7e27b95e2d387137c9013bbb6464c6  ./valve_control.cpython-312-aarch64-linux-gnu.so
 94fc2c4970e299e9a000d64cdb925768cdaa4d988ef0573cd11cbfc2ad5024ff  ./occupancy/schedule_store.cpython-312-x86_64-linux-gnu.so
-95f379aa385f5715ea19cbe01a516b822dca37999d98fa54e956d97076a12e61  ./config.cpython-312-x86_64-linux-gnu.so
 96984c86c7872068a6cc36e226ceb0cc1a1bf6ebb47afab64df6f66f169c39a3  ./pipeline/controllers/frost_constraint.cpython-312-x86_64-linux-gnu.so
 96d1dd8034d711675c6fc0f17e538797d08deabaa01982f79c6e7df5eae10a3a  ./occupancy/resolver.cpython-312-aarch64-linux-gnu.so
 988324baf0b209855a88a0c59cf6bc26dc7c3b40a6b15e61a763f27aa512b902  ./debounce.cpython-312-x86_64-linux-gnu.so
@@ -83,7 +84,6 @@ c3aab01cc9d74625ba7bdbaa286fd93407fe350546dfdfc1e6e69c88e05bf4cc  ./pipeline/con
 c427c739bc194e224bb906eff1892bc934b226ab009ff80b269dbea9aa8f444e  ./pipeline/source_capabilities.cpython-312-aarch64-linux-gnu.so
 c46d2afee8ae78274b3d255a8f0e3c83909074287078199e4dea3bfab057b523  ./valve_control.cpython-312-x86_64-linux-gnu.so
 c55998fa67657a819e3122c54c999e1af95ad53c5353b70ce36ece223a1b1fca  ./sensors.cpython-312-aarch64-linux-gnu.so
-c5c385e28626717c6d148065dd25b2b7471bdbe42221bb95913ae96d95dafdf8  ./config.cpython-312-aarch64-linux-gnu.so
 c5ccb8a81cda58daa1bafb97d530fcbc3e1fc61c9bc98b1d7466673806bbfb7c  ./pipeline/controller.cpython-312-aarch64-linux-gnu.so
 c6e9f1a3c8d724231c21a3bdb3851ffffa6633d217e34994e5976812c20e46ee  ./validate_yaml.cpython-312-aarch64-linux-gnu.so
 c70f92d02b49489cb7ef3cda5b9bc03c14bb8c9c4fd42e951c8ae37f71bde2eb  ./occupancy/setback.cpython-312-aarch64-linux-gnu.so

@@ -54,7 +54,7 @@ export function WizardShell({
 
       {/* Progress bar */}
       <div className="bg-[var(--bg-card)] border-b border-[var(--border)] px-6 py-3">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-7xl mx-auto">
           <div className="flex gap-1" data-testid="wizard-progress-segments">
             {stepLabels.map((label, i) => (
               <div

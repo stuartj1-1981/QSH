@@ -52,6 +52,22 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
   const outdoor: OutdoorYaml = (config.outdoor as OutdoorYaml) || {}
   const sensors = hs.sensors || {}
   const [showAdditionalHP, setShowAdditionalHP] = useState(false)
+  const [lastScanCompletedAt, setLastScanCompletedAt] = useState<number | null>(null)
+  const [prevLoading, setPrevLoading] = useState<boolean>(false)
+
+  // Falling-edge detector for `loading`: bump completion counter when
+  // loading transitions true -> false with no error. Implemented via
+  // React's documented "storing information from previous renders" pattern
+  // (https://react.dev/reference/react/useState#storing-information-from-previous-renders),
+  // which allows guarded setState during render.
+  if (loading !== prevLoading) {
+    setPrevLoading(loading)
+    if (prevLoading === true && loading === false && error === null) {
+      setLastScanCompletedAt((prev) => (prev ?? 0) + 1)
+    }
+  }
+
+  const candidateCount = Object.values(candidates).reduce((n, arr) => n + arr.length, 0)
 
   const [hasSolar, setHasSolar] = useState(
     !!(config.solar as SolarYaml | undefined)?.production_entity
@@ -92,16 +108,26 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
         <p className="text-sm text-[var(--text-muted)]">
           Map your HA sensor entities to QSH. Click &quot;Scan HA&quot; to auto-detect candidates.
         </p>
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          <span className="text-[var(--red)]">*</span> <span>Mandatory</span>
+        </p>
       </div>
 
-      <button
-        onClick={() => scan()}
-        disabled={loading}
-        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
-      >
-        {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-        {loading ? 'Scanning...' : 'Scan HA'}
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => scan()}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+        >
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+          {loading ? 'Scanning...' : 'Scan HA'}
+        </button>
+        {lastScanCompletedAt !== null && !loading && !error && (
+          <span className="text-xs text-[var(--green)]">
+            Scanned — {candidateCount} candidate{candidateCount === 1 ? '' : 's'} found
+          </span>
+        )}
+      </div>
 
       {error && (
         <p className="text-sm text-[var(--red)]">{error}</p>
@@ -119,6 +145,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
             value={sensors.flow_temp || ''}
             onChange={(v) => updateSensor('flow_temp', v)}
             candidates={candidates.hp_flow_temp || []}
+            required
           />
           <EntityPicker
             slot="hp_power"
@@ -126,6 +153,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
             value={sensors.power_input || ''}
             onChange={(v) => updateSensor('power_input', v)}
             candidates={candidates.hp_power || []}
+            required
           />
           <EntityPicker
             slot="hp_cop"
@@ -213,6 +241,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
             value={outdoor.temperature || ''}
             onChange={(v) => updateOutdoor('temperature', v)}
             candidates={candidates.outdoor_temp || []}
+            required
           />
           <EntityPicker
             slot="weather_forecast"
@@ -355,6 +384,9 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
         <h2 className="text-xl font-bold text-[var(--text)] mb-2">Sensors</h2>
         <p className="text-sm text-[var(--text-muted)]">
           Map your MQTT sensor topics. Click &quot;Scan Broker&quot; to discover available topics.
+        </p>
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          <span className="text-[var(--red)]">*</span> <span>Mandatory</span>
         </p>
       </div>
 
