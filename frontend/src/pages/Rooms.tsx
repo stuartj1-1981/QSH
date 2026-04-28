@@ -26,6 +26,7 @@ export function Rooms({ engineering }: RoomsProps) {
   const boostRooms = live?.boost?.rooms ?? {}
   const comfortTempActive =
     live?.status?.comfort_temp_active ?? live?.status?.comfort_temp ?? null
+  const hpActive = live?.status?.applied_mode === 'heat'
 
   return (
     <div className="max-w-5xl">
@@ -42,6 +43,7 @@ export function Rooms({ engineering }: RoomsProps) {
             entityIds={entityMap?.rooms[name]}
             engineering={engineering}
             comfortTempActive={comfortTempActive}
+            hpActive={hpActive}
           />
         ))}
       </div>
@@ -69,6 +71,7 @@ export function Rooms({ engineering }: RoomsProps) {
           engineering={engineering}
           onClose={() => setSelectedRoom(null)}
           entityIds={entityMap?.rooms[selectedRoom]}
+          hpActive={hpActive}
         />
       )}
     </div>

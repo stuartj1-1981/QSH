@@ -30,9 +30,21 @@ interface RoomCardProps {
    * stale and the tooltip delta will be wrong.
    */
   comfortTempActive?: number | null
+  /**
+   * True when the active heat source is currently commanded to heat the
+   * rooms (`live.status.applied_mode === 'heat'`). When false and the
+   * room status is 'heating', the badge and amber card tint are
+   * suppressed — temperature and target remain visible so the deficit is
+   * still observable numerically.
+   *
+   * Defaults to `true` so callers that have not yet been migrated render
+   * the legacy behaviour. Active suppression requires an explicit
+   * `hpActive={false}`.
+   */
+  hpActive?: boolean
 }
 
-export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive }: RoomCardProps) {
+export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive, hpActive = true }: RoomCardProps) {
   const displayName = name
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
@@ -60,7 +72,11 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
       className={cn(
         'w-full text-left rounded-xl border p-4 transition-all hover:shadow-md',
         'bg-[var(--bg-card)]',
-        boost ? 'border-orange-400/50 bg-orange-500/5' : statusBg(room.status)
+        boost
+          ? 'border-orange-400/50 bg-orange-500/5'
+          : (room.status === 'heating' && !hpActive)
+            ? 'border-[var(--border)]'
+            : statusBg(room.status)
       )}
     >
       <div className="flex items-start justify-between mb-2">
@@ -72,7 +88,7 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
           <span className="text-xs font-medium text-orange-500">
             Boost {Math.ceil(boost.remaining_s / 60)}m
           </span>
-        ) : (
+        ) : (room.status === 'heating' && !hpActive) ? null : (
           <span className={cn('text-xs font-medium capitalize', statusColor(room.status))}>
             {room.status}
           </span>

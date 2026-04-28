@@ -40,16 +40,45 @@ export default function App() {
     ? 'home' as Page
     : page
 
-  // First-run detection: redirect to wizard if no config
+  // First-run detection: redirect to wizard when the addon is in setup mode
+  // (placeholders still in qsh.yaml) or when /api/config has not yet wired
+  // up. Checks must be sequential — running them in parallel would let a
+  // transient "Config not yet loaded" reply during a normal boot route the
+  // user to the wizard even when setup_mode === false.
   useEffect(() => {
-    fetch(apiUrl('api/config'))
-      .then((r) => r.json())
-      .then((data) => {
-        if (data?.error === 'Config not yet loaded') {
-          setPage('wizard')
+    let cancelled = false
+    ;(async () => {
+      try {
+        const statusResp = await fetch(apiUrl('api/status'))
+        if (statusResp.ok) {
+          const statusBody: unknown = await statusResp.json().catch(() => null)
+          if (
+            statusBody &&
+            typeof statusBody === 'object' &&
+            (statusBody as { setup_mode?: unknown }).setup_mode === true
+          ) {
+            if (!cancelled) setPage('wizard')
+            return
+          }
         }
-      })
-      .catch(() => {})
+      } catch {
+        // fall through to /api/config fallback
+      }
+      try {
+        const configResp = await fetch(apiUrl('api/config'))
+        const configBody: unknown = await configResp.json().catch(() => null)
+        if (
+          configBody &&
+          typeof configBody === 'object' &&
+          (configBody as { error?: unknown }).error === 'Config not yet loaded'
+        ) {
+          if (!cancelled) setPage('wizard')
+        }
+      } catch {
+        // routing fetch failure must never white-screen the app
+      }
+    })()
+    return () => { cancelled = true }
   }, [])
 
   // Wizard is full-screen (no sidebar)

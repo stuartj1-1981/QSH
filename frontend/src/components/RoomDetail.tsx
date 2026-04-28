@@ -19,9 +19,11 @@ interface RoomDetailProps {
     trv_entity?: string
     occupancy_sensor?: string
   }
+  /** See RoomCard.hpActive — same semantics. Defaults to `true`. */
+  hpActive?: boolean
 }
 
-export function RoomDetail({ name, room, sysid, boost, engineering, onClose, entityIds }: RoomDetailProps) {
+export function RoomDetail({ name, room, sysid, boost, engineering, onClose, entityIds, hpActive = true }: RoomDetailProps) {
   const { data: roomHistory } = useRoomHistory(['temp', 'valve'], 24)
   const thisRoomHistory = roomHistory[name] ?? []
 
@@ -56,9 +58,11 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
           <div className="text-lg text-[var(--text-muted)]">
             Target: <EntityValue entityId={entityIds?.trv_entity} engineering={engineering}>{formatTemp(room.target)}</EntityValue>
           </div>
-          <div className={cn('text-sm font-medium capitalize mt-1', statusColor(room.status))}>
-            {room.status}
-          </div>
+          {!(room.status === 'heating' && !hpActive) && (
+            <div className={cn('text-sm font-medium capitalize mt-1', statusColor(room.status))}>
+              {room.status}
+            </div>
+          )}
         </div>
 
         {/* Occupancy badge */}

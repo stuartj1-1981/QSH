@@ -2,6 +2,14 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.11] — 2026-04-28
+
+### Fixed
+- Setup Mode: white-screen crash on first boot resolved.
+
+### Changed
+- UX: heating indication is suppressed when the heat source is not on.
+
 ## [1.2.9] — 2026-04-27
 
 ### Fixed

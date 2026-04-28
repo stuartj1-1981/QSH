@@ -55,7 +55,7 @@ export function WizardShell({
       {/* Progress bar */}
       <div className="bg-[var(--bg-card)] border-b border-[var(--border)] px-6 py-3">
         <div className="max-w-4xl mx-auto">
-          <div className="flex gap-1">
+          <div className="flex gap-1" data-testid="wizard-progress-segments">
             {stepLabels.map((label, i) => (
               <div
                 key={label + i}
@@ -70,17 +70,21 @@ export function WizardShell({
               />
             ))}
           </div>
-          <div className="flex justify-between mt-2">
+          <div
+            className="hidden sm:flex gap-1 mt-2"
+            data-testid="wizard-progress-labels"
+          >
             {stepLabels.map((label, i) => (
-              <span
+              <div
                 key={label + i}
                 className={cn(
-                  'text-xs hidden sm:block',
+                  'flex-1 min-w-0 text-center text-xs truncate',
                   i <= currentStep ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
                 )}
+                title={label}
               >
                 {label}
-              </span>
+              </div>
             ))}
           </div>
         </div>
