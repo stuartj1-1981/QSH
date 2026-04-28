@@ -298,6 +298,11 @@ class SharedState:
             occ = occupancy_states.get(room_name, 'occupied')
 
             # Derive simple status
+            # NOTE: The 'heating' token here means "mid-deficit". The frontend gates
+            # its display on `applied_mode === 'heat'` (RoomCard/RoomDetail) and
+            # `state.strategy === 'heating'` (Live view). New consumers of room.status
+            # must apply the same gate or they will mislabel idle states. See
+            # INSTRUCTION-141.
             if occ == 'away':
                 status = 'away'
             elif temp is not None and target is not None:

@@ -191,3 +191,60 @@ describe('RoomCard target tooltip', () => {
     })
   })
 })
+
+describe('RoomCard heating-gate (hpActive)', () => {
+  const baseRoom = {
+    temp: 20.0,
+    target: 21.0,
+    valve: 50,
+    occupancy: 'occupied',
+    status: 'heating',
+    facing: 0.5,
+    area_m2: 20,
+    ceiling_m: 2.4,
+  }
+
+  it('shows the heating badge and amber tint when hpActive=true', () => {
+    render(<RoomCard name="lounge" room={baseRoom} hpActive={true} />)
+    const badge = screen.getByText('heating')
+    expect(badge).toBeDefined()
+    expect(badge.className).toContain('text-[var(--amber)]')
+    const card = screen.getByRole('button')
+    expect(card.className).toContain('bg-amber-500/10')
+    expect(card.className).toContain('border-amber-500/20')
+  })
+
+  it('suppresses the heating badge and amber tint when hpActive=false', () => {
+    render(<RoomCard name="lounge" room={baseRoom} hpActive={false} />)
+    const card = screen.getByRole('button')
+    expect(screen.queryByText('heating')).toBeNull()
+    expect(card.className).not.toMatch(/bg-amber-/)
+    expect(card.className).not.toMatch(/border-amber-/)
+    expect(card.className).not.toMatch(/bg-orange-/)
+    expect(card.className).toContain('border-[var(--border)]')
+  })
+
+  it('preserves the cold badge and red tint when hpActive=false', () => {
+    render(
+      <RoomCard
+        name="lounge"
+        room={{ ...baseRoom, status: 'cold' }}
+        hpActive={false}
+      />
+    )
+    const badge = screen.getByText('cold')
+    expect(badge).toBeDefined()
+    expect(badge.className).toContain('text-[var(--red)]')
+    const card = screen.getByRole('button')
+    expect(card.className).toContain('bg-red-500/10')
+    expect(card.className).toContain('border-red-500/20')
+  })
+
+  it('renders the heating badge and amber tint when hpActive prop is omitted (default true)', () => {
+    render(<RoomCard name="lounge" room={baseRoom} />)
+    const badge = screen.getByText('heating')
+    expect(badge).toBeDefined()
+    const card = screen.getByRole('button')
+    expect(card.className).toContain('bg-amber-500/10')
+  })
+})

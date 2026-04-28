@@ -9,9 +9,33 @@ export function useAwayState() {
 
   const refetch = useCallback(() => {
     fetch(apiUrl('api/away'))
-      .then((r) => r.json())
-      .then((d) => { setData(d); setError(null) })
-      .catch((e) => setError(e.message))
+      .then(async (r) => {
+        const body: unknown = await r.json().catch(() => null)
+        if (!r.ok) {
+          const detail =
+            body && typeof body === 'object' && 'detail' in body && typeof (body as { detail: unknown }).detail === 'string'
+              ? (body as { detail: string }).detail
+              : null
+          setError(detail !== null ? `${r.status}: ${detail}` : String(r.status))
+          return
+        }
+        if (
+          !body ||
+          typeof body !== 'object' ||
+          typeof (body as { whole_house?: unknown }).whole_house !== 'object' ||
+          (body as { whole_house?: unknown }).whole_house === null ||
+          typeof (body as { per_zone?: unknown }).per_zone !== 'object' ||
+          (body as { per_zone?: unknown }).per_zone === null ||
+          typeof (body as { recovery?: unknown }).recovery !== 'object' ||
+          (body as { recovery?: unknown }).recovery === null
+        ) {
+          setError('Unexpected /api/away response shape')
+          return
+        }
+        setData(body as AwayStateResponse)
+        setError(null)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }, [])
 

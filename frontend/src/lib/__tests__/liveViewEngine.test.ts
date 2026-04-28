@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { LiveViewEngine } from '../liveViewEngine'
+import { LiveViewEngine, effectiveRoomStatus } from '../liveViewEngine'
 import type { LiveViewData } from '../liveViewTypes'
 
 function createMockCanvas(): HTMLCanvasElement {
@@ -271,5 +271,35 @@ describe('LiveViewEngine', () => {
     // Multiple resize calls at same dimensions should be stable
     expect(() => engine.resize()).not.toThrow()
     expect(() => engine.resize()).not.toThrow()
+  })
+})
+
+describe('effectiveRoomStatus', () => {
+  it('keeps "heating" when strategy is "heating"', () => {
+    expect(effectiveRoomStatus('heating', 'heating')).toBe('heating')
+  })
+
+  it('downgrades "heating" to "ok" when strategy is "monitoring"', () => {
+    expect(effectiveRoomStatus('heating', 'monitoring')).toBe('ok')
+  })
+
+  it('downgrades "heating" to "ok" when strategy is "equilibrium"', () => {
+    expect(effectiveRoomStatus('heating', 'equilibrium')).toBe('ok')
+  })
+
+  it('downgrades "heating" to "ok" when strategy is undefined', () => {
+    expect(effectiveRoomStatus('heating', undefined)).toBe('ok')
+  })
+
+  it('passes "cold" through unchanged regardless of strategy', () => {
+    expect(effectiveRoomStatus('cold', 'monitoring')).toBe('cold')
+  })
+
+  it('passes "away" through unchanged regardless of strategy', () => {
+    expect(effectiveRoomStatus('away', 'monitoring')).toBe('away')
+  })
+
+  it('passes "ok" through unchanged regardless of strategy', () => {
+    expect(effectiveRoomStatus('ok', 'heating')).toBe('ok')
   })
 })

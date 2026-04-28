@@ -1,5 +1,22 @@
 import type { LiveViewData, LiveViewRoom } from './liveViewTypes'
 
+/**
+ * Render-time gate: when the room is in mid-deficit ('heating') but the
+ * pipeline-resolved strategy is not actually heating, downgrade to 'ok'
+ * so the radial node uses the default colour and the status text is
+ * suppressed by the existing `status !== 'ok'` rule. Pure function so it
+ * can be unit-tested without instantiating the engine.
+ */
+export function effectiveRoomStatus(
+  roomStatus: string,
+  strategy: string | null | undefined,
+): string {
+  if (roomStatus === 'heating' && strategy !== 'heating') {
+    return 'ok'
+  }
+  return roomStatus
+}
+
 // ---------------------------------------------------------------------------
 // Internal particle / layout types (not exported)
 // ---------------------------------------------------------------------------
@@ -880,7 +897,8 @@ export class LiveViewEngine {
   }
 
   private roomColour(room: LiveViewRoom): string {
-    switch (room.status) {
+    const eff = effectiveRoomStatus(room.status, this.data?.state.strategy)
+    switch (eff) {
       case 'heating': return this.C.accent
       case 'cold': return this.C.blue
       case 'away': return this.C.textMuted
@@ -1105,8 +1123,9 @@ export class LiveViewEngine {
       // Text content — suppress "ok" status, only show non-normal states
       const nameText = room.name
       const subtext = this.lp.compactLabels ? '' : `${room.temp.toFixed(1)}° / ${room.target.toFixed(1)}°`
-      const showStatus = !this.lp.compactLabels && room.status !== 'ok'
-      const statusText = showStatus ? room.status : ''
+      const eff = effectiveRoomStatus(room.status, this.data?.state.strategy)
+      const showStatus = !this.lp.compactLabels && eff !== 'ok'
+      const statusText = showStatus ? eff : ''
 
       // Measure widths
       ctx.font = `bold ${this.$s(this.lp.fontSize.labelName)}px sans-serif`

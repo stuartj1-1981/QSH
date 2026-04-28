@@ -17,11 +17,11 @@ export function Away() {
 
   // Local override for days; null means "use server value"
   const [daysOverride, setDaysOverride] = useState<number | null>(null)
-  const days = daysOverride ?? data?.whole_house.days ?? 1
+  const days = daysOverride ?? data?.whole_house?.days ?? 1
 
   // Optimistic active state — avoids toggle snap-back while pipeline catches up
   const [optimisticActive, setOptimisticActive] = useState<boolean | null>(null)
-  const isActive = optimisticActive ?? data?.whole_house.active ?? false
+  const isActive = optimisticActive ?? data?.whole_house?.active ?? false
 
   // Optimistic per-zone state — snaps zone toggles immediately
   const [optimisticZones, setOptimisticZones] = useState<Record<string, boolean>>({})
@@ -38,15 +38,15 @@ export function Away() {
 
   // Clear optimistic state once server data confirms the change.
   useEffect(() => {
-    if (optimisticActive !== null && data?.whole_house.active === optimisticActive) {
+    if (optimisticActive !== null && data?.whole_house?.active === optimisticActive) {
       setOptimisticActive(null)
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     }
     // Clear days override when server confirms the new value
-    if (daysOverride !== null && data?.whole_house.days === daysOverride) {
+    if (daysOverride !== null && data?.whole_house?.days === daysOverride) {
       setDaysOverride(null)
     }
-  }, [data?.whole_house.active, optimisticActive, data?.whole_house.days, daysOverride])
+  }, [data?.whole_house?.active, optimisticActive, data?.whole_house?.days, daysOverride])
 
   // Clear per-zone optimistic state once server confirms each room.
   useEffect(() => {

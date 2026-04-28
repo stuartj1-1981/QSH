@@ -64,11 +64,11 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   // because the gate (awayData.active && !optimisticAwayOff) would stay false.
   // Predicate: optimisticAwayOff is true AND server awayData.whole_house.active === false.
   useEffect(() => {
-    if (optimisticAwayOff && awayData?.whole_house.active === false) {
+    if (optimisticAwayOff && awayData?.whole_house?.active === false) {
       if (homePollRef.current) { clearInterval(homePollRef.current); homePollRef.current = null }
       setOptimisticAwayOff(false)
     }
-  }, [awayData?.whole_house.active, optimisticAwayOff])
+  }, [awayData?.whole_house?.active, optimisticAwayOff])
 
   const [saving, setSaving] = useState(false)
   const { data: sourceSelection, setMode: setSourceMode, setPreference: setSourcePreference } = useSourceSelection(
@@ -151,6 +151,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const minLoadPct = status?.min_load_pct ?? initial?.min_load_pct ?? 0
   const comfortScheduleActive = status?.comfort_schedule_active ?? initial?.comfort_schedule_active ?? false
   const comfortTempActive = status?.comfort_temp_active ?? initial?.comfort_temp_active ?? comfortTemp
+  const hpActive = live?.status?.applied_mode === 'heat'
   const optimalMode = status?.optimal_mode ?? initial?.optimal_mode
 
   const costToday = energy?.cost_today_pence ?? initial?.energy?.cost_today_pence ?? 0
@@ -287,8 +288,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         comfortTemp={comfortTemp}
         controlEnabled={controlEnabled}
         saving={saving}
-        awayActive={awayData?.whole_house.active && !optimisticAwayOff}
-        awayDays={awayData?.whole_house.days_remaining ?? awayData?.whole_house.days}
+        awayActive={awayData?.whole_house?.active && !optimisticAwayOff}
+        awayDays={awayData?.whole_house?.days_remaining ?? awayData?.whole_house?.days}
         comfortScheduleActive={comfortScheduleActive}
         comfortTempActive={comfortTempActive}
         onComfortTempChange={handleComfortTempChange}
@@ -339,7 +340,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
 
       {/* Away quick actions */}
       <div className="flex gap-2 mb-4">
-        {awayData?.whole_house.active && !optimisticAwayOff ? (
+        {awayData?.whole_house?.active && !optimisticAwayOff ? (
           <button
             onClick={handleImHome}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500/10 border border-green-500/20 text-green-600 text-sm font-medium hover:bg-green-500/20"
@@ -362,7 +363,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
       {displayRooms && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
           {Object.entries(displayRooms).map(([name, room]) => (
-            <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} comfortTempActive={comfortTempActive} />
+            <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} comfortTempActive={comfortTempActive} hpActive={hpActive} />
           ))}
         </div>
       )}
