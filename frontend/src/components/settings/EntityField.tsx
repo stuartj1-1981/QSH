@@ -42,7 +42,7 @@ export function EntityField({
       <input
         type="text"
         value={value}
-        onChange={(e) => onChange(e.target.value || '')}
+        onChange={(e) => onChange(e.target.value.trim())}
         placeholder={placeholder}
         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text)] placeholder:text-[var(--text-muted)]"
       />
