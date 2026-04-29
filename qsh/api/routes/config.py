@@ -211,6 +211,18 @@ def patch_config_section(section: str, body: dict):
             raw[section] = restore_redacted(existing_section, incoming)
         else:
             raw[section] = incoming
+        # On-disk YAML hygiene for entity/topic fields. Runtime safety is already
+        # provided by Task 1's .strip() at config-load — this block exists so the
+        # persisted YAML matches what the runtime sees, GET-after-PATCH returns a
+        # clean round-trip, and backups archive a normalised value. Without this,
+        # the file remains harmlessly dirty (runtime works, manual cat shows the
+        # trailing space). Scope: control section only — other sections have
+        # different rules and will be hardened in a separate instruction if and
+        # when the same class of bug surfaces there.
+        if section == "control" and isinstance(raw[section], dict):
+            for key, value in list(raw[section].items()):
+                if isinstance(value, str) and (key.endswith("_entity") or key.endswith("_topic")):
+                    raw[section][key] = value.strip()
         return raw
 
     _read_modify_write(_apply_patch)

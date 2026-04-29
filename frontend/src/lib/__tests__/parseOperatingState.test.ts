@@ -150,6 +150,58 @@ describe('parseOperatingState', () => {
     expect(r.label).toBe('Monitoring Only')
   })
 
+  // ── Shadow composite states (148A) ──
+
+  it('parses Shadow (Heating)', () => {
+    const r = parseOperatingState('Shadow (Heating)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('heating')
+    expect(r.hwState).toBeNull()
+    expect(r.cyclePause).toBeNull()
+    expect(r.label).toBe('Shadow (Heating)')
+  })
+
+  it('parses Shadow (HW Active)', () => {
+    const r = parseOperatingState('Shadow (HW Active)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('hw')
+    expect(r.hwState).toBe('hw_active')
+    expect(r.cyclePause).toBeNull()
+  })
+
+  it('parses Shadow (HW Pre-Charge)', () => {
+    const r = parseOperatingState('Shadow (HW Pre-Charge)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('hw')
+    expect(r.hwState).toBe('pre_charge')
+  })
+
+  it('parses Shadow (HW Recovery)', () => {
+    const r = parseOperatingState('Shadow (HW Recovery)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('hw')
+    expect(r.hwState).toBe('recovery')
+  })
+
+  it('parses Shadow (Defrost)', () => {
+    const r = parseOperatingState('Shadow (Defrost)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('cycle_pause')
+    expect(r.cyclePause).toBe('defrost')
+  })
+
+  it('parses Shadow (Equilibrium)', () => {
+    const r = parseOperatingState('Shadow (Equilibrium)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('equilibrium')
+  })
+
+  it('parses Shadow (Monitoring)', () => {
+    const r = parseOperatingState('Shadow (Monitoring)')
+    expect(r.season).toBe('shadow')
+    expect(r.strategy).toBe('monitoring')
+  })
+
   // ── Edge cases ──
 
   it('returns fallback for null input', () => {

@@ -32,6 +32,18 @@ function getStateColor(state: string): string {
     return '#06b6d4'
   }
 
+  // Shadow family — desaturated equivalents of the live colours,
+  // signalling "what we would do" rather than "what we are doing".
+  if (s.startsWith('shadow')) {
+    if (s.includes('hw')) return '#94a3b8'           // slate-400
+    if (s.includes('defrost') || s.includes('oil')) return '#a78bfa' // violet-400
+    if (s.includes('short cycle')) return '#fb923c'  // orange-400
+    if (s.includes('equilibrium')) return '#7dd3fc'  // sky-300
+    if (s.includes('heating')) return '#9ca3af'      // gray-400
+    if (s.includes('monitoring')) return '#6b7280'   // gray-500
+    return '#6b7280'
+  }
+
   // Non-mode states
   if (s === 'monitoring only') return '#6b7280'
 

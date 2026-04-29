@@ -5,7 +5,8 @@ import type { LiveViewState } from './liveViewTypes'
  * _CYCLE_TYPE_MAP (line 34): "Defrost", "Oil Recovery", "Short Cycle Pause"
  * _hw_phase (line 41): "HW Pre-Charge", "HW Active", "HW Recovery"
  * Mode/strategy logic (lines 85–128): "Heating", "Equilibrium", "Monitoring"
- * Shadow mode (line 90): "Monitoring Only" (no parenthesised strategy)
+ * Shadow mode (control_enabled=False): "Shadow (Strategy)" — composite
+ *   form mirroring live mode. Legacy "Monitoring Only" still accepted.
  */
 
 const STRATEGY_MAP: Record<
@@ -39,6 +40,7 @@ const MODE_MAP: Record<string, LiveViewState['season']> = {
   Winter: 'winter',
   Shoulder: 'shoulder',
   Summer: 'summer',
+  Shadow: 'shadow',
 }
 
 export function parseOperatingState(
