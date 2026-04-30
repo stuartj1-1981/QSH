@@ -113,6 +113,29 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
         </p>
       </div>
 
+      {error && (
+        <div
+          role="alert"
+          className="mb-4 px-4 py-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/10 text-sm text-[var(--text)]"
+        >
+          <div className="font-medium text-[var(--red)] mb-1">Entity scan failed</div>
+          <div className="text-[var(--text-muted)]">
+            {error}
+          </div>
+          <div className="text-xs text-[var(--text-muted)] mt-2">
+            Check that the QSH add-on has the Supervisor token, and retry. You can
+            also paste entity IDs directly into any picker below — the wizard
+            accepts pasted IDs even when scanning is unavailable.
+          </div>
+          <button
+            onClick={() => scan()}
+            className="mt-2 px-3 py-1 text-xs rounded bg-[var(--bg)] border border-[var(--border)] hover:border-[var(--accent)]/50 transition-colors"
+          >
+            Retry scan
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <button
           onClick={() => scan()}
@@ -128,10 +151,6 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           </span>
         )}
       </div>
-
-      {error && (
-        <p className="text-sm text-[var(--red)]">{error}</p>
-      )}
 
       {/* Essential HP Sensors */}
       <div>

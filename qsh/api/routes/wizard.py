@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/wizard", tags=["wizard"])
 
-HA_TIMEOUT = 5
+# Aligned with qsh/api/routes/entities.py:HA_TIMEOUT = 10. Five seconds is too
+# tight for HA installs with large entity registries — observed on user reports
+# where /api/states returned within 6-9s, causing the wizard to silently fall
+# back to an empty candidates list. Fifteen seconds gives headroom for the
+# largest registries observed in the field while still bounding the wizard's
+# perceived hang.
+HA_TIMEOUT = 15
 
 
 def _get_ha_headers():
@@ -68,11 +74,168 @@ class EntityScanRequest(BaseModel):
 # ── Entity Scanner ──
 
 
-def _fetch_all_entities() -> List[Dict]:
-    """Fetch all HA entity states via REST API."""
+def _fetch_entity_attributes(entity_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single HA entity's attributes dict via REST. Returns None on
+    any failure (no token, timeout, HTTP error, malformed JSON). Used by the
+    deploy path to read manufacturer/model for vendor-specific config tweaks.
+    """
     ha_url, _, ha_headers = _get_ha_headers()
     if not ha_headers:
-        logger.warning("No SUPERVISOR_TOKEN — entity scan unavailable")
+        return None
+    try:
+        resp = requests.get(
+            f"{ha_url}/api/states/{entity_id}",
+            headers=ha_headers,
+            timeout=HA_TIMEOUT,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("attributes", {}) or {}
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def _ha_entity_exists(entity_id: str) -> bool:
+    """True iff the named entity is present on the HA instance. Returns
+    False on any error (treats unreachable HA as 'absent' so the wizard
+    degrades gracefully).
+    """
+    ha_url, _, ha_headers = _get_ha_headers()
+    if not ha_headers:
+        return False
+    try:
+        resp = requests.get(
+            f"{ha_url}/api/states/{entity_id}",
+            headers=ha_headers,
+            timeout=HA_TIMEOUT,
+        )
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def _apply_daikin_step_override(config: Dict[str, Any]) -> None:
+    """Inspect heat_source.flow_control.entity_id and, if it points at a
+    Daikin EDLA082 family LWT entity, set flow_control.step_override = 1.0.
+    For other Daikin manufacturers, log a WARNING recommending the user
+    verify and add the override manually. Silent for non-Daikin or when
+    attributes are unreadable.
+
+    See INSTRUCTION-152 Task 5 — empirical evidence of integer-only
+    retention is for the EDLA082 family specifically; some other Altherma
+    models do retain 0.5 °C steps, so auto-applying the override broadly
+    would degrade flow precision for those users.
+    """
+    hs = config.get("heat_source", {}) or {}
+    flow_ctrl = hs.get("flow_control", {}) or {}
+    entity_id = flow_ctrl.get("entity_id")
+    if not entity_id:
+        return
+
+    attrs = _fetch_entity_attributes(entity_id)
+    if attrs is None:
+        return  # HA unreachable or entity missing — silent
+
+    manufacturer = (attrs.get("manufacturer") or "").lower()
+    model = (attrs.get("model") or "").lower()
+
+    if "edla082" in model:
+        flow_ctrl["step_override"] = 1.0
+        # Persist back into the config dict (in case flow_ctrl was a fresh dict)
+        hs["flow_control"] = flow_ctrl
+        config["heat_source"] = hs
+        logger.info(
+            "Wizard: applied flow step override 1.0 °C for Daikin EDLA082 family "
+            "(entity=%s, model=%s)",
+            entity_id,
+            attrs.get("model") or "<unknown>",
+        )
+    elif "daikin" in manufacturer:
+        logger.warning(
+            "Wizard: Daikin HP detected (entity=%s, model=%s) but step_override "
+            "not auto-applied — verify your unit accepts 0.5 °C flow steps; if it "
+            "only retains integers, add 'flow_control.step_override: 1.0' to qsh.yaml manually.",
+            entity_id,
+            attrs.get("model") or "<unknown>",
+        )
+    # else: silent (non-Daikin or missing attrs).
+
+
+def _gate_optional_flow_helpers(config: Dict[str, Any]) -> None:
+    """Probe input_number.flow_min_temperature and
+    input_number.flow_max_temperature independently. Each entity name is
+    written into the wizard-generated YAML only if it exists on the HA
+    instance; if absent, the wizard writes an empty string for that field so
+    the runtime config loader's default does not silently re-introduce the
+    same name and trigger a 404 fetch on every boot.
+
+    See INSTRUCTION-152 Task 6 — the runtime fallbacks (flow_min_internal /
+    flow_min) make partial helper coverage strictly better than no coverage,
+    so each helper is probed independently.
+    """
+    hs = config.get("heat_source", {}) or {}
+    if not hs:
+        return
+
+    # Map of (YAML key, default entity name the runtime would otherwise use)
+    candidates = [
+        ("flow_min_entity", "input_number.flow_min_temperature"),
+        ("flow_max_entity", "input_number.flow_max_temperature"),
+    ]
+
+    for cfg_key, default_entity in candidates:
+        # User-set value wins over default. Empty string means "suppress the
+        # runtime default" — leave it alone.
+        if cfg_key in hs:
+            entity_id = hs[cfg_key]
+            if not entity_id:
+                continue  # Already suppressed by user; nothing to probe.
+        else:
+            entity_id = default_entity
+
+        if _ha_entity_exists(entity_id):
+            hs[cfg_key] = entity_id
+        else:
+            # Suppress the runtime default by writing an explicit empty
+            # string. Without this, qsh/config.py:1195 would re-default to
+            # the absent name and the runtime would fetch (and 404) every
+            # boot.
+            hs[cfg_key] = ""
+            logger.info(
+                "Wizard: skipped %s reference — entity not present on HA instance",
+                entity_id,
+            )
+
+    config["heat_source"] = hs
+
+
+def _fetch_all_entities() -> List[Dict]:
+    """Fetch all HA entity states via REST API.
+
+    Always returns a list and never raises. Logs a single structured line
+    per call with an `outcome` field so the add-on log can distinguish a
+    successful empty scan (registry empty, permissions issue) from a failed
+    call (timeout, auth, 5xx, malformed JSON). Without this distinction,
+    an empty candidates list at the wizard is ambiguous from the operator's
+    perspective. INSTRUCTION-151 V5 Task 1.
+
+    Outcome labels:
+      success     — HA returned valid JSON; entities count logged.
+      timeout     — request hit HA_TIMEOUT.
+      http_error  — non-2xx status, connection error, OR malformed JSON
+                    (JSONDecodeError is a RequestException subclass since
+                    requests 2.27, caught here).
+      no_token    — SUPERVISOR_TOKEN absent; no request attempted.
+    """
+    started = _time.monotonic()
+    ha_url, _, ha_headers = _get_ha_headers()
+    if not ha_headers:
+        logger.warning(
+            "wizard/scan-entities: outcome=no_token elapsed=%.2fs entities=0",
+            _time.monotonic() - started,
+        )
         return []
     try:
         resp = requests.get(
@@ -81,9 +244,25 @@ def _fetch_all_entities() -> List[Dict]:
             timeout=HA_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()
+        entities = resp.json()
+        logger.info(
+            "wizard/scan-entities: outcome=success elapsed=%.2fs entities=%d",
+            _time.monotonic() - started,
+            len(entities),
+        )
+        return entities
+    except requests.Timeout:
+        logger.error(
+            "wizard/scan-entities: outcome=timeout elapsed=%.2fs entities=0",
+            _time.monotonic() - started,
+        )
+        return []
     except requests.RequestException as e:
-        logger.error("Entity scan failed: %s", e)
+        logger.error(
+            "wizard/scan-entities: outcome=http_error elapsed=%.2fs entities=0 error=%s",
+            _time.monotonic() - started,
+            e,
+        )
         return []
 
 
@@ -358,7 +537,7 @@ def _scan_for_slot(
     entities: List[Dict],
     slot: str,
     room: str = "",
-    top_n: int = 5,
+    top_n: int = 100,
 ) -> List[Dict]:
     """Return top-N entity candidates for a config slot, ranked by score."""
     scored = []
@@ -1076,6 +1255,21 @@ def deploy_config(req: WizardDeployRequest):
         req.config["telemetry"] = telemetry_cfg
         logger.info("Wizard: generated install_id %s", telemetry_cfg["install_id"])
 
+    # ── INSTRUCTION-152 Task 5: Daikin EDLA082 step override ──
+    # Vendor-specific quantum: if the configured flow entity is on a Daikin
+    # EDLA082 family unit, set flow_control.step_override = 1.0 so the
+    # dispatcher rounds to the integer values the unit actually retains.
+    # Other Daikin manufacturers get a WARNING log only — empirical evidence
+    # of integer-only retention is for the EDLA082 family specifically.
+    _apply_daikin_step_override(req.config)
+
+    # ── INSTRUCTION-152 Task 6: gate optional flow helper entities ──
+    # Probe input_number.flow_min_temperature / flow_max_temperature
+    # independently. Each name is written into YAML only if it exists; if
+    # absent, an empty string is written to suppress the runtime default
+    # that would otherwise generate a 404 on every boot.
+    _gate_optional_flow_helpers(req.config)
+
     # 2. Write YAML
     yaml_content = yaml.dump(
         req.config,
@@ -1104,20 +1298,13 @@ def deploy_config(req: WizardDeployRequest):
     # installs that hit the backend but never produce a real payload — see
     # INSTRUCTION-130 Cohort 1 for the failure mode this delete eliminates.
 
-    # 3. Signal restart and force process exit
-    #    In normal operation the main loop picks up the restart flag within 30s.
-    #    In setup mode (first boot, no prior config) the main thread is blocked
-    #    on api_thread.join() with no cycle loop, so the flag is never checked.
-    #    Schedule a deferred os._exit(0) to guarantee the process exits and the
-    #    HA supervisor restarts it with the new config. The short delay ensures
-    #    the HTTP response reaches the client before the process dies.
-    restart_flag = "/config/qsh_restart_requested"
-    try:
-        with open(restart_flag, "w") as f:
-            f.write("1")
-    except OSError:
-        pass
-
+    # 3. Force process exit to trigger HA supervisor restart with new config.
+    #    In setup mode the main thread is blocked on api_thread.join() with no
+    #    cycle loop, so the standard /config/qsh_restart_requested flag mechanism
+    #    cannot fire. The flag is intentionally NOT written here — the supervisor
+    #    restart picks up the new YAML on next boot. The short delay before
+    #    os._exit(0) ensures the HTTP response reaches the client before the
+    #    process dies.
     def _deferred_exit():
         import time
         time.sleep(1)  # Let the HTTP 200 response flush to the client

@@ -241,6 +241,40 @@ describe('StepSensors — scan-complete feedback (INSTRUCTION-145)', () => {
   })
 })
 
+/**
+ * INSTRUCTION-151 — error banner + retry surface scan failures in StepSensors.HaSensors.
+ */
+describe('StepSensors — error banner with retry (INSTRUCTION-151)', () => {
+  it('renders an error banner with retry when entity scan fails', async () => {
+    vi.restoreAllMocks()
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: 'Cannot reach HA API' }),
+      } as Response)
+
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByText('Entity scan failed')).toBeInTheDocument()
+      expect(screen.getByText('Retry scan')).toBeInTheDocument()
+    })
+
+    // Retry click invokes the scan endpoint a second time.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ candidates: {}, total_entities: 0 }),
+    } as Response)
+    fireEvent.click(screen.getByText('Retry scan'))
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+  })
+})
+
 describe('StepSensors — mandatory markers (INSTRUCTION-145)', () => {
   it('HA path: Flow Temperature, Power Input, Outdoor Temperature labels carry red asterisk', async () => {
     render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
