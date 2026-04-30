@@ -2,6 +2,11 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.14] — 2026-04-30
+
+### Fixed
+- Wizard: restart issue and improved entity scan
+
 ## [1.2.13] — 2026-04-29
 
 ### Fixed
