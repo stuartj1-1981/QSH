@@ -12,7 +12,7 @@ Control methods:
 """
 
 import logging
-from .integration import fetch_ha_entity, set_ha_service
+from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 
 
 READBACK_MISMATCH_ALARM_THRESHOLD = 5  # consecutive cycles where observed != optimal before operator alarm
@@ -26,9 +26,115 @@ READBACK_MISMATCH_ALARM_THRESHOLD = 5  # consecutive cycles where observed != op
 OCTOPUS_FLOW_MIN = 30.0
 OCTOPUS_FLOW_MAX = 70.0
 
+# Per-entity attribute cache for the HA-service flow dispatch path. Populated
+# only on a successful read where all three of (min_temp, max_temp,
+# target_temp_step) are present and numeric. A failed/incomplete read leaves
+# the cache empty so the next dispatch retries — see INSTRUCTION-152 Task 4
+# (M1: cache-on-success-only, L2: step ≤ 0 fallback).
+_FLOW_ENTITY_ATTR_CACHE: dict = {}
+
+
+def _is_positive_number(value) -> bool:
+    """True iff value is a real number (not bool, not NaN) and > 0."""
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    if value != value:  # NaN check
+        return False
+    return value > 0
+
+
+def _is_finite_number(value) -> bool:
+    """True iff value is a real (finite) number, regardless of sign."""
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    if value != value:  # NaN check
+        return False
+    return value not in (float("inf"), float("-inf"))
+
+
+def _clamp_and_round_flow(config, flow_svc, optimal_flow):
+    """Clamp to entity-advertised min_temp/max_temp and round to entity step
+    (or vendor override). The HA climate entity is the authoritative source
+    for what hardware will accept; user-config flow_min/flow_max are used
+    only as fallback when the entity attributes cannot be read.
+    """
+    entity_id = flow_svc.get("entity_id")
+
+    # Defaults from user config + 0.5 °C step fallback. Used when entity
+    # attributes can't be read or are incomplete.
+    fallback_min = float(config.get("flow_min", 25.0))
+    fallback_max = float(config.get("flow_max", 60.0))
+    fallback_step = 0.5
+
+    min_temp = fallback_min
+    max_temp = fallback_max
+    step = fallback_step
+
+    if entity_id:
+        cached = _FLOW_ENTITY_ATTR_CACHE.get(entity_id)
+        if cached is not None:
+            min_temp, max_temp, step = cached
+        else:
+            full = fetch_ha_entity_full(entity_id, suppress_log=True)
+            if full is not None:
+                attrs = full.get("attributes", {}) or {}
+                cand_min = attrs.get("min_temp")
+                cand_max = attrs.get("max_temp")
+                cand_step = attrs.get("target_temp_step")
+                # Cache only if all three are present, numeric, and step > 0.
+                if (
+                    _is_finite_number(cand_min)
+                    and _is_finite_number(cand_max)
+                    and _is_positive_number(cand_step)
+                ):
+                    min_temp = float(cand_min)
+                    max_temp = float(cand_max)
+                    step = float(cand_step)
+                    _FLOW_ENTITY_ATTR_CACHE[entity_id] = (min_temp, max_temp, step)
+                # else: leave cache empty so next dispatch retries; use
+                # fallbacks for THIS dispatch only.
+
+    # Per-vendor step override (e.g. Daikin EDLA082 advertises 0.5 but only
+    # retains integers). Applies AFTER min/max are determined. The runtime
+    # source is heat_source.flow_control.step_override from qsh.yaml, which
+    # the config loader exposes as hp_flow_service[step_override] (the
+    # flow_control dict is pass-through). config["flow_control"] is the
+    # supported alternative for callers passing a YAML-shaped dict.
+    override = flow_svc.get("step_override")
+    if not _is_positive_number(override):
+        flow_ctrl_cfg = config.get("flow_control", {}) or {}
+        override = flow_ctrl_cfg.get("step_override")
+    if _is_positive_number(override):
+        step = float(override)
+
+    # Clamp, then round to the nearest multiple of step.
+    clamped = max(min_temp, min(max_temp, optimal_flow))
+    if step <= 0:
+        # Defensive — _is_positive_number already guards both code paths,
+        # but make the divide unconditionally safe.
+        step = 0.5
+    rounded = round(clamped / step) * step
+    rounded = round(rounded, 4)  # cleanup floating-point artefacts
+
+    if rounded != optimal_flow:
+        logging.info(
+            "HA service: clamped flow %.2f → %.2f (entity %s, range %.1f-%.1f, step %.2f)",
+            optimal_flow, rounded, entity_id or "<none>", min_temp, max_temp, step,
+        )
+
+    return rounded
+
 
 def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max):
-    """Control flow temp via Octopus GraphQL API."""
+    """Clamp to user-configured flow_min/flow_max from HOUSE_CONFIG, then
+    dispatch via Octopus GraphQL API (which has its own internal 30-70 °C
+    protection). User config takes precedence — the API protection is a
+    safety net, not the primary bound.
+    """
     from . import octopus as octopus_api
 
     # Enforce configured limits AND API hard limits at dispatch boundary.
@@ -52,7 +158,14 @@ def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max):
 
 
 def _apply_flow_ha_service(config, optimal_flow):
-    """Control flow temp via HA service call."""
+    """Control flow temp via HA service call.
+
+    Clamps to the climate entity's advertised min_temp/max_temp and rounds
+    to its target_temp_step (or `flow_control.step_override` if set). The
+    entity is the authoritative source for what the hardware will accept;
+    HOUSE_CONFIG flow_min/flow_max are used only as fallback when the
+    entity attributes cannot be read.
+    """
     flow_svc = config.get("hp_flow_service", {})
     if not flow_svc:
         logging.error("ha_service control: no flow_service configured")
@@ -61,6 +174,8 @@ def _apply_flow_ha_service(config, optimal_flow):
     domain = flow_svc.get("domain", "")
     service = flow_svc.get("service", "")
 
+    safe_flow = _clamp_and_round_flow(config, flow_svc, optimal_flow)
+
     # Build service data -- start with base_data if present
     data = dict(flow_svc.get("base_data", {}))
 
@@ -68,22 +183,22 @@ def _apply_flow_ha_service(config, optimal_flow):
     if service == "set_temperature":
         if flow_svc.get("entity_id"):
             data["entity_id"] = flow_svc["entity_id"]
-        data["temperature"] = optimal_flow
+        data["temperature"] = safe_flow
     # OpenTherm set_control_setpoint pattern
     elif service == "set_control_setpoint":
         if flow_svc.get("entity_id"):
             data["entity_id"] = flow_svc["entity_id"]
-        data["temperature"] = optimal_flow
+        data["temperature"] = safe_flow
     # Custom service (e.g. Octopus via HA -- includes base_data)
     else:
         if flow_svc.get("entity_id"):
             data["entity_id"] = flow_svc["entity_id"]
         if flow_svc.get("device_id"):
             data["device_id"] = flow_svc["device_id"]
-        data["fixed_flow_temperature"] = optimal_flow
+        data["fixed_flow_temperature"] = safe_flow
 
     set_ha_service(domain, service, data)
-    logging.info(f"HA service: {domain}.{service} flow={optimal_flow:.1f}C")
+    logging.info(f"HA service: {domain}.{service} flow={safe_flow:.1f}C")
 
 
 def _apply_flow_mqtt(config, optimal_flow, optimal_mode):
