@@ -2,6 +2,12 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.15] — 2026-05-01
+
+### Fixed
+- App restart hardening
+- Wizard improvements
+
 ## [1.2.14] — 2026-04-30
 
 ### Fixed
