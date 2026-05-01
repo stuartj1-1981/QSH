@@ -52,6 +52,11 @@ _breaker = _CircuitBreaker()
 
 
 def fetch_ha_entity(entity_id, attr=None, default=None, suppress_log=False):
+    # Empty/whitespace entity_id produces URL "/api/states/" — HA returns 404
+    # and the circuit breaker counts it as a real failure. Short-circuit here
+    # to keep the breaker honest regardless of caller hygiene.
+    if not entity_id or not str(entity_id).strip():
+        return default
     if not headers:
         logging.warning("No SUPERVISOR_TOKEN found - fetch_ha_entity will return default.")
         return default
@@ -92,6 +97,8 @@ def fetch_ha_entity_full(entity_id, default=None, suppress_log=False):
 
     Returns None on failure (caller should handle gracefully).
     """
+    if not entity_id or not str(entity_id).strip():
+        return None
     if not headers:
         return None
     if _breaker.is_open():

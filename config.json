@@ -1,6 +1,6 @@
 {
   "name": "Quantum Swarm Heating Add-on",
-  "version": "1.2.14",
+  "version": "1.2.15",
   "slug": "quantum_swarm_heating",
   "image": "ghcr.io/stuartj1-1981/qsh",
   "description": "Adaptive Biomimetic heating control",
@@ -10,6 +10,7 @@
   ],
   "startup": "application",
   "boot": "auto",
+  "watchdog": "tcp://[HOST]:[PORT:9100]",
   "hassio_api": true,
   "homeassistant_api": true,
   "apparmor": false,

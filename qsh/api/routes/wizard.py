@@ -211,6 +211,61 @@ def _gate_optional_flow_helpers(config: Dict[str, Any]) -> None:
     config["heat_source"] = hs
 
 
+def _strip_empty_entity_list_entries(config: Dict[str, Any]) -> None:
+    """Remove empty-string entries from list-typed entity fields under each
+    room's config. The frontend wizard's `addTrvSlot()` appends empty
+    placeholders when the user clicks "+ TRV"; an unfilled slot survives to
+    the deploy payload (frontend/StepRooms.tsx:99-111).
+
+    The runtime guard in fetch_ha_entity (INSTRUCTION-153A Task 1) catches
+    these defensively, but stripping at deploy time keeps the on-disk YAML
+    clean, reduces user confusion when reading the config, and reduces the
+    surface area for future regressions.
+
+    Scope: trv_entity for now. Generalises to any future room field that
+    accepts a list of entities — extend the FIELDS tuple as those are added.
+
+    Normalisation matches the frontend's StepRooms.tsx:88 behaviour:
+      - All empty entries → field removed (treat as if never set)
+      - Single non-empty entry → scalar string (collapse list-of-1)
+      - Multiple non-empty entries → cleaned list
+    """
+    rooms = config.get("rooms")
+    if not isinstance(rooms, dict):
+        return
+
+    FIELDS = ("trv_entity",)
+
+    for room_name, room_cfg in rooms.items():
+        if not isinstance(room_cfg, dict):
+            continue
+        for field in FIELDS:
+            value = room_cfg.get(field)
+            if not isinstance(value, list):
+                continue  # Scalar or absent — nothing to strip
+            cleaned = [e for e in value if isinstance(e, str) and e.strip()]
+            if cleaned == value:
+                continue  # No-op
+            if not cleaned:
+                room_cfg.pop(field, None)
+                logger.info(
+                    "Wizard: room '%s' had only empty %s entries — field removed",
+                    room_name, field,
+                )
+            elif len(cleaned) == 1:
+                room_cfg[field] = cleaned[0]
+                logger.info(
+                    "Wizard: room '%s' %s reduced to scalar after stripping empties",
+                    room_name, field,
+                )
+            else:
+                room_cfg[field] = cleaned
+                logger.info(
+                    "Wizard: room '%s' %s had %d empty entries stripped",
+                    room_name, field, len(value) - len(cleaned),
+                )
+
+
 def _fetch_all_entities() -> List[Dict]:
     """Fetch all HA entity states via REST API.
 
@@ -646,6 +701,38 @@ def validate_config(req: WizardValidateRequest):
             errors.append("heat_source.type is required")
         elif hs["type"] not in ("heat_pump", "gas_boiler", "oil_boiler"):
             errors.append(f"Invalid heat_source.type: {hs['type']}")
+
+        # Efficiency bounds — warn rather than error so genuine outliers can
+        # ship. Bounds chosen to catch obvious wizard typos (Mark Duncombe's
+        # 1.2.13 deploy had efficiency: 34 for a heat pump) while admitting
+        # unusual but plausible values. Heat pumps: COP 1.5–6.0 covers
+        # ASHP-winter to GSHP-summer. Boilers: 0.7–0.98 covers old
+        # non-condensing through modern condensing.
+        eff = hs.get("efficiency")
+        if eff is not None:
+            try:
+                eff_f = float(eff)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"heat_source.efficiency must be numeric, got '{eff}'"
+                )
+            else:
+                hs_type = hs.get("type")
+                if hs_type == "heat_pump" and (eff_f < 1.5 or eff_f > 6.0):
+                    warnings.append(
+                        f"heat_source.efficiency {eff_f} outside typical "
+                        f"heat-pump COP range 1.5–6.0 — check this "
+                        f"value reflects measured COP, not a percentage or "
+                        f"arbitrary number"
+                    )
+                elif hs_type in ("gas_boiler", "oil_boiler") and (
+                    eff_f < 0.7 or eff_f > 0.98
+                ):
+                    warnings.append(
+                        f"heat_source.efficiency {eff_f} outside typical "
+                        f"boiler efficiency range 0.7–0.98 — if you "
+                        f"entered a percentage like '90', divide by 100"
+                    )
 
     if req.step == "rooms" or req.step is None:
         rooms = cfg.get("rooms", {})
@@ -1269,6 +1356,12 @@ def deploy_config(req: WizardDeployRequest):
     # absent, an empty string is written to suppress the runtime default
     # that would otherwise generate a 404 on every boot.
     _gate_optional_flow_helpers(req.config)
+
+    # ── INSTRUCTION-153B Task 1: strip empty entries from list-typed entity fields ──
+    # Frontend StepRooms.tsx:99-111 `addTrvSlot()` appends empty placeholders
+    # when the user clicks "+ TRV"; unfilled slots survive to the deploy payload.
+    # Strip them here so the on-disk YAML stays clean.
+    _strip_empty_entity_list_entries(req.config)
 
     # 2. Write YAML
     yaml_content = yaml.dump(
