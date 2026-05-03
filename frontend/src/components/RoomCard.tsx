@@ -83,6 +83,31 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
         <div className="flex items-center gap-1.5">
           <h3 className="font-medium text-sm">{displayName}</h3>
           {boost && <Flame size={14} className="text-orange-500" />}
+          {room.temperature_source === 'none_configured' && (
+            <span
+              className="inline-flex items-center gap-1 text-xs text-[var(--text-muted)]"
+              title="No temperature sensor configured for this room. QSH operates this room on schedule alone — no measured value, no thermal-parameter learning."
+              aria-label="no temperature sensor"
+            >
+              {/* Inline thermometer-off SVG — lucide-react does not export ThermometerOff in this version. */}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 9.5V4a2 2 0 0 1 4 0v3" />
+                <path d="M9.5 13a4 4 0 1 0 5.16 6" />
+                <path d="m2 2 20 20" />
+              </svg>
+            </span>
+          )}
         </div>
         {boost ? (
           <span className="text-xs font-medium text-orange-500">

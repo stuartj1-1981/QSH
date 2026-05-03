@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 import time as _time
 
 from ...paths import YAML_PATH
+from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml
 
 try:
     import paho.mqtt.client as _paho_mqtt
@@ -62,6 +63,15 @@ class WizardDeployRequest(BaseModel):
 class OctopusTestRequest(BaseModel):
     api_key: str
     account_number: str
+
+
+class TestEdfRegionRequest(BaseModel):
+    region: str
+
+
+class TestEdfRegionResponse(BaseModel):
+    success: bool
+    message: str
 
 
 class EntityScanRequest(BaseModel):
@@ -734,6 +744,31 @@ def validate_config(req: WizardValidateRequest):
                         f"entered a percentage like '90', divide by 100"
                     )
 
+        # INSTRUCTION-154C: capacity_kw capture for fleet telemetry.
+        # Warn-not-error when unset so existing installs that pre-date the
+        # field can still complete the wizard; telemetry simply continues to
+        # report null until the value is filled in.
+        capacity = hs.get("capacity_kw")
+        if capacity is None:
+            warnings.append(
+                "heat_source.capacity_kw not set — fleet telemetry will report null. "
+                "Enter the rated output (electrical input for heat pumps, fuel input "
+                "for boilers) to enable cross-fleet performance comparison."
+            )
+        else:
+            try:
+                capacity_f = float(capacity)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"heat_source.capacity_kw must be a number, got: {capacity!r}"
+                )
+            else:
+                if capacity_f < 1.0 or capacity_f > 100.0:
+                    warnings.append(
+                        f"heat_source.capacity_kw = {capacity_f} is outside the typical "
+                        f"residential range (1-100 kW). Verify nameplate value."
+                    )
+
     if req.step == "rooms" or req.step is None:
         rooms = cfg.get("rooms", {})
         if not rooms:
@@ -880,95 +915,142 @@ def validate_config(req: WizardValidateRequest):
 
 @router.post("/test-octopus")
 def test_octopus(req: OctopusTestRequest):
-    """Test Octopus Energy API connection."""
+    """Delegate to OctopusElectricityProvider.test_credentials and
+    OctopusGasProvider.test_credentials per T-27. Both providers share ONE
+    Octopus account-walk per request (V2 C-M2) — halves wizard latency and
+    avoids duplicate API hits.
+
+    Preserves pre-150B electricity response shape for frontend compatibility
+    (V2 C-3) and adds `gas_tariff_code` for the gas-tariff radio (150C
+    Task 6b).
+    """
+    from qsh.tariff.octopus_account import (
+        OctopusAccountError,
+        _walk_octopus_account,
+    )
+    from qsh.tariff.octopus_electricity import OctopusElectricityProvider
+    from qsh.tariff.octopus_gas import OctopusGasProvider
+
     api_key = req.api_key.strip()
     account = req.account_number.strip()
 
-    if not api_key:
-        return {"success": False, "message": "API key is empty"}
-    if not account:
-        return {"success": False, "message": "Account number is empty"}
+    # 159A V2: Resolve a REDACTED sentinel via the per-fuel YAML path. Reads
+    # the 150C-migrated shape first; falls back to the gas-side credential
+    # mirror (Octopus API keys are per-account, valid across both fuels); falls
+    # back finally to a direct read of the legacy energy.octopus.api_key path
+    # for unmigrated installs. The previous implementation (155) read only the
+    # legacy path and broke every Test press after a fresh Save (150C's
+    # _migrate_on_save_strip_legacy deletes energy.octopus on the first
+    # per-fuel save).
+    #
+    # V1 review HIGH#2: an earlier draft delegated the legacy read to
+    # qsh.api.routes.config._resolve_sentinel_with_legacy_bridge. That helper
+    # currently reads the legacy path unconditionally (see config.py:186-202),
+    # so the delegation worked, but the helper's name and docstring imply
+    # sentinel-only semantics. A future tightening would silently break this
+    # wizard endpoint. V2 reads the legacy path directly to avoid the coupling.
+    # The mirror logic in restore_redacted_energy / _restore_with_legacy
+    # remains the canonical save-path migration; this resolver is the read-side
+    # parallel for the test-credentials endpoint only.
+    if api_key == REDACTED_SENTINEL:
+        raw = _load_raw_yaml() or {}
+        energy = raw.get("energy", {}) if isinstance(raw.get("energy"), dict) else {}
+        elec_section = energy.get("electricity", {}) if isinstance(energy.get("electricity"), dict) else {}
+        gas_section = energy.get("gas", {}) if isinstance(energy.get("gas"), dict) else {}
+        legacy_section = energy.get("octopus", {}) if isinstance(energy.get("octopus"), dict) else {}
 
+        resolved = elec_section.get("octopus_api_key", "") or ""
+        source = "per_fuel_electricity"
+        if not resolved or resolved == REDACTED_SENTINEL:
+            # Octopus API keys are issued per Octopus account and authenticate
+            # against both fuels — gas-only-credential-saved installs benefit
+            # from the cross-fuel resolve.
+            resolved = gas_section.get("octopus_api_key", "") or ""
+            source = "per_fuel_gas"
+        if not resolved or resolved == REDACTED_SENTINEL:
+            # Direct read of legacy energy.octopus.api_key. Equivalent to the
+            # legacy_bridge logic in config.py but inlined here per V1 HIGH#2
+            # review to remove the semantic coupling to a helper whose name
+            # implies sentinel-only semantics.
+            resolved = legacy_section.get("api_key", "") or ""
+            source = "legacy_octopus_root"
+        if not resolved or resolved == REDACTED_SENTINEL:
+            resolved = ""
+            source = "unresolved"
+        api_key = resolved
+        logger.debug("test_octopus: resolved redacted api_key from %s (len=%d)", source, len(api_key))
+
+    # V2 C-M2: one shared account walk; both providers consume the result.
     try:
-        # Use REST API with Basic Auth (simpler & more reliable than GraphQL token exchange)
-        url = f"https://api.octopus.energy/v1/accounts/{account}/"
-        resp = requests.get(url, auth=(api_key, ""), timeout=15)
-
-        if resp.status_code == 401:
-            return {"success": False, "message": "Authentication failed: invalid API key"}
-        if resp.status_code == 403:
-            return {"success": False, "message": "Forbidden: API key cannot access this account"}
-        if resp.status_code == 404:
-            return {"success": False, "message": f"Account {account} not found"}
-        if not resp.ok:
-            return {"success": False, "message": f"API error: HTTP {resp.status_code}"}
-
-        data = resp.json()
-
-        # Parse properties → meter_points → agreements.
-        # Import meter points have is_export == False (or absent).
-        # Export meter points have is_export == True.
-        # We want the IMPORT tariff, not Outgoing/export.
-        # Collect all import candidates so we can detect and warn on multi-MPAN
-        # setups (e.g., Economy 7 with separate day/night MPANs).
-        import_tariffs: List[str] = []
-        export_tariffs: List[str] = []
-        for prop in data.get("properties", []):
-            for mp in prop.get("electricity_meter_points", []):
-                is_export = bool(mp.get("is_export", False))
-                # Octopus API convention: agreements ordered chronologically, latest last.
-                # If the API contract changes, this is the line to inspect.
-                agreements = mp.get("agreements") or []
-                if not agreements:
-                    continue
-                latest = agreements[-1]
-                tariff_code = latest.get("tariff_code")
-                if not tariff_code:
-                    continue
-                if is_export:
-                    export_tariffs.append(tariff_code)
-                else:
-                    import_tariffs.append(tariff_code)
-
-        account_number = data.get("number", account)
-        export_tariff = export_tariffs[0] if export_tariffs else None
-
-        if not import_tariffs:
-            return {
-                "success": False,
-                "message": (
-                    "No import tariff found on this Octopus account. "
-                    "QSH optimises import cost — export-only accounts are not supported. "
-                    "Add your import agreement in the Octopus dashboard and retry."
-                ),
-                "tariff_code": None,
-                "export_tariff": export_tariff,
-                "additional_import_tariffs": [],
-                "account_number": account_number,
-            }
-
-        # Multi-import-meter-point case (Economy 7 day/night MPANs, dual-rate
-        # installs). Take the first import tariff as the primary; surface the
-        # rest so the operator can see the full picture.
-        primary_import = import_tariffs[0]
-        additional_imports = import_tariffs[1:]
-        if additional_imports:
-            logging.warning(
-                "Octopus account %s has %d import meter points: %s. "
-                "Using first (%s). Operator should verify in wizard review.",
-                account_number, len(import_tariffs), import_tariffs, primary_import,
-            )
-
-        return {
-            "success": True,
-            "message": f"Connected. Import tariff: {primary_import}",
-            "tariff_code": primary_import,
-            "additional_import_tariffs": additional_imports,
-            "export_tariff": export_tariff,
-            "account_number": account_number,
-        }
+        account_info = _walk_octopus_account(api_key, account)
+    except OctopusAccountError as e:
+        return {"success": False, "message": str(e)}
     except Exception as e:
         return {"success": False, "message": f"Connection failed: {e}"}
+
+    elec_cfg = {"electricity": {
+        "provider": "octopus",
+        "octopus_api_key": api_key,
+        "octopus_account_number": account,
+    }}
+    elec = OctopusElectricityProvider(elec_cfg)
+    try:
+        elec_result = elec.test_credentials_from_account_info(account_info)
+    except Exception as e:
+        return {"success": False, "message": f"Connection failed: {e}"}
+
+    gas_tariff_code = None
+    gas_cfg = {"gas": {
+        "provider": "octopus",
+        "octopus_api_key": api_key,
+        "octopus_account_number": account,
+    }}
+    gas = OctopusGasProvider(gas_cfg)
+    try:
+        gas_result = gas.test_credentials_from_account_info(account_info)
+        if gas_result.success:
+            gas_tariff_code = gas_result.tariff_code
+    except Exception as e:
+        # V2 C-M5: surface the suppressed error in logs so debug investigation
+        # of "why is the gas tariff missing?" doesn't require a code change.
+        # Absent gas meter is not a wizard-blocking failure.
+        logger.warning("Octopus gas test_credentials failed: %s", e)
+
+    return {
+        "success": elec_result.success,
+        "message": elec_result.message,
+        "tariff_code": elec_result.tariff_code,
+        "additional_import_tariffs": elec_result.additional_tariffs or [],
+        "export_tariff": elec_result.export_tariff,
+        "gas_tariff_code": gas_tariff_code,
+        "account_number": account,
+    }
+
+
+@router.post("/test-edf-region")
+async def test_edf_region(req: TestEdfRegionRequest) -> TestEdfRegionResponse:
+    """V3 absorbed from 150E. Single-fetch validation — does the user's
+    selected region letter resolve to an upstream tariff that returns
+    parseable rate data?"""
+    from qsh.tariff import ConfigurationError
+    from qsh.tariff.edf_freephase import EDFFreephaseProvider
+
+    try:
+        provider = EDFFreephaseProvider(energy_config={
+            "electricity": {
+                "provider": "edf_freephase",
+                "edf_region": req.region,
+            }
+        })
+    except ConfigurationError as e:
+        # Invalid region letter (not in A-P table) — surface immediately.
+        return TestEdfRegionResponse(success=False, message=str(e))
+
+    provider.refresh()                        # M7: never raises
+    err = provider.status().last_error
+    if err:
+        return TestEdfRegionResponse(success=False, message=err)
+    return TestEdfRegionResponse(success=True, message="Region available")
 
 
 # ── MQTT broker test and topic discovery ──────────────────────────────
@@ -1413,3 +1495,65 @@ def deploy_config(req: WizardDeployRequest):
         "message": "Configuration saved. Pipeline restarting...",
         "warnings": validation.get("warnings", []),
     }
+
+
+# ---------------------------------------------------------------------------
+# INSTRUCTION-154C: capacity backfill for the existing fleet
+# ---------------------------------------------------------------------------
+
+
+class CapacityBackfillRequest(BaseModel):
+    capacity_kw: float = Field(
+        ...,
+        ge=1.0,
+        le=100.0,
+        description="Rated capacity in kW (1-100 inclusive)",
+    )
+
+
+@router.post("/backfill_capacity", response_model=Dict[str, Any])
+def backfill_capacity(req: CapacityBackfillRequest) -> Dict[str, Any]:
+    """One-shot endpoint for the existing fleet to populate
+    heat_source.capacity_kw without a full wizard re-run.
+
+    Writes to the canonical schema slot. If the install uses the singular dict
+    schema (heat_source: {...}), updates that. If it uses the flat schema
+    (heat_source_type at top level), updates hp_capacity_kw or
+    boiler_capacity_kw. Either way the telemetry sender's
+    _resolve_heat_source_metadata() picks up the value on the next push cycle.
+
+    Returns the resolved (schema, key, value) so the operator can verify the
+    write landed in the right place.
+    """
+    from qsh.config_io import read_modify_write
+
+    written: Dict[str, Any] = {"schema": None, "key": None, "value": req.capacity_kw}
+
+    def _apply(raw: dict) -> dict:
+        # Singular dict schema first.
+        hs = raw.get("heat_source")
+        if isinstance(hs, dict):
+            hs["capacity_kw"] = req.capacity_kw
+            written["schema"] = "heat_source.dict"
+            written["key"] = "heat_source.capacity_kw"
+            return raw
+        # Flat schema fallback.
+        flat_type = raw.get("heat_source_type")
+        if flat_type == "heat_pump":
+            raw["hp_capacity_kw"] = req.capacity_kw
+            written["schema"] = "flat"
+            written["key"] = "hp_capacity_kw"
+            return raw
+        if flat_type in ("gas_boiler", "oil_boiler", "lpg_boiler"):
+            raw["boiler_capacity_kw"] = req.capacity_kw
+            written["schema"] = "flat"
+            written["key"] = "boiler_capacity_kw"
+            return raw
+        # Neither schema present — write to singular dict (the modern shape).
+        raw.setdefault("heat_source", {})["capacity_kw"] = req.capacity_kw
+        written["schema"] = "heat_source.dict (created)"
+        written["key"] = "heat_source.capacity_kw"
+        return raw
+
+    read_modify_write(_apply)
+    return {"success": True, "written": written}

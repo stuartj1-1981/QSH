@@ -199,7 +199,6 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
     """
     resolved = dict(kwargs)
 
-    # Energy: rates already in InputBlock.tariff_rates
     if resolved.get("fetch_ha_entity_fn") is None:
 
         def _noop_fetch(entity_id, attribute="state", default=None):
@@ -332,9 +331,10 @@ def build_pipeline(config, **kwargs):
         ),
         EnergyController(
             config=config,
+            providers=kw.get("tariff_providers"),
             fetch_ha_entity_fn=kw.get("fetch_ha_entity_fn"),
-            parse_rates_array_fn=kw.get("parse_rates_array_fn"),
-            get_current_rate_fn=kw.get("get_current_rate_fn"),
+            parse_rates_fn=kw.get("parse_rates_fn"),
+            current_rate_fn=kw.get("current_rate_fn"),
         ),
         SourceSelectionController(config=config),
         ForecastController(

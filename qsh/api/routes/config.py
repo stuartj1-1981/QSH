@@ -87,6 +87,69 @@ def _read_modify_write(transform: Callable[[dict], dict]) -> dict:
     return result
 
 
+def _migrate_on_save_strip_legacy(persisted: dict, payload: dict) -> dict:
+    """V5 E-M5 / V3 150C-V2-M3. Strip legacy tariff keys when the wizard or
+    settings page writes the new-shape `energy.<fuel>.provider` keys.
+
+    PURE FUNCTIONAL — returns a NEW dict; does NOT mutate `persisted`.
+    Caller pattern: `persisted = _migrate_on_save_strip_legacy(persisted, payload)`.
+
+    Partial migration is INTENDED (V3 150C-V2-M4): a user PATCHing only the
+    gas section keeps their legacy electricity keys until they touch the
+    electricity section too. Audit-friendly contract — distinguish "incomplete
+    migration" from "migration defect".
+    """
+    result = copy.deepcopy(persisted)
+    energy_payload = payload.get("energy", {})
+
+    if "electricity" in energy_payload:
+        legacy_octopus = result.get("energy", {}).get("octopus", {})
+        for key in (
+            "api_key",
+            "account_number",
+            "electricity_tariff_code",
+            "rates_entity",
+        ):
+            legacy_octopus.pop(key, None)
+        # 158B V2 (Finding 1 / parent Decision 8): when the new shape
+        # selects ha_entity AND carries an explicit rates_entity, the
+        # legacy octopus.rates nested dict is redundant. Strip it so the
+        # YAML has a single source of truth. Conditional on the new shape
+        # being well-formed — a malformed ha_entity save (provider set
+        # but rates_entity missing) does NOT remove the only working
+        # source.
+        elec = energy_payload.get("electricity", {})
+        if (
+            isinstance(elec, dict)
+            and elec.get("provider") == "ha_entity"
+            and elec.get("rates_entity")
+        ):
+            legacy_octopus.pop("rates", None)
+
+    if "gas" in energy_payload:
+        legacy_octopus = result.get("energy", {}).get("octopus", {})
+        legacy_octopus.pop("gas_tariff_code", None)
+        legacy_tariff = result.get("tariff", {})
+        legacy_tariff.pop("gas_price", None)
+
+    if "lpg" in energy_payload:
+        result.get("tariff", {}).pop("lpg_price", None)
+
+    if "oil" in energy_payload:
+        result.get("tariff", {}).pop("oil_price", None)
+
+    # Drop empty containers so the YAML stays tidy.
+    energy_section = result.get("energy")
+    if isinstance(energy_section, dict):
+        legacy_octopus = energy_section.get("octopus")
+        if isinstance(legacy_octopus, dict) and not legacy_octopus:
+            energy_section.pop("octopus", None)
+    if result.get("tariff") == {}:
+        result.pop("tariff", None)
+
+    return result
+
+
 def restore_redacted(existing: dict, incoming: dict) -> dict:
     """Full-section overwrite with redacted field restoration.
 
@@ -98,6 +161,84 @@ def restore_redacted(existing: dict, incoming: dict) -> dict:
     result = {}
     for key, value in incoming.items():
         if value == REDACTED_SENTINEL and key in existing:
+            result[key] = existing[key]
+        elif isinstance(value, dict) and isinstance(existing.get(key), dict):
+            result[key] = restore_redacted(existing[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+# 158A Task 3: legacy fallback paths for first-save sentinel restoration.
+# Maps (parent_key, child_key) in the new shape to (legacy_parent, legacy_child)
+# in the persisted YAML. When the new path's value is REDACTED_SENTINEL and
+# the new path has no existing real value, fall back to the legacy path.
+_ENERGY_SENTINEL_LEGACY_BRIDGES = {
+    ("electricity", "octopus_api_key"):        ("octopus", "api_key"),
+    ("electricity", "octopus_account_number"): ("octopus", "account_number"),
+    ("electricity", "octopus_tariff_code"):    ("octopus", "electricity_tariff_code"),
+    ("gas", "octopus_api_key"):                ("octopus", "api_key"),
+    ("gas", "octopus_account_number"):         ("octopus", "account_number"),
+    ("gas", "octopus_tariff_code"):            ("octopus", "gas_tariff_code"),
+}
+
+
+def _resolve_sentinel_with_legacy_bridge(
+    existing_section: dict, parent_key: str, child_key: str
+) -> str | None:
+    """Return the real legacy value if the new-shape path is unresolvable.
+
+    Used by restore_redacted_energy only when called on the energy section root.
+    None means no legacy value is available — caller should leave the sentinel.
+    """
+    bridge = _ENERGY_SENTINEL_LEGACY_BRIDGES.get((parent_key, child_key))
+    if bridge is None:
+        return None
+    legacy_parent, legacy_child = bridge
+    legacy_section = existing_section.get(legacy_parent, {})
+    if not isinstance(legacy_section, dict):
+        return None
+    val = legacy_section.get(legacy_child)
+    return val if isinstance(val, str) and val and val != REDACTED_SENTINEL else None
+
+
+def _restore_with_legacy(existing_section: dict, parent: str, incoming_child: dict) -> dict:
+    """For incoming.electricity / incoming.gas: restore each REDACTED field
+    from existing.<parent>.<field> if present, else from the legacy bridge."""
+    out = {}
+    existing_parent = (
+        existing_section.get(parent, {})
+        if isinstance(existing_section.get(parent), dict)
+        else {}
+    )
+    for k, v in incoming_child.items():
+        if v == REDACTED_SENTINEL:
+            if k in existing_parent and existing_parent[k] != REDACTED_SENTINEL:
+                out[k] = existing_parent[k]
+            else:
+                bridged = _resolve_sentinel_with_legacy_bridge(existing_section, parent, k)
+                if bridged is not None:
+                    out[k] = bridged
+                else:
+                    out[k] = v  # leave sentinel; downstream will surface as auth failure
+        elif isinstance(v, dict) and isinstance(existing_parent.get(k), dict):
+            out[k] = restore_redacted(existing_parent[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def restore_redacted_energy(existing: dict, incoming: dict) -> dict:
+    """Energy-section variant of restore_redacted with cross-key legacy
+    bridges for first-save sentinel handling. Delegates to restore_redacted
+    for sub-dicts that have a matching existing block; only the new-shape
+    parent dicts (electricity, gas) get the legacy fallback treatment.
+    """
+    result = {}
+    for key, value in incoming.items():
+        if key in ("electricity", "gas") and isinstance(value, dict):
+            result[key] = _restore_with_legacy(existing, key, value)
+        elif value == REDACTED_SENTINEL and key in existing:
             result[key] = existing[key]
         elif isinstance(value, dict) and isinstance(existing.get(key), dict):
             result[key] = restore_redacted(existing[key], value)
@@ -206,11 +347,31 @@ def patch_config_section(section: str, body: dict):
 
     def _apply_patch(raw: dict) -> dict:
         existing_section = raw.get(section, {})
+        # 158A Task 2: preserve legacy energy.octopus sub-dict when the incoming
+        # tariff payload does not carry it. The frontend sends electricity/gas/
+        # fallback_rates only — without this, restore_redacted's full-section
+        # overwrite drops the octopus block, wiping hp_euid / account_number /
+        # rates.current_day along with it. _migrate_on_save_strip_legacy still
+        # runs after restore_redacted to perform its targeted strip.
+        local_incoming = incoming
+        if (
+            section == "energy"
+            and isinstance(local_incoming, dict)
+            and "octopus" not in local_incoming
+            and isinstance(existing_section, dict)
+            and isinstance(existing_section.get("octopus"), dict)
+        ):
+            local_incoming = {
+                **local_incoming,
+                "octopus": copy.deepcopy(existing_section["octopus"]),
+            }
         # Restore redacted fields so secrets aren't overwritten with the sentinel
-        if isinstance(existing_section, dict) and isinstance(incoming, dict):
-            raw[section] = restore_redacted(existing_section, incoming)
+        if section == "energy" and isinstance(existing_section, dict) and isinstance(local_incoming, dict):
+            raw[section] = restore_redacted_energy(existing_section, local_incoming)
+        elif isinstance(existing_section, dict) and isinstance(local_incoming, dict):
+            raw[section] = restore_redacted(existing_section, local_incoming)
         else:
-            raw[section] = incoming
+            raw[section] = local_incoming
         # On-disk YAML hygiene for entity/topic fields. Runtime safety is already
         # provided by Task 1's .strip() at config-load — this block exists so the
         # persisted YAML matches what the runtime sees, GET-after-PATCH returns a
@@ -223,6 +384,14 @@ def patch_config_section(section: str, body: dict):
             for key, value in list(raw[section].items()):
                 if isinstance(value, str) and (key.endswith("_entity") or key.endswith("_topic")):
                     raw[section][key] = value.strip()
+        # INSTRUCTION-150C V5 E-M5: when the incoming energy section writes a
+        # new-shape `energy.<fuel>.provider` key, strip the corresponding
+        # legacy keys (energy.octopus.* for electricity/gas, tariff.<fuel>_price
+        # for fixed-fuel) from the persisted YAML.
+        if section == "energy" and isinstance(raw.get("energy"), dict):
+            raw = _migrate_on_save_strip_legacy(
+                raw, {"energy": raw["energy"]}
+            )
         return raw
 
     _read_modify_write(_apply_patch)

@@ -376,6 +376,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         currentRate={currentRate}
         predictedSaving={controlEnabled ? undefined : predictedSaving}
         predictedEnergySaving={controlEnabled ? undefined : predictedEnergySaving}
+        activeSource={sourceSelection?.active_source ?? heatSource.type}
+        heatSourceCount={configData?.heat_sources?.length ?? (configData?.heat_source ? 1 : 1)}
       />
 
       {/* Operating state timeline — visible to all users */}

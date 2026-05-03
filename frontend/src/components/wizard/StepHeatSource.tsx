@@ -108,6 +108,40 @@ export function StepHeatSource({ config, onUpdate }: StepHeatSourceProps) {
         </div>
       )}
 
+      {/* INSTRUCTION-154C: rated capacity capture for fleet telemetry */}
+      {hs.type && (
+        <div>
+          <label htmlFor="heat-source-capacity" className="block text-sm font-medium text-[var(--text)] mb-1">
+            Rated capacity (kW)
+          </label>
+          <input
+            id="heat-source-capacity"
+            type="number"
+            min={1}
+            max={100}
+            step={0.1}
+            value={hs.capacity_kw ?? ''}
+            onChange={(e) =>
+              update({
+                capacity_kw: e.target.value === '' ? undefined : parseFloat(e.target.value),
+              })
+            }
+            placeholder="e.g. 6.0"
+            className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+          />
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            {hs.type === 'heat_pump'
+              ? 'Nameplate electrical input.'
+              : 'Nameplate fuel input.'}
+          </p>
+          {hs.capacity_kw !== undefined && (hs.capacity_kw < 1 || hs.capacity_kw > 100) && (
+            <p className="text-xs text-amber-600 mt-1">
+              Outside typical residential range (1-100 kW). Verify nameplate.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Flow control method */}
       {hs.type && isMqttDriver && (
         <div>

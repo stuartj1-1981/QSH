@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { Zap, PiggyBank, TrendingDown, History } from 'lucide-react'
+import { costLabelFor } from '../lib/sourceLabels'
 
 interface TodaySummaryProps {
   costTodayPence: number
@@ -8,6 +9,17 @@ interface TodaySummaryProps {
   currentRate: number
   predictedSaving?: number
   predictedEnergySaving?: number
+  // INSTRUCTION-150E Task 5: install-topology-aware labelling. The Home
+  // page passes the active heat-source type (from
+  // source_selection.active_source or the single heat_source.type) and the
+  // count of physical primary heat sources from the install config.
+  // V2 E-H2: count of physical heat sources, NOT fuels in use. A
+  // gas-boiler-with-electric-immersion install has heatSourceCount == 1
+  // (just the boiler) but tariff_providers_status has two keys
+  // (electricity + gas, immersion is backup). The latter would mislabel
+  // as "Heating cost today" when "Gas cost today" is right.
+  activeSource?: string | null
+  heatSourceCount?: number
 }
 
 export const TodaySummary = memo(function TodaySummary({
@@ -17,12 +29,15 @@ export const TodaySummary = memo(function TodaySummary({
   currentRate,
   predictedSaving,
   predictedEnergySaving,
+  activeSource,
+  heatSourceCount = 1,
 }: TodaySummaryProps) {
+  const costLabel = costLabelFor(activeSource, heatSourceCount)
   return (
     <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
       <SummaryCard
         icon={<PiggyBank size={18} className="text-[var(--green)]" />}
-        label="Cost today"
+        label={costLabel}
         value={`${costTodayPence.toFixed(0)}p`}
       />
       {costYesterdayPence != null && costYesterdayPence > 0 && (

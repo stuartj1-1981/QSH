@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { RoomCard } from '../RoomCard'
+import type { RoomState } from '../../types/api'
 
 describe('RoomCard occupancy source icon', () => {
   const baseRoom = {
@@ -246,5 +247,36 @@ describe('RoomCard heating-gate (hpActive)', () => {
     expect(badge).toBeDefined()
     const card = screen.getByRole('button')
     expect(card.className).toContain('bg-amber-500/10')
+  })
+})
+
+describe('RoomCard temperature_source badge', () => {
+  it('renders the no-sensor badge when temperature_source is none_configured', () => {
+    const room: RoomState = {
+      temp: null, target: 21, valve: 0, occupancy: 'occupied',
+      temperature_source: 'none_configured',
+      status: 'unknown', facing: 0.2, area_m2: 12, ceiling_m: 2.4,
+    }
+    render(<RoomCard name="utility" room={room} />)
+    expect(screen.getByLabelText('no temperature sensor')).toBeInTheDocument()
+  })
+
+  it('does not render the badge when temperature_source is independent', () => {
+    const room: RoomState = {
+      temp: 20.3, target: 21, valve: 0, occupancy: 'occupied',
+      temperature_source: 'independent',
+      status: 'ok', facing: 0.2, area_m2: 12, ceiling_m: 2.4,
+    }
+    render(<RoomCard name="lounge" room={room} />)
+    expect(screen.queryByLabelText('no temperature sensor')).not.toBeInTheDocument()
+  })
+
+  it('does not render the badge when temperature_source is absent (legacy fixture)', () => {
+    const room: RoomState = {
+      temp: 20.3, target: 21, valve: 0, occupancy: 'occupied',
+      status: 'ok', facing: 0.2, area_m2: 12, ceiling_m: 2.4,
+    }
+    render(<RoomCard name="lounge" room={room} />)
+    expect(screen.queryByLabelText('no temperature sensor')).not.toBeInTheDocument()
   })
 })

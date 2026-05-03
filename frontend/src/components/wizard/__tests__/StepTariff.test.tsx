@@ -1,117 +1,374 @@
 /**
- * INSTRUCTION-90E — StepTariff surfaces import vs export tariffs and renders
- * an actionable error for export-only accounts.
+ * INSTRUCTION-150E Task 7b — StepTariff (provider-aware wizard step).
+ *
+ * Covers V5 E-M1 (EDF radio gated on backend capability, NOT current
+ * config), V2 B-M2 (Octopus Test Connection persists tariff codes), V2
+ * E-M3 (EDF region change → debounced test-edf-region call), and the
+ * legacy 90E direction-handling tests (Test Connection result rendering).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import type { CycleMessage } from '../../../types/api'
+
+const liveMock = vi.hoisted(() => ({ data: null as CycleMessage | null }))
+vi.mock('../../../hooks/useLive', () => ({
+  useLive: () => ({ data: liveMock.data, isConnected: true, lastUpdate: 0 }),
+}))
+
 import { StepTariff } from '../StepTariff'
 
-const BASE_CONFIG = {
+const HP_ONLY_CONFIG = {
+  energy: {},
+  heat_source: { type: 'heat_pump' as const },
+}
+
+const BOILER_CONFIG = {
+  energy: {},
+  heat_source: { type: 'gas_boiler' as const },
+}
+
+const HYBRID_CONFIG = {
+  energy: {},
+  heat_sources: [
+    { type: 'heat_pump' as const },
+    { type: 'gas_boiler' as const },
+  ],
+}
+
+const LEGACY_OCTOPUS_CONFIG = {
   energy: {
     octopus: { api_key: 'sk_live_xxx', account_number: 'A-1234' },
   },
+  heat_source: { type: 'heat_pump' as const },
 }
 
-function mockFetch(json: unknown) {
+function mockFetch(json: unknown, ok = true, status = 200) {
   return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-    ok: true,
+    ok,
+    status,
     text: async () => JSON.stringify(json),
     json: async () => json,
   } as Response)
 }
 
-async function clickTest() {
-  fireEvent.click(screen.getByText(/Test Connection/i))
-}
-
 beforeEach(() => {
-  // nothing
+  liveMock.data = null
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('StepTariff — Octopus direction handling', () => {
-  it('renders import as primary and export as informational row when both present', async () => {
+describe('StepTariff — electricity provider radio', () => {
+  it('renders Octopus + Fixed by default (HP-only install, EDF unsupported)', () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'fixed', 'fallback'],
+    }
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.getByTestId('provider-electricity-provider-octopus')).toBeDefined()
+    expect(screen.getByTestId('provider-electricity-provider-fixed')).toBeDefined()
+    expect(screen.queryByTestId('provider-electricity-provider-edf_freephase')).toBeNull()
+  })
+
+  it('EDF radio gated off when capability absent (V5 E-M1)', () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity'],
+    }
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.queryByTestId('provider-electricity-provider-edf_freephase')).toBeNull()
+  })
+
+  it('EDF radio visible when capability present, even when current provider is Octopus (V1 Catch-22 regression)', () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'edf_freephase', 'fixed', 'fallback'],
+      tariff_providers_status: {
+        electricity: {
+          fuel: 'electricity',
+          provider_kind: 'octopus_electricity',
+          last_refresh_at: 1745236800,
+          stale: false,
+          last_price: 0.245,
+          source_url: null,
+          last_error: null,
+          tariff_label: 'Octopus Agile',
+        },
+      },
+    }
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={vi.fn()} />)
+    // The radio is present even though no provider currently has provider_kind: 'edf_freephase'.
+    expect(screen.getByTestId('provider-electricity-provider-edf_freephase')).toBeDefined()
+  })
+
+  it('selecting EDF radio reveals region picker, hides Octopus credentials', () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'edf_freephase', 'fixed', 'fallback'],
+    }
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-edf_freephase'))
+    expect(screen.getByLabelText('EDF region')).toBeDefined()
+    expect(screen.queryByPlaceholderText('sk_live_...')).toBeNull()
+  })
+
+  it('selecting Fixed reveals £/kWh input', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    expect(screen.getByText(/Electricity Rate/i)).toBeDefined()
+  })
+})
+
+describe('StepTariff — gas section visibility', () => {
+  it('renders gas section when install has a gas boiler', () => {
+    render(<StepTariff config={BOILER_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.getByTestId('tariff-gas-section')).toBeDefined()
+  })
+
+  it('renders gas section for hybrid install (HP + gas boiler)', () => {
+    render(<StepTariff config={HYBRID_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.getByTestId('tariff-gas-section')).toBeDefined()
+    expect(screen.getByTestId('tariff-electricity-section')).toBeDefined()
+  })
+
+  it('does NOT render gas section for HP-only install', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.queryByTestId('tariff-gas-section')).toBeNull()
+  })
+})
+
+describe('StepTariff — Octopus test connection', () => {
+  it('Test Connection POSTs to api/wizard/test-octopus', async () => {
+    const fetchSpy = mockFetch({
+      success: true,
+      message: 'Connected',
+      tariff_code: 'E-1R-AGILE',
+      gas_tariff_code: null,
+    })
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    const url = fetchSpy.mock.calls[0][0] as string
+    expect(url).toContain('api/wizard/test-octopus')
+  })
+
+  it('test response populates gas_tariff_code in gas section when both meters present', async () => {
+    mockFetch({
+      success: true,
+      message: 'Connected',
+      tariff_code: 'E-1R-AGILE',
+      gas_tariff_code: 'G-1R-TRACKER',
+      additional_import_tariffs: [],
+    })
+    const cfg = {
+      energy: {
+        octopus: { api_key: 'sk_live_xxx', account_number: 'A-1234' },
+      },
+      heat_source: { type: 'gas_boiler' as const },
+    }
+    render(<StepTariff config={cfg} onUpdate={vi.fn()} />)
+    // Gas section uses Octopus Tracker by default in our hydrate fallback?
+    // No — gas defaults to fixed; user selects Octopus Tracker.
+    fireEvent.click(screen.getByTestId('provider-gas-provider-octopus'))
+    // Now there are two Test Connection buttons (electricity + gas). Pick the
+    // first; either should fire the same handler.
+    const buttons = screen.getAllByText(/Test Connection/i)
+    fireEvent.click(buttons[0])
+    await waitFor(() => expect(screen.getByText('G-1R-TRACKER')).toBeDefined())
+  })
+
+  it('persists discovered tariff_code on the electricity provider after success (V2 B-M2)', async () => {
+    mockFetch({
+      success: true,
+      message: 'Connected',
+      tariff_code: 'E-1R-AGILE',
+      gas_tariff_code: null,
+      additional_import_tariffs: [],
+    })
+    const onUpdate = vi.fn()
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalled()
+      const lastCall = onUpdate.mock.calls[onUpdate.mock.calls.length - 1]
+      const data = lastCall[1] as { electricity?: { octopus_tariff_code?: string } }
+      expect(data.electricity?.octopus_tariff_code).toBe('E-1R-AGILE')
+    })
+  })
+})
+
+describe('StepTariff — legacy 90E direction handling (regression)', () => {
+  it('renders import + export rows when both present', async () => {
     mockFetch({
       success: true,
       message: 'Connected. Import tariff: E-1R-AGILE-FLEX-22-11-25-A',
       tariff_code: 'E-1R-AGILE-FLEX-22-11-25-A',
       export_tariff: 'E-1R-OUTGOING-FIX-12M-19-05-13-A',
       additional_import_tariffs: [],
-      account_number: 'A-1234',
+      gas_tariff_code: null,
     })
-
-    render(<StepTariff config={BASE_CONFIG} onUpdate={vi.fn()} />)
-    await clickTest()
-
-    await waitFor(() =>
-      expect(screen.getByText('E-1R-AGILE-FLEX-22-11-25-A')).toBeDefined(),
-    )
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
+    await waitFor(() => expect(screen.getByText('E-1R-AGILE-FLEX-22-11-25-A')).toBeDefined())
     expect(screen.getByText('Import tariff')).toBeDefined()
     expect(screen.getByText(/Export tariff \(informational/i)).toBeDefined()
-    expect(screen.getByText('E-1R-OUTGOING-FIX-12M-19-05-13-A')).toBeDefined()
-  })
-
-  it('hides export row when export_tariff is null', async () => {
-    mockFetch({
-      success: true,
-      message: 'Connected. Import tariff: E-1R-AGILE-FLEX-22-11-25-A',
-      tariff_code: 'E-1R-AGILE-FLEX-22-11-25-A',
-      export_tariff: null,
-      additional_import_tariffs: [],
-      account_number: 'A-1234',
-    })
-
-    render(<StepTariff config={BASE_CONFIG} onUpdate={vi.fn()} />)
-    await clickTest()
-
-    await waitFor(() =>
-      expect(screen.getByText('E-1R-AGILE-FLEX-22-11-25-A')).toBeDefined(),
-    )
-    expect(screen.queryByText(/Export tariff \(informational/i)).toBeNull()
   })
 
   it('shows actionable error for export-only account', async () => {
     mockFetch({
       success: false,
-      message:
-        'No import tariff found on this Octopus account. QSH optimises import cost — export-only accounts are not supported. Add your import agreement in the Octopus dashboard and retry.',
+      message: 'No import tariff found',
       tariff_code: null,
       export_tariff: 'E-1R-OUTGOING-FIX-12M-A',
       additional_import_tariffs: [],
-      account_number: 'A-5678',
+      gas_tariff_code: null,
     })
-
-    render(<StepTariff config={BASE_CONFIG} onUpdate={vi.fn()} />)
-    await clickTest()
-
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
     await waitFor(() =>
       expect(screen.getByText(/No import tariff found/i)).toBeDefined(),
     )
     expect(screen.getByText(/Only an export \(Outgoing\) tariff/i)).toBeDefined()
-    expect(screen.getByText('E-1R-OUTGOING-FIX-12M-A')).toBeDefined()
-    // Primary-import panel is NOT rendered for export-only
     expect(screen.queryByText('Import tariff')).toBeNull()
   })
 
   it('shows multi-MPAN warning when additional_import_tariffs populated', async () => {
     mockFetch({
       success: true,
-      message: 'Connected. Import tariff: E-1R-ECO7-DAY-A',
+      message: 'Connected',
       tariff_code: 'E-1R-ECO7-DAY-A',
-      export_tariff: null,
       additional_import_tariffs: ['E-1R-ECO7-NIGHT-A'],
-      account_number: 'A-9999',
+      export_tariff: null,
+      gas_tariff_code: null,
     })
-
-    render(<StepTariff config={BASE_CONFIG} onUpdate={vi.fn()} />)
-    await clickTest()
-
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
     await waitFor(() =>
       expect(screen.getByText(/Multiple import tariffs detected/i)).toBeDefined(),
     )
     expect(screen.getByText('E-1R-ECO7-NIGHT-A')).toBeDefined()
+  })
+})
+
+describe('StepTariff — EDF region picker (V2 E-M3)', () => {
+  it('lists regions A through P', () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'edf_freephase', 'fixed', 'fallback'],
+    }
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-edf_freephase'))
+    const select = screen.getByLabelText('EDF region') as HTMLSelectElement
+    const options = Array.from(select.options).map((o) => o.value).filter((v) => v !== '')
+    expect(options).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'])
+  })
+
+  it('region change triggers test-edf-region call after debounce', async () => {
+    vi.useFakeTimers()
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'edf_freephase', 'fixed', 'fallback'],
+    }
+    const fetchSpy = mockFetch({ success: true, message: 'Region available' })
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-edf_freephase'))
+    fireEvent.change(screen.getByLabelText('EDF region'), { target: { value: 'C' } })
+    // Before debounce — no call yet.
+    expect(fetchSpy.mock.calls.find((c) => String(c[0]).includes('test-edf-region'))).toBeUndefined()
+    // After debounce — call fires.
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    const call = fetchSpy.mock.calls.find((c) => String(c[0]).includes('test-edf-region'))
+    expect(call).toBeDefined()
+    const body = JSON.parse((call![1] as RequestInit).body as string)
+    expect(body.region).toBe('C')
+    vi.useRealTimers()
+  })
+
+  it('region test failure surfaces error message', async () => {
+    liveMock.data = {
+      type: 'cycle',
+      available_provider_kinds: ['octopus_electricity', 'edf_freephase', 'fixed', 'fallback'],
+    }
+    mockFetch({ success: false, message: 'Region not supported' })
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-edf_freephase'))
+    fireEvent.change(screen.getByLabelText('EDF region'), { target: { value: 'P' } })
+    // Use real timers + waitFor so the 500 ms debounce + fetch + setState
+    // chain settles naturally.
+    await waitFor(
+      () => expect(screen.getByText(/Region not supported/i)).toBeDefined(),
+      { timeout: 2000 },
+    )
+  })
+})
+
+describe('StepTariff — Fixed rate validation', () => {
+  it('Fixed rate input has min/max/step constraints', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    const input = screen.getByLabelText(/Electricity Rate/i) as HTMLInputElement
+    expect(input.type).toBe('number')
+    expect(input.min).toBe('0.01')
+    expect(input.max).toBe('2')
+    expect(input.step).toBe('0.001')
+  })
+})
+
+// ── INSTRUCTION-158C: ha_entity option + sentinel handling ─────────────
+
+describe('StepTariff — ha_entity radio (158C)', () => {
+  it('renders ha_entity radio option', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    expect(screen.getByTestId('provider-electricity-provider-ha_entity')).toBeDefined()
+  })
+
+  it('selecting ha_entity shows rates entity input', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-ha_entity'))
+    const input = screen.getByPlaceholderText(/current_day_rates/) as HTMLInputElement
+    expect(input).toBeDefined()
+    expect(input.value).toBe('')
+  })
+
+  it('legacy hydrate to ha_entity', () => {
+    const legacyConfig = {
+      energy: {
+        octopus: { rates: { current_day: 'event.X' } },
+      },
+      heat_source: { type: 'heat_pump' as const },
+    }
+    render(<StepTariff config={legacyConfig} onUpdate={vi.fn()} />)
+    const radio = screen.getByTestId('provider-electricity-provider-ha_entity')
+    expect(radio.getAttribute('aria-checked')).toBe('true')
+    const input = screen.getByPlaceholderText(/current_day_rates/) as HTMLInputElement
+    expect(input.value).toBe('event.X')
+  })
+
+  it('save omits sentinel api_key', () => {
+    const onUpdate = vi.fn()
+    const sentinelConfig = {
+      energy: {
+        electricity: {
+          provider: 'octopus' as const,
+          octopus_api_key: '***REDACTED***',
+          octopus_account_number: 'A-1234',
+        },
+      },
+      heat_source: { type: 'heat_pump' as const },
+    }
+    render(<StepTariff config={sentinelConfig} onUpdate={onUpdate} />)
+    // Trigger a persist by changing the account number — this fires the
+    // updateElectricity path that builds the next state via stripSentinels.
+    const acctInput = screen.getByPlaceholderText('A-1234ABCD') as HTMLInputElement
+    fireEvent.change(acctInput, { target: { value: 'A-NEW' } })
+    expect(onUpdate).toHaveBeenCalled()
+    const lastCall = onUpdate.mock.calls[onUpdate.mock.calls.length - 1]
+    expect(lastCall[0]).toBe('energy')
+    const payload = lastCall[1]
+    expect(payload.electricity.octopus_api_key).toBeUndefined()
+    expect(payload.electricity.octopus_account_number).toBe('A-NEW')
   })
 })

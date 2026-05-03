@@ -139,6 +139,59 @@ describe('StatusBanner readback mismatch alarm', () => {
     expect(match?.[1]?.length ?? 0).toBeGreaterThan(0)
   })
 
+  // INSTRUCTION-150E Task 7e: source-aware readback alarm label.
+  it('readback alarm uses "HP" short name for heat_pump source', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        readbackMismatchCount={5}
+        readbackMismatchThreshold={5}
+      />,
+    )
+    const alarm = screen.getByTestId('readback-mismatch-alarm')
+    expect(alarm.textContent).toMatch(/HP not responding/)
+    expect(alarm.textContent).toMatch(/Check Octopus API status/)
+  })
+
+  it('readback alarm uses "Gas" short name and generic advice for gas_boiler source (V2 E-M2)', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSource={{
+          ...baseProps.heatSource,
+          type: 'gas_boiler',
+          performance: { value: 0.85, source: 'config' },
+          input_power_kw: 8,
+          thermal_output_kw: 6.8,
+        }}
+        readbackMismatchCount={5}
+        readbackMismatchThreshold={5}
+      />,
+    )
+    const alarm = screen.getByTestId('readback-mismatch-alarm')
+    expect(alarm.textContent).toMatch(/Gas not responding/)
+    // Octopus API advice is HP-specific; non-HP sources get generic copy.
+    expect(alarm.textContent).not.toMatch(/Check Octopus API status/)
+    expect(alarm.textContent).toMatch(/Check the heat source/)
+  })
+
+  it('readback alarm uses "Oil" short name for oil_boiler source', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSource={{
+          ...baseProps.heatSource,
+          type: 'oil_boiler',
+          performance: { value: 0.82, source: 'config' },
+        }}
+        readbackMismatchCount={5}
+        readbackMismatchThreshold={5}
+      />,
+    )
+    const alarm = screen.getByTestId('readback-mismatch-alarm')
+    expect(alarm.textContent).toMatch(/Oil not responding/)
+  })
+
   it('does not render alarm when count is 6 but threshold is 10 (configurable threshold)', () => {
     render(
       <StatusBanner

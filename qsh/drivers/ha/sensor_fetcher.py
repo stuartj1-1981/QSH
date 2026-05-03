@@ -219,8 +219,64 @@ def fetch_trv_setpoints(config: Dict) -> Dict[str, float]:
     return trv_setpoints
 
 
-def get_room_temperature(room: str, config: Dict, sensor_temps: Optional[Dict] = None) -> float:
-    """Get room temperature with priority: independent sensors > climate entity > fallback."""
+def classify_temperature_source(room: str, config: Dict) -> str:
+    """Classify a room's configured temperature source from static config alone.
+
+    Returns one of:
+      - "independent" — zone_sensor_map[room] resolves to an entities[] entry
+      - "trv"         — entities["{room}_temp_set_hum"] is configured (sensor or list)
+      - "none_configured" — neither of the above
+
+    Pure function. Does not touch HA. Re-evaluated each cycle (cheap). Runtime
+    states ("trv_stale", "unavailable") are layered on top by get_room_temperature.
+
+    M1 re-evaluation guarantee: this function is called every cycle. If config
+    changes, classification flips on the next cycle automatically. No cache.
+    """
+    sensor_key = config.get("zone_sensor_map", {}).get(room)
+    if sensor_key and config.get("entities", {}).get(sensor_key):
+        return "independent"
+    climate_entity = config.get("entities", {}).get(f"{room}_temp_set_hum")
+    if climate_entity:
+        return "trv"
+    return "none_configured"
+
+
+# Per-room rising-edge tracker for unavailable-state logging (D1).
+# Pattern lifted from _last_valid_outdoor_temp at module top.
+# True = last cycle this room was in the "unavailable" state and we have
+# already logged the rising edge. False / absent = last cycle was healthy
+# (or this is the first cycle).
+_unavailable_state: Dict[str, bool] = {}
+
+
+def _mark_temperature_recovered(room: str) -> None:
+    """Reset the unavailable-state tracker; log INFO if recovering."""
+    if _unavailable_state.get(room, False):
+        logging.info(f"{room}: temperature source recovered")
+        _unavailable_state[room] = False
+
+
+def get_room_temperature(
+    room: str, config: Dict, sensor_temps: Optional[Dict] = None
+) -> Optional[float]:
+    """Get room temperature with priority: independent sensor > climate entity > None.
+
+    Returns None when the room has no configured source (none_configured, silent)
+    OR when all configured sources returned no usable value this cycle (unavailable,
+    rising-edge WARNING). Callers MUST handle None — the previous overtemp_protection
+    fallback is gone.
+    """
+    classification = classify_temperature_source(room, config)
+
+    if classification == "none_configured":
+        # Static config fact, not a runtime fault. No log, no transition tracking.
+        # V2.1 (L1): clear any stale unavailable-state entry from a prior
+        # classification — prevents a masked rising edge if config later flips
+        # back to "independent" while the underlying sensor is still unhealthy.
+        _unavailable_state.pop(room, None)
+        return None
+
     target_temp = config.get("overtemp_protection", 23.0)
 
     sensor_key = config["zone_sensor_map"].get(room)
@@ -231,6 +287,7 @@ def get_room_temperature(room: str, config: Dict, sensor_temps: Optional[Dict] =
         if not is_stale and sensor_temps and sensor_key in sensor_temps:
             temp = sensor_temps[sensor_key]
             if temp is not None and temp != target_temp:
+                _mark_temperature_recovered(room)
                 return temp
         elif is_stale:
             logging.debug(f"{room}: independent sensor {entity_id} is stale, falling back to TRV reading")
@@ -242,6 +299,7 @@ def get_room_temperature(room: str, config: Dict, sensor_temps: Optional[Dict] =
                 temp = safe_float(temp_raw, None)
                 if temp is not None:
                     logging.debug(f"{room} temp from independent sensor {sensor_key}: {temp:.1f}C")
+                    _mark_temperature_recovered(room)
                     return temp
 
     climate_key = f"{room}_temp_set_hum"
@@ -267,25 +325,40 @@ def get_room_temperature(room: str, config: Dict, sensor_temps: Optional[Dict] =
                 logging.warning(f"{room}: all TRV readings stale, using last known {avg_temp:.1f}C (may be inaccurate)")
             else:
                 logging.debug(f"{room} temp from climate entity (avg of {len(temps)} TRVs): {avg_temp:.1f}C")
+            _mark_temperature_recovered(room)
             return avg_temp
 
-    logging.warning(f"No valid temperature source for {room}, using target {target_temp:.1f}C")
-    return target_temp
+    # Configured source went unavailable — rising-edge WARNING only.
+    was_unavailable = _unavailable_state.get(room, False)
+    if not was_unavailable:
+        logging.warning(
+            f"{room}: configured temperature source went unavailable "
+            f"(classification={classification})"
+        )
+        _unavailable_state[room] = True
+    return None
 
 
 def fetch_room_temperatures(config: Dict, sensor_temps: Dict[str, float]) -> Dict[str, float]:
-    """Fetch temperatures for all rooms using priority logic."""
-    room_temps = {}
+    """Fetch temperatures for all rooms with a usable reading this cycle.
 
+    Rooms with no configured source OR whose configured source returned no value
+    this cycle are OMITTED from the output dict. Callers MUST tolerate missing
+    keys. This matches the MQTT driver's existing behaviour (see
+    test_mqtt_driver.py:211).
+    """
+    room_temps: Dict[str, float] = {}
     for room in config["rooms"]:
-        room_temps[room] = get_room_temperature(room, config, sensor_temps)
+        temp = get_room_temperature(room, config, sensor_temps)
+        if temp is not None:
+            room_temps[room] = temp
 
     target = config.get("overtemp_protection", 23.0)
     cold_rooms = []
-    for room in config["rooms"]:
-        delta = target - room_temps[room]
+    for room, temp in room_temps.items():
+        delta = target - temp
         if delta > 0.5:
-            cold_rooms.append(f"{room}:{room_temps[room]:.1f}C({delta:+.1f})")
+            cold_rooms.append(f"{room}:{temp:.1f}C({delta:+.1f})")
 
     if cold_rooms:
         logging.debug(
@@ -294,6 +367,13 @@ def fetch_room_temperatures(config: Dict, sensor_temps: Dict[str, float]) -> Dic
         )
 
     return room_temps
+
+
+def fetch_room_temperature_sources(config: Dict) -> Dict[str, str]:
+    """Per-room classification dict for every room in config['rooms']. Always
+    contains every configured room. Pure config-derived; no HA fetch.
+    """
+    return {room: classify_temperature_source(room, config) for room in config["rooms"]}
 
 
 def fetch_heating_percentages(config: Dict) -> Tuple[Dict[str, float], float]:
@@ -551,6 +631,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.trv_temps = fetch_trv_temperatures(config)
     data.trv_setpoints = fetch_trv_setpoints(config)
     data.room_temps = fetch_room_temperatures(config, data.independent_sensors)
+    data.room_temperature_source = fetch_room_temperature_sources(config)
 
     outdoor_entity = config["entities"].get("outdoor_temp")
     if outdoor_entity:

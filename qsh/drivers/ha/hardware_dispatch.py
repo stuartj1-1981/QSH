@@ -135,7 +135,7 @@ def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max):
     protection). User config takes precedence — the API protection is a
     safety net, not the primary bound.
     """
-    from . import octopus as octopus_api
+    from . import octopus_hp_control as octopus_api
 
     # Enforce configured limits AND API hard limits at dispatch boundary.
     effective_min = max(OCTOPUS_FLOW_MIN, flow_min)
@@ -232,7 +232,7 @@ def _apply_mode_octopus_api(optimal_mode):
     Setpoint is handled internally by octopus_api.set_zone_mode() --
     it includes the stored zone setpoint on heat transitions automatically.
     """
-    from . import octopus as octopus_api
+    from . import octopus_hp_control as octopus_api
 
     result = octopus_api.set_zone_mode(optimal_mode)
     if result == "skipped":
@@ -482,7 +482,7 @@ def get_current_heat_source_mode(config):
     control_method = config.get("control_method", "trvs_only")
 
     if control_method == "octopus_api":
-        from . import octopus as octopus_api
+        from . import octopus_hp_control as octopus_api
 
         return octopus_api.get_current_hp_mode()
 
@@ -518,7 +518,7 @@ def apply_failsafe(config, safe_flow=40.0, safe_mode="heat"):
 
     try:
         if control_method == "octopus_api":
-            from . import octopus as octopus_api
+            from . import octopus_hp_control as octopus_api
 
             if octopus_api.is_available():
                 octopus_api.set_flow_temperature(safe_flow)
