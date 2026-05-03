@@ -4,6 +4,7 @@ export interface RoomState {
   valve: number
   occupancy: string
   occupancy_source?: string
+  temperature_source?: string  // 'independent' | 'trv' | 'trv_stale' | 'unavailable' | 'none_configured' | 'unknown'
   status: string
   facing: number | string
   area_m2: number
@@ -46,6 +47,35 @@ export interface EnergyState {
   cost_today_pence: number
   energy_today_kwh: number
   predicted_saving?: number
+}
+
+// INSTRUCTION-150E: Tariff Provider Abstraction (frontend types).
+// V2 E-H1: tariff_providers_status is a Partial<Record<Fuel, ProviderStatus>> —
+// the backend populates only fuels in the install. Component code uses
+// optional chaining; the type system distinguishes "fuel present in install
+// but provider failed" from "fuel not present in install at all".
+export type Fuel = 'electricity' | 'gas' | 'lpg' | 'oil'
+
+export type ProviderKind =
+  | 'octopus_electricity'
+  | 'octopus_gas'
+  | 'edf_freephase'
+  | 'fixed'
+  | 'fallback'
+  | 'ha_entity'  // 158C: mirrors backend qsh/tariff/__init__.py
+
+export interface ProviderStatus {
+  fuel: Fuel
+  provider_kind: ProviderKind
+  last_refresh_at: number | null
+  stale: boolean
+  last_price: number
+  source_url: string | null
+  last_error: string | null
+  // V5 C-2: human-readable label authored by the backend ("Octopus Agile",
+  // "EDF FreePhase Green Band", "Fixed £0.0712/kWh"). The frontend renders
+  // it directly — never combines provider_kind + tariff_code itself.
+  tariff_label: string | null
 }
 
 export interface EngineeringState {
@@ -140,6 +170,10 @@ export interface StatusResponse {
   // window only; once 134 + 135 ship through one release cycle this should
   // be flipped to required (V1 Finding 7 follow-up).
   setup_mode?: boolean
+  // INSTRUCTION-150E: tariff provider abstraction (mirror of CycleMessage
+  // fields for REST consumers). Optional during phase 7 rollout.
+  tariff_providers_status?: Partial<Record<Fuel, ProviderStatus>>
+  available_provider_kinds?: ProviderKind[]
 }
 
 export interface RoomsResponse {
@@ -212,6 +246,14 @@ export interface CycleMessage {
     rooms: Record<string, BoostRoom>
   }
   source_selection?: SourceSelectionState
+  // INSTRUCTION-150E V2 E-H1: Partial map. Backend populates only fuels in
+  // the install. Use optional-chaining or hasOwn() guards; do NOT assume
+  // every fuel has a status entry.
+  tariff_providers_status?: Partial<Record<Fuel, ProviderStatus>>
+  // V5 E-M1: backend capability flag — which provider kinds is this build
+  // of QSH able to construct? Frontend gates radio options on this, NOT
+  // on whether a given provider is currently configured.
+  available_provider_kinds?: ProviderKind[]
 }
 
 export interface SysidRoom {

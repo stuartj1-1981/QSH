@@ -3,7 +3,7 @@
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import qsh.config  # noqa: F401 — module import (NOT `from qsh.config import CONFIG_IS_TEMPLATE`).
                     # The bound-at-import form would capture the value at this module's
@@ -12,6 +12,12 @@ import qsh.config  # noqa: F401 — module import (NOT `from qsh.config import C
                     # pattern in is_setup_mode() reads the current value per request.
 
 from ..drivers.ha.hardware_dispatch import READBACK_MISMATCH_ALARM_THRESHOLD
+from qsh.tariff import (
+    Fuel,
+    ProviderKind,
+    ProviderStatus,
+    SUPPORTED_PROVIDER_KINDS,
+)
 
 
 @dataclass
@@ -129,6 +135,14 @@ class CycleSnapshot:
     active_source_performance: Optional[Any] = None
     peak_thermal_demand_kw: float = 0.0
 
+    # Tariff providers (INSTRUCTION-150C V5 E-M1).
+    # tariff_providers_status: per-fuel snapshot of provider state (read off
+    #   pipeline.tariff_providers — populated in SharedState.update()).
+    # available_provider_kinds: backend capability flag the frontend gates
+    #   radio options on. Mirrors qsh.tariff.SUPPORTED_PROVIDER_KINDS.
+    tariff_providers_status: Dict[Fuel, ProviderStatus] = field(default_factory=dict)
+    available_provider_kinds: Tuple[ProviderKind, ...] = SUPPORTED_PROVIDER_KINDS
+
 
 def _resolve_operating_state(ctx) -> str:
     """Extract operating_state with clear priority and fallback.
@@ -215,6 +229,42 @@ def build_hp_shim(snap: "CycleSnapshot") -> Optional[Dict[str, Any]]:
     }
 
 
+def _collect_tariff_providers_status() -> Dict[Fuel, ProviderStatus]:
+    """V5 C-5 / 150C: read pipeline.tariff_providers (set by main.py at
+    startup) and return a fuel->ProviderStatus dict. status() is cheap and
+    does not hit upstream, so it is safe to call every cycle.
+
+    Returns an empty dict when the pipeline module has not yet attached
+    tariff_providers (e.g. unit tests that bypass main.py)."""
+    try:
+        from qsh import pipeline as _pipeline_module
+    except Exception:
+        return {}
+    providers = getattr(_pipeline_module, "tariff_providers", None)
+    if not providers:
+        return {}
+    out: Dict[Fuel, ProviderStatus] = {}
+    for fuel, provider in providers.items():
+        try:
+            out[fuel] = provider.status()
+        except Exception:
+            # Defensive: a provider raising in status() must not poison the
+            # snapshot. Skip and let the rest of the cycle proceed.
+            continue
+    return out
+
+
+def serialise_tariff_providers_status(
+    statuses: Dict[Fuel, ProviderStatus],
+) -> Dict[str, Dict[str, Any]]:
+    """V2 C-L2: convert the dataclass-valued dict into a JSON-friendly shape
+    for /api/status and /ws/live. Each ProviderStatus is flattened to a plain
+    dict so FastAPI's JSON encoder (which doesn't natively serialise frozen
+    dataclasses) emits the documented field shape."""
+    from dataclasses import asdict
+    return {fuel: asdict(status) for fuel, status in statuses.items()}
+
+
 def _resolve_snapshot_hp_cop(ctx) -> Optional[float]:
     """Emit COP for display only when it is live-sourced and meaningful.
 
@@ -284,6 +334,7 @@ class SharedState:
         room_targets = getattr(ctx, 'room_targets', {})
         occupancy_states = getattr(ctx, 'occupancy_states', {})
         occupancy_source = getattr(ctx, 'occupancy_source', {})
+        temperature_source = getattr(ctx, 'room_temperature_source', {})
 
         # HOUSE_CONFIG["rooms"] is {room_name: area_m2} (flat floats)
         # Facings, ceiling heights etc. are in separate top-level dicts
@@ -322,6 +373,7 @@ class SharedState:
                 'valve': valve,
                 'occupancy': occ,
                 'occupancy_source': occupancy_source.get(room_name, 'schedule'),
+                'temperature_source': temperature_source.get(room_name, 'unknown'),
                 'status': status,
                 'facing': facings_map.get(room_name, 0.2),
                 'area_m2': room_areas.get(room_name, 0),
@@ -395,6 +447,8 @@ class SharedState:
             active_source_thermal_output_source=getattr(ctx, 'active_source_thermal_output_source', 'unknown'),
             active_source_performance=getattr(ctx, 'active_source_performance', None),
             peak_thermal_demand_kw=getattr(ctx, 'peak_thermal_demand_kw', 0.0),
+            tariff_providers_status=_collect_tariff_providers_status(),
+            available_provider_kinds=SUPPORTED_PROVIDER_KINDS,
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──

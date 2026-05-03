@@ -24,7 +24,12 @@ from typing import Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .state import build_heat_source_payload, build_hp_shim, shared_state
+from .state import (
+    build_heat_source_payload,
+    build_hp_shim,
+    serialise_tariff_providers_status,
+    shared_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,4 +177,10 @@ def _format_snapshot(snap) -> dict:
             "zones_recovering": snap.zones_recovering,
         },
         "source_selection": snap.source_selection,
+        # INSTRUCTION-150C V5 E-M1: per-fuel tariff provider state and the
+        # backend-supported provider-kinds list.
+        "tariff_providers_status": serialise_tariff_providers_status(
+            snap.tariff_providers_status
+        ),
+        "available_provider_kinds": list(snap.available_provider_kinds),
     }

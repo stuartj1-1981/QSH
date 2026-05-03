@@ -86,7 +86,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
           />
         )
       case 'tariff':
-        return <TariffSettings energy={data.energy || {}} heatSource={data.heat_source} driver={driver} onRefetch={refetch} />
+        return <TariffSettings energy={data.energy || {}} heatSource={data.heat_source} heatSources={data.heat_sources} driver={driver} onRefetch={refetch} />
       case 'thermal':
         return (
           <ThermalSettings

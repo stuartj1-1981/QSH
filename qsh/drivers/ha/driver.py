@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ...signal_bus import InputBlock, OutputBlock
 
@@ -40,13 +40,33 @@ class HADriver:
 
     def __init__(self):
         self._cycle_interval = 30  # seconds between cycles
+        # 158B V2 (Finding 2): tariff-rate consumer callback. Registered
+        # exclusively from qsh/main.py via set_tariff_rate_consumer() and
+        # called each cycle after rates parse. Driver does not know what
+        # consumes the rates and does not import the consumer's class.
+        self._tariff_rate_consumer: Optional[Callable[[List], None]] = None
+
+    def set_tariff_rate_consumer(
+        self, consumer: Optional[Callable[[List], None]]
+    ) -> None:
+        """Register a callable invoked each cycle with the parsed tariff
+        rate slots. None unregisters. Called by qsh/main.py during
+        startup binding; not intended for runtime rebinding.
+
+        Contract: the callable MUST NOT raise. If it does, the exception
+        propagates and breaks the input read — the registration site is
+        responsible for choosing a non-raising callable (e.g. methods
+        that themselves catch and log internally). This is deliberate;
+        the driver does not silently swallow registration-site bugs.
+        """
+        self._tariff_rate_consumer = consumer
 
     # ── IODriver protocol ──────────────────────────────────────────────
 
     def setup(self, config: Dict) -> Dict[str, Any]:
         """One-time startup: init octopus."""
         from .hardware_dispatch import get_current_heat_source_mode
-        from . import octopus as octopus_api
+        from . import octopus_hp_control as octopus_api
 
         # dfan_control_toggle is now read each cycle via resolve_value (INSTRUCTION-36A).
         # Changes in HA propagate within one cycle; Web UX changes sync back to HA.
@@ -105,7 +125,8 @@ class HADriver:
         """Fetch all external signals from Home Assistant."""
         from .integration import fetch_ha_entity
         from .sensor_fetcher import fetch_all_sensor_data, get_flow_temp_limits, resolve_external_setpoints
-        from ...utils import safe_float, parse_rates_array, get_current_rate
+        from ...utils import safe_float
+        from ...tariff.octopus_electricity import parse_octopus_rate_array, pick_octopus_rate
 
         # Resolve external setpoint overrides into config dict (INSTRUCTION-42A)
         resolve_external_setpoints(config)
@@ -131,24 +152,86 @@ class HADriver:
         if control_enabled is None:
             control_enabled = False
 
-        # Fetch tariff rates
-        rates_entity = config["entities"].get("current_day_rates")
-        tariff_rates = []
-        if rates_entity:
-            from datetime import datetime, timezone
+        # INSTRUCTION-159B Task 5 V2: dual-source HA tariff fetch.
+        #
+        # Current-day: 3 retries on empty (existing critical-path behaviour).
+        # Next-day: 1 attempt only — planning-grade enhancement; missed cycle is
+        #           recovered on the next 30s tick. Asymmetric retry budget
+        #           caps per-cycle HA fetch attempts under outage at 4
+        #           (vs 6 if both ran 3 retries), limiting circuit-breaker trip
+        #           rate to ~+33% of the pre-159B baseline rather than +100%.
+        #
+        # Warning suppression: hour<16 applied symmetrically. parse_octopus_rate_array
+        # warns on empty by default; next-day is structurally empty every cycle
+        # 00:00-~16:00 daily on HACS-brokered installs. Internal-entry malformed
+        # warnings (octopus_electricity.py:105) are not gated and surface
+        # independently for genuinely-bad payloads.
+        from datetime import datetime, timezone
 
-            rates_raw = fetch_ha_entity(rates_entity, "rates", default=[])
-            tariff_rates = parse_rates_array(rates_raw, suppress_warning=(datetime.now(timezone.utc).hour < 16))
-            retry = 0
-            while not tariff_rates and retry < 3:
-                retry += 1
-                logging.warning(f"HADriver: rates retry {retry}/3...")
-                rates_raw = fetch_ha_entity(rates_entity, "rates", default=[])
-                tariff_rates = parse_rates_array(rates_raw)
+        elec_section = config.get("energy", {}).get("electricity", {}) if isinstance(config.get("energy"), dict) else {}
+        if not isinstance(elec_section, dict):
+            elec_section = {}
+        rates_entity = elec_section.get("rates_entity")
+        rates_entity_next = elec_section.get("rates_entity_next")
+        if not rates_entity:
+            # DEPRECATED-159B: legacy entities.current_day_rates fallback.
+            # Retained because the factory at qsh/tariff/__init__.py no longer
+            # populates this key — the only remaining consumer is this driver
+            # branch, and only on installs whose YAML still carries the legacy
+            # entities-map shape because no per-fuel ha_entity save has triggered
+            # the 150C migration yet.
+            #
+            # Removal trigger: when fleet telemetry confirms zero installs are
+            # reading tariff rates via this branch — re-evaluate at the next
+            # fleet sweep. Until then this branch is the only path that keeps
+            # legacy-shape installs working post-159B.
+            #
+            # Surfaced in tests as test_legacy_entities_path_fallback_until_
+            # deprecation_clearance (Task 6) so removal candidacy is visible
+            # in the test log on every CI run.
+            rates_entity = config.get("entities", {}).get("current_day_rates")
+            rates_entity_next = None
+
+        suppress_empty = datetime.now(timezone.utc).hour < 16
+
+        def _fetch_and_parse(entity_id, label, max_retries):
+            """Fetch a rate entity and parse, retrying on empty up to
+            (max_retries - 1) additional times. Returns the parsed list (or
+            empty)."""
+            rates_raw = fetch_ha_entity(entity_id, "rates", default=[])
+            parsed = parse_octopus_rate_array(rates_raw, suppress_warning=suppress_empty)
+            attempts = 1
+            while not parsed and attempts < max_retries:
+                attempts += 1
+                logging.warning(
+                    "HADriver: %s rates retry %d/%d...", label, attempts, max_retries
+                )
+                rates_raw = fetch_ha_entity(entity_id, "rates", default=[])
+                parsed = parse_octopus_rate_array(rates_raw, suppress_warning=suppress_empty)
+            return parsed
+
+        current_array = []
+        next_array = []
+        if rates_entity:
+            current_array = _fetch_and_parse(rates_entity, "current_day", max_retries=3)
+        if rates_entity_next:
+            next_array = _fetch_and_parse(rates_entity_next, "next_day", max_retries=1)
+
+        # Current-day slots come first — they cover earlier UTC times. The
+        # provider's pick_octopus_rate() is chronological-array agnostic; it
+        # selects the slot covering "now" from any chronological array.
+        tariff_rates = current_array + next_array
+
+        # 158B V2 Task 5b: invoke the registered tariff-rate consumer. No
+        # isinstance, no pipeline reach-around. The consumer is bound
+        # exactly once at startup by qsh/main.py.
+        if tariff_rates and self._tariff_rate_consumer is not None:
+            self._tariff_rate_consumer(tariff_rates)
 
         # Pre-calculate current rate and export rate
+        fallback_rate = config.get("fallback_rates", {}).get("standard", 0.245)
         current_rate = (
-            get_current_rate(tariff_rates) if tariff_rates else config.get("fallback_rates", {}).get("standard", 0.245)
+            pick_octopus_rate(tariff_rates, fallback=fallback_rate) if tariff_rates else fallback_rate
         )
         export_rate = safe_float(config.get("export_rate", 0.15), 0.15)
 
@@ -231,6 +314,7 @@ class HADriver:
         return InputBlock(
             # Temperatures
             room_temps=dict(sensor_data.room_temps),
+            room_temperature_source=dict(getattr(sensor_data, "room_temperature_source", {})),
             independent_sensors=dict(sensor_data.independent_sensors),
             trv_temps=dict(sensor_data.trv_temps),
             trv_setpoints=dict(sensor_data.trv_setpoints),
@@ -253,7 +337,6 @@ class HADriver:
             valve_positions=dict(sensor_data.heating_percs),
             avg_open_frac=sensor_data.avg_open_frac,
             # Energy
-            tariff_rates=tariff_rates,
             solar_production=sensor_data.solar_production,
             grid_power=sensor_data.grid_power,
             battery_soc=sensor_data.battery_soc,

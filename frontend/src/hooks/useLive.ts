@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CycleMessage } from '../types/api'
 import { wsUrl } from '../lib/api'
+import { cycleSnapshotSchema } from '../types/schemas'
 
 interface UseLiveResult {
   data: CycleMessage | null
@@ -27,14 +28,30 @@ export function useLive(): UseLiveResult {
       }
 
       ws.onmessage = (event) => {
+        // INSTRUCTION-150E V3 150E-V2-M3: Zod-based runtime parse. JSON
+        // parse failures and schema mismatches keep the last-known-good
+        // snapshot rather than propagating malformed data to component
+        // consumers. The warning surfaces in the browser console so the
+        // diagnosis trail is visible to operators.
+        let raw: unknown
         try {
-          const msg: CycleMessage = JSON.parse(event.data)
-          if (msg.type === 'cycle') {
-            setData(msg)
-            setLastUpdate(Date.now())
-          }
+          raw = JSON.parse(event.data)
         } catch {
-          // ignore parse errors
+          console.warn('useLive: WebSocket payload was not valid JSON')
+          return
+        }
+        const parsed = cycleSnapshotSchema.safeParse(raw)
+        if (!parsed.success) {
+          console.warn(
+            'useLive: WebSocket payload failed schema validation',
+            parsed.error,
+          )
+          return
+        }
+        const msg = parsed.data as CycleMessage
+        if (msg.type === 'cycle') {
+          setData(msg)
+          setLastUpdate(Date.now())
         }
       }
 

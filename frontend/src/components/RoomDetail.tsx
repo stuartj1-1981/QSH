@@ -110,6 +110,7 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
           {room.occupancy_source && (
             <DetailItem label="Occ. Source" value={room.occupancy_source} />
           )}
+          <DetailItem label="Temperature Source" value={temperatureSourceLabel(room.temperature_source)} />
           <DetailItem label="Area" value={`${room.area_m2}m²`} />
           <DetailItem label="Ceiling" value={`${room.ceiling_m}m`} />
         </div>
@@ -271,6 +272,17 @@ function BoostSection({ name, room, boost }: { name: string; room: RoomState; bo
       </button>
     </div>
   )
+}
+
+function temperatureSourceLabel(source: string | undefined): string {
+  switch (source) {
+    case 'none_configured': return 'None — schedule only'
+    case 'independent': return 'Independent sensor'
+    case 'trv': return 'TRV built-in'
+    case 'trv_stale': return 'TRV (stale)'
+    case 'unavailable': return 'Configured, unavailable'
+    default: return '—'
+  }
 }
 
 function DetailItem({ label, value, entityId, engineering }: { label: string; value: string; entityId?: string; engineering?: boolean }) {

@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { sourceShortName } from '../lib/sourceLabels'
 import type { RoomState, DriverStatus, HeatSourceState } from '../types/api'
 import type { Page } from '../App'
 import { EntityValue } from './EntityValue'
@@ -19,6 +20,25 @@ const PAUSE_STRATEGIES = [
 export const SETUP_MODE_NAV_TARGET = 'wizard' as const
 const _PAGE_TYPECHECK: Page = SETUP_MODE_NAV_TARGET
 void _PAGE_TYPECHECK
+
+// INSTRUCTION-150E Task 6 (V2 E-M2) audit list — sites in
+// StatusBanner.tsx that hardcoded "HP" before this change:
+//   1. Line 251 comment: "HP not responding..."  → updated to say "heat source"
+//   2. Line 258 alarm body: "HP not responding to commanded mode (...)"
+//      → replaced with `${sourceShortName(...)} not responding to commanded mode (...)`
+//   3. Line 259 alarm advice: "Check Octopus API status."
+//      → kept conditionally on heat_pump source; for non-HP sources we
+//        say "Check the heat source's controller / driver." instead
+//        (Octopus is HP-specific via the proxy/zone integration).
+// Sites NOT changed (already source-aware):
+//   - lucide-react Zap/Flame icon selection (heatSource.type branched)
+//   - performance label (COP vs η — heatSource.type branched)
+//   - thermal-output tooltip ("estimated from live COP" vs "estimated from η = …")
+//   - entityMap.hp_power / hp_cop keys (these are programmatic entity-id
+//     mapping keys, not user-facing labels — kept as-is)
+//
+// `sourceShortName` lives in lib/sourceLabels.ts so this file only exports
+// React components (Vite fast-refresh constraint).
 
 interface StatusBannerProps {
   operatingState: string
@@ -248,15 +268,19 @@ export const StatusBanner = memo(function StatusBanner({
         </div>
       )}
 
-      {/* Readback mismatch alarm — HP not responding to commanded mode for N cycles */}
+      {/* Readback mismatch alarm — heat source not responding to commanded
+          mode for N cycles. INSTRUCTION-150E Task 6: source-aware label. */}
       {readbackMismatchCount >= readbackMismatchThreshold && (
         <div
           role="alert"
           data-testid="readback-mismatch-alarm"
           className="rounded-xl border p-3 mt-1 bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 text-sm font-medium"
         >
-          HP not responding to commanded mode ({readbackMismatchCount} cycles).
-          Check Octopus API status.
+          {sourceShortName(heatSource.type)} not responding to commanded mode ({readbackMismatchCount} cycles).
+          {' '}
+          {heatSource.type === 'heat_pump'
+            ? 'Check Octopus API status.'
+            : 'Check the heat source controller / driver.'}
           {lastReadbackMismatchAlarmTime > 0 && (
             <span className="ml-1 opacity-75">
               First alarmed at {new Date(lastReadbackMismatchAlarmTime * 1000).toLocaleTimeString()}.

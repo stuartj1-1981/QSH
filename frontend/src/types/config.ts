@@ -117,6 +117,10 @@ export interface HeatSourceYaml {
   type: 'heat_pump' | 'gas_boiler' | 'oil_boiler' | 'lpg_boiler'
   efficiency?: number
   min_output_kw?: number
+  // INSTRUCTION-154C: nameplate rated capacity (kW). Heat pumps:
+  // electrical input. Boilers: fuel input. Powers fleet telemetry's
+  // heat_pump.declared_output_kw column.
+  capacity_kw?: number
   flow_min?: number
   flow_max?: number
   flow_min_entity?: string
@@ -189,6 +193,39 @@ export interface OctopusYaml {
   }
 }
 
+// INSTRUCTION-150E: Per-fuel tariff config types. Wizard / Settings build
+// these and PATCH /api/config; backend's migrate-on-save (150C) strips
+// any legacy keys.
+// INSTRUCTION-158C: + 'ha_entity' for HA-brokered rates (Octopus HACS
+// integration et al). The matching ElectricityTariffConfig.rates_entity
+// holds the HA entity ID; no API key required.
+export type ElectricityProviderKind = 'octopus' | 'edf_freephase' | 'fixed' | 'ha_entity'
+export type GasProviderKind = 'octopus' | 'fixed'
+
+export interface ElectricityTariffConfig {
+  provider: ElectricityProviderKind
+  octopus_api_key?: string
+  octopus_account_number?: string
+  octopus_tariff_code?: string
+  edf_region?: string     // A-P
+  fixed_rate?: number
+  rates_entity?: string        // 158C: HA-brokered rates path (current day)
+  rates_entity_next?: string   // 159C: HA-brokered rates path (next day, optional). Concatenated with rates_entity by the HA driver per 159B Task 5.
+}
+
+export interface GasTariffConfig {
+  provider: GasProviderKind
+  octopus_api_key?: string
+  octopus_account_number?: string
+  octopus_tariff_code?: string
+  fixed_rate?: number
+}
+
+export interface FixedOnlyTariffConfig {
+  provider: 'fixed'
+  fixed_rate: number
+}
+
 export interface EnergyYaml {
   octopus?: OctopusYaml
   fixed_rates?: {
@@ -201,6 +238,12 @@ export interface EnergyYaml {
     peak?: number
     export?: number
   }
+  // INSTRUCTION-150E: per-fuel provider configs. Optional during the
+  // 150C migrate-on-save rollout window.
+  electricity?: ElectricityTariffConfig
+  gas?: GasTariffConfig
+  lpg?: FixedOnlyTariffConfig
+  oil?: FixedOnlyTariffConfig
 }
 
 export interface ThermalYaml {
@@ -408,6 +451,16 @@ export interface OctopusTestResponse {
   /** Outgoing / export tariff code, informational. null when none. */
   export_tariff?: string | null
   account_number?: string
+  /** INSTRUCTION-150C: gas tariff code discovered alongside electricity
+   *  on the same Octopus account. null when no gas meter is registered. */
+  gas_tariff_code?: string | null
+}
+
+/** Response from POST /api/wizard/test-edf-region (INSTRUCTION-150D Task 5
+ *  — backend route owned by 150D; 150E is the frontend consumer). */
+export interface TestEdfRegionResponse {
+  success: boolean
+  message: string
 }
 
 /** Response from POST /api/config/test-influxdb */

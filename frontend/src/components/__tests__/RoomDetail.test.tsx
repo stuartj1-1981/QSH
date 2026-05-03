@@ -53,3 +53,29 @@ describe('RoomDetail sensor unavailable explanation', () => {
     expect(screen.queryByText(/Occupancy sensor is not responding/)).toBeNull()
   })
 })
+
+describe('RoomDetail temperature source row', () => {
+  it('renders "None — schedule only" for none_configured rooms', () => {
+    render(
+      <RoomDetail
+        name="utility"
+        room={{ ...baseRoom, temperature_source: 'none_configured' }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.getByText('None — schedule only')).toBeInTheDocument()
+  })
+
+  it('renders "Independent sensor" for independent rooms', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={{ ...baseRoom, temperature_source: 'independent' }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.getByText('Independent sensor')).toBeInTheDocument()
+  })
+})
