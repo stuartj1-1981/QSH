@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] — 2026-05-03
+
+### Changed
+- Tariff: rework with support for EDF and Gas dynamic tariffs
+- Config: zones with no temperature sensor are now supported
+
+### Fixed
+- Telemetry: retry improvements
+
 ## [1.2.15] — 2026-05-01
 
 ### Fixed
