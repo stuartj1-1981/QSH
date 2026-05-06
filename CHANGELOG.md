@@ -2,6 +2,16 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.1] — 2026-05-06
+
+### Added
+- Zones: auxiliary output (per-zone)
+- Zones: fixed setpoint available for no-control zones
+- Tariff: optimiser
+
+### Changed
+- Tariff: improvements
+
 ## [1.3.0] — 2026-05-03
 
 ### Changed
