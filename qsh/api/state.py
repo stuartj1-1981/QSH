@@ -153,7 +153,7 @@ def _resolve_operating_state(ctx) -> str:
       3. "Initialising" (pipeline hasn't run ShadowController yet)
     """
     # Primary: CycleContext attribute (set by ShadowController)
-    state = getattr(ctx, 'operating_state', None)
+    state = ctx.operating_state
     if state:  # truthy — non-None, non-empty
         return state
 
@@ -312,6 +312,28 @@ class SharedState:
         self._driver_status: str = "pending"        # "pending" | "connected" | "error"
         self._driver_error: Optional[str] = None    # Human-readable error message
 
+        # INSTRUCTION-131C V6 — API-facing aux dispatch tracking.
+        #
+        # SharedState is a per-process singleton constructed once at module
+        # import in qsh/api/state.py:668. _aux_dispatched is therefore
+        # process-scoped state with the same lifetime as the process (per
+        # V5/C11).
+        #
+        # _aux_dispatched: per-room last-actual-attempt result for the API
+        # tri-state. Only mutated by update() when a real dispatch
+        # attempt happened this cycle (live + outputs.auxiliary_outputs_changed).
+        # Cleared on shadow->live rising edge (per V5/C9) so a stale prior-live
+        # value does not mask a never-attempted state after extended shadow
+        # operation.
+        #
+        # Lifetime note (per V5/C10): there is no in-process config-reload
+        # path in the codebase, so _aux_dispatched is naturally bounded by the
+        # room count at process start. If a future change adds in-process
+        # config reload, the maintainer must also prune entries here against
+        # the new aux-room set.
+        self._aux_dispatched: Dict[str, bool] = {}
+        self._was_in_shadow_last_cycle: bool = False
+
     def update(self, ctx, config: dict, sysid=None):
         """Called by pipeline thread after each run_cycle().
 
@@ -323,6 +345,13 @@ class SharedState:
             config: HOUSE_CONFIG dict
             sysid: SystemIdentifier instance (optional, for sysid endpoints)
         """
+        # V5/C9 — clear stale last-attempt values on shadow->live transition.
+        # Without this, a True value from a prior live session would survive
+        # any duration of shadow operation and surface in the API after return
+        # to live, masking a never-attempted state.
+        if self._was_in_shadow_last_cycle and ctx.control_enabled:
+            self._aux_dispatched.clear()
+
         rooms = {}
         if ctx.sensor_data:
             room_temps = getattr(ctx.sensor_data, 'room_temps', {})
@@ -331,16 +360,30 @@ class SharedState:
             room_temps = {}
             valve_positions = {}
 
-        room_targets = getattr(ctx, 'room_targets', {})
-        occupancy_states = getattr(ctx, 'occupancy_states', {})
-        occupancy_source = getattr(ctx, 'occupancy_source', {})
-        temperature_source = getattr(ctx, 'room_temperature_source', {})
+        room_targets = ctx.room_targets
+        occupancy_states = ctx.occupancy_states
+        occupancy_source = ctx.occupancy_source
+        temperature_source = ctx.room_temperature_source
 
         # HOUSE_CONFIG["rooms"] is {room_name: area_m2} (flat floats)
         # Facings, ceiling heights etc. are in separate top-level dicts
         room_areas = config.get('rooms', {})
         facings_map = config.get('facings', {})
         ceiling_map = config.get('ceiling_heights', {})
+
+        # INSTRUCTION-131C V6 — aux derivation prerequisites pulled once.
+        aux_outputs_cfg_all = config.get("auxiliary_outputs", {}) or {}
+        ctx_aux_state = ctx.auxiliary_state or {}
+        outputs = ctx.outputs
+        aux_outputs_dispatched_map = (
+            getattr(outputs, 'auxiliary_outputs', {}) or {}
+        ) if outputs is not None else {}
+        aux_outputs_changed = bool(
+            getattr(outputs, 'auxiliary_outputs_changed', False)
+        ) if outputs is not None else False
+        aux_failures = (
+            getattr(outputs, 'auxiliary_dispatch_failures', set()) or set()
+        ) if outputs is not None else set()
 
         for room_name in room_areas:
             temp = room_temps.get(room_name)
@@ -367,6 +410,48 @@ class SharedState:
             else:
                 status = 'unknown'
 
+            # INSTRUCTION-131C V6 — auxiliary output derivation (V4/C5 tri-state).
+            aux_outputs_cfg = aux_outputs_cfg_all.get(room_name, {}) or {}
+            aux_configured = bool(aux_outputs_cfg.get("enabled"))
+
+            if aux_configured:
+                aux_state_val = ctx_aux_state.get(room_name, False)
+                aux_rated_kw_val = aux_outputs_cfg.get("rated_kw", 0.0)
+                aux_min_on_s_val = aux_outputs_cfg.get("min_on_time_s", 60)
+                aux_min_off_s_val = aux_outputs_cfg.get("min_off_time_s", 60)
+                aux_max_cph_val = aux_outputs_cfg.get("max_cycles_per_hour", 6)
+            else:
+                aux_state_val = None
+                aux_rated_kw_val = 0.0
+                aux_min_on_s_val = None
+                aux_min_off_s_val = None
+                aux_max_cph_val = None
+
+            # aux_dispatched derivation (V4/C5 tri-state, current-cycle freshness).
+            # True  = last actual dispatch attempt succeeded.
+            # False = last actual dispatch attempt failed (alarm).
+            # None  = not configured, or running in shadow mode, or no attempt yet.
+            if not aux_configured:
+                aux_dispatched_val = None
+            elif not ctx.control_enabled:
+                # Shadow: nothing was dispatched this cycle. The API contract
+                # expressly returns None in shadow regardless of the last
+                # live-mode value — operators must be able to distinguish
+                # "not attempted" from "attempted-and-failed" without
+                # inferring the install's mode.
+                aux_dispatched_val = None
+            else:
+                # Live mode. Update _aux_dispatched only when an actual
+                # attempt happened this cycle.
+                if aux_outputs_changed and room_name in aux_outputs_dispatched_map:
+                    if room_name in aux_failures:
+                        self._aux_dispatched[room_name] = False
+                    else:
+                        self._aux_dispatched[room_name] = True
+                # No attempt this cycle -> _aux_dispatched[room_name]
+                # unchanged (or absent if never attempted in this session).
+                aux_dispatched_val = self._aux_dispatched.get(room_name)
+
             rooms[room_name] = {
                 'temp': temp,
                 'target': target,
@@ -378,6 +463,14 @@ class SharedState:
                 'facing': facings_map.get(room_name, 0.2),
                 'area_m2': room_areas.get(room_name, 0),
                 'ceiling_m': ceiling_map.get(room_name, 2.4),
+
+                # INSTRUCTION-131C V6 — auxiliary output (tri-state per V4/C5)
+                'aux_state': aux_state_val,
+                'aux_dispatched': aux_dispatched_val,
+                'aux_rated_kw': aux_rated_kw_val,
+                'aux_min_on_s': aux_min_on_s_val,
+                'aux_min_off_s': aux_min_off_s_val,
+                'aux_max_cycles_per_hour': aux_max_cph_val,
             }
 
         # Read shadow entities for cost/energy if available
@@ -395,9 +488,9 @@ class SharedState:
             applied_flow=ctx.applied_flow,
             optimal_mode=ctx.optimal_mode,
             applied_mode=ctx.applied_mode,
-            readback_mismatch_count=getattr(ctx, "readback_mismatch_count", 0),
-            readback_mismatch_threshold=getattr(ctx, "readback_mismatch_threshold", READBACK_MISMATCH_ALARM_THRESHOLD),
-            last_readback_mismatch_alarm_time=getattr(ctx, "last_readback_mismatch_alarm_time", 0.0),
+            readback_mismatch_count=ctx.readback_mismatch_count,
+            readback_mismatch_threshold=ctx.readback_mismatch_threshold,
+            last_readback_mismatch_alarm_time=ctx.last_readback_mismatch_alarm_time,
             det_flow=ctx.det_flow,
             total_demand=ctx.smoothed_total_demand if hasattr(ctx, 'smoothed_total_demand') else ctx.smoothed_demand,
             outdoor_temp=ctx.sensor_data.outdoor_temp if ctx.sensor_data else 0.0,
@@ -426,27 +519,27 @@ class SharedState:
             summer_monitoring=ctx.summer_monitoring,
             cascade_active=ctx.cascade_active if hasattr(ctx, 'cascade_active') else False,
             frost_cap_active=ctx.frost_cap_active if hasattr(ctx, 'frost_cap_active') else False,
-            antifrost_override_active=getattr(ctx, 'antifrost_override_active', False),
+            antifrost_override_active=ctx.antifrost_override_active,
             winter_equilibrium=(
-                getattr(ctx, 'antifrost_override_active', False)
+                ctx.antifrost_override_active
                 and ctx.smoothed_demand < 0.5
                 and ctx.applied_mode == "heat"
             ),
             antifrost_threshold=config.get("antifrost", {}).get("oat_threshold", 7.0),
-            boost_active=getattr(ctx, 'boost_active', False),
-            boost_rooms=getattr(ctx, 'boost_rooms', {}),
+            boost_active=ctx.boost_active,
+            boost_rooms=ctx.boost_rooms,
             signal_quality=ctx.inputs.signal_quality if ctx.inputs else {},
             away_mode_active=ctx.inputs.away_mode_active if ctx.inputs else False,
             away_days=ctx.inputs.away_days if ctx.inputs else 0.0,
-            comfort_schedule_active=getattr(ctx, 'comfort_schedule_active', False),
-            comfort_temp_active=getattr(ctx, 'comfort_temp_active', ctx.target_temp if hasattr(ctx, 'target_temp') else 21.0),
-            active_source_type=getattr(ctx, 'active_source_type', 'heat_pump'),
-            source_caps=getattr(ctx, 'source_caps', None),
-            active_source_input_power_kw=getattr(ctx, 'active_source_input_power_kw', 0.0),
-            active_source_thermal_output_kw=getattr(ctx, 'active_source_thermal_output_kw', None),
-            active_source_thermal_output_source=getattr(ctx, 'active_source_thermal_output_source', 'unknown'),
-            active_source_performance=getattr(ctx, 'active_source_performance', None),
-            peak_thermal_demand_kw=getattr(ctx, 'peak_thermal_demand_kw', 0.0),
+            comfort_schedule_active=ctx.comfort_schedule_active,
+            comfort_temp_active=ctx.comfort_temp_active,
+            active_source_type=ctx.active_source_type,
+            source_caps=ctx.source_caps,
+            active_source_input_power_kw=ctx.active_source_input_power_kw,
+            active_source_thermal_output_kw=ctx.active_source_thermal_output_kw,
+            active_source_thermal_output_source=ctx.active_source_thermal_output_source,
+            active_source_performance=ctx.active_source_performance,
+            peak_thermal_demand_kw=ctx.peak_thermal_demand_kw,
             tariff_providers_status=_collect_tariff_providers_status(),
             available_provider_kinds=SUPPORTED_PROVIDER_KINDS,
         )
@@ -517,7 +610,7 @@ class SharedState:
         snap.min_load_pct = round((hp_min_output_kw / hp_capacity_kw * 100) if hp_capacity_kw > 0 else 0.0, 1)
 
         # Away state from pipeline
-        away_state = getattr(ctx, 'away_state', None)
+        away_state = ctx.away_state
         if away_state is not None:
             snap.recovery_active = getattr(away_state, 'recovery_active', False)
             snap.zones_recovering = list(getattr(away_state, 'zones_recovering', []))
@@ -525,9 +618,9 @@ class SharedState:
 
         # Source selection (multi-source installs only)
         if len(config.get("heat_sources", [])) > 1:
-            source_scores = getattr(ctx, 'source_scores', {})
+            source_scores = ctx.source_scores
             heat_sources = config.get("heat_sources", [])
-            active_name = getattr(ctx, 'active_source', '')
+            active_name = ctx.active_source
             source_states = ctx.inputs.source_states if ctx.inputs else {}
 
             sources_list = []
@@ -566,10 +659,10 @@ class SharedState:
                 "mode": sel_config.get("mode", "auto"),
                 "preference": sel_config.get("preference", 0.7),
                 "sources": sources_list,
-                "switch_count_today": getattr(ctx, 'source_switch_count_today', 0),
+                "switch_count_today": ctx.source_switch_count_today,
                 "max_switches_per_day": sel_config.get("max_switches_per_day", 6),
-                "failover_active": getattr(ctx, 'source_failover_active', False),
-                "last_switch_reason": getattr(ctx, 'source_switch_reason', 'auto'),
+                "failover_active": ctx.source_failover_active,
+                "last_switch_reason": ctx.source_switch_reason,
             }
 
         with self._lock:
@@ -578,6 +671,9 @@ class SharedState:
                 self._sysid_ref = sysid
             if config is not None:
                 self._config_ref = config
+
+        # V5/C9 — track shadow status for next cycle's rising-edge detection.
+        self._was_in_shadow_last_cycle = not ctx.control_enabled
 
         # Append to history ring buffer (outside lock — history has its own)
         from .history import cycle_history, snapshot_to_history_entry

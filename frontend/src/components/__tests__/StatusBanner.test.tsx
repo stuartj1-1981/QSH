@@ -434,3 +434,46 @@ describe('StatusBanner setup-mode banner', () => {
     expect(SETUP_MODE_NAV_TARGET).toBe('wizard')
   })
 })
+
+// INSTRUCTION-182: tariff strategy moved into the status banner subtitle.
+describe('Tariff strategy', () => {
+  it('renders "Tariff: Optimise" by default when tariffMode is undefined and summerMonitoring is false', () => {
+    render(<StatusBanner {...baseProps} summerMonitoring={false} />)
+    const tariff = screen.getByTestId('status-banner-tariff')
+    expect(tariff).toBeDefined()
+    expect(tariff.textContent).toMatch(/Optimise/)
+  })
+
+  it('renders "Tariff: Comfort" when tariffMode="comfort"', () => {
+    render(<StatusBanner {...baseProps} tariffMode="comfort" summerMonitoring={false} />)
+    const tariff = screen.getByTestId('status-banner-tariff')
+    expect(tariff.textContent).toMatch(/Comfort/)
+  })
+
+  it('renders "Tariff: Aggressive" when tariffMode="aggressive"', () => {
+    render(<StatusBanner {...baseProps} tariffMode="aggressive" summerMonitoring={false} />)
+    const tariff = screen.getByTestId('status-banner-tariff')
+    expect(tariff.textContent).toMatch(/Aggressive/)
+  })
+
+  it('does not render the tariff segment when summerMonitoring is true', () => {
+    render(<StatusBanner {...baseProps} tariffMode="optimise" summerMonitoring={true} />)
+    expect(screen.queryByTestId('status-banner-tariff')).toBeNull()
+  })
+
+  it('does not render the tariff segment when summerMonitoring is true regardless of tariffMode', () => {
+    const { rerender } = render(<StatusBanner {...baseProps} tariffMode="comfort" summerMonitoring={true} />)
+    expect(screen.queryByTestId('status-banner-tariff')).toBeNull()
+    rerender(<StatusBanner {...baseProps} tariffMode="aggressive" summerMonitoring={true} />)
+    expect(screen.queryByTestId('status-banner-tariff')).toBeNull()
+    rerender(<StatusBanner {...baseProps} summerMonitoring={true} />)
+    expect(screen.queryByTestId('status-banner-tariff')).toBeNull()
+  })
+
+  it('tariff segment sits within the subtitle (·-separated) line, not as a separate block', () => {
+    render(<StatusBanner {...baseProps} tariffMode="optimise" summerMonitoring={false} />)
+    const tariff = screen.getByTestId('status-banner-tariff')
+    const subtitle = screen.getByTestId('status-banner-subtitle')
+    expect(tariff.parentElement).toBe(subtitle)
+  })
+})

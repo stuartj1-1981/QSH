@@ -9,6 +9,15 @@ export interface RoomState {
   facing: number | string
   area_m2: number
   ceiling_m: number
+  // Aux output (INSTRUCTION-131C V6 — tri-state per V4/C5)
+  aux_state?: boolean | null         // null = not configured
+  aux_dispatched?: boolean | null    // null = not configured OR shadow OR no live attempt yet
+                                     // true  = last live attempt succeeded
+                                     // false = last live attempt failed (alarm)
+  aux_rated_kw?: number              // 0 or absent = no thermal contribution asserted (e.g. MVHR)
+  aux_min_on_s?: number | null
+  aux_min_off_s?: number | null
+  aux_max_cycles_per_hour?: number | null
 }
 
 export interface HpState {
@@ -265,6 +274,10 @@ export interface SysidRoom {
   pc_fits: number
   solar_gain: number
   confidence: string
+  /** INSTRUCTION-172 — per-room absolute target override (°C) when set in YAML.
+   *  Null/undefined when the room follows global comfort. Surfaced for the
+   *  RoomDetail "(fixed)" target annotation and any diagnostic readouts. */
+  fixed_setpoint?: number | null
 }
 
 export interface SysidResponse {

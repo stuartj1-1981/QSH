@@ -34,7 +34,7 @@ export const TodaySummary = memo(function TodaySummary({
 }: TodaySummaryProps) {
   const costLabel = costLabelFor(activeSource, heatSourceCount)
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 mb-4">
       <SummaryCard
         icon={<PiggyBank size={18} className="text-[var(--green)]" />}
         label={costLabel}

@@ -8,7 +8,7 @@ modules.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import List, Literal, Protocol, Tuple, runtime_checkable
 
 # V3 M8: Hard upper bound on every upstream HTTP call made by any provider.
 # Provenance: INSTRUCTION-116 set REQUEST_TIMEOUT_SECONDS = 5 for HP control
@@ -107,6 +107,29 @@ class TariffProvider(Protocol):
     def current_price(self) -> float: ...
     def refresh(self) -> None: ...
     def status(self) -> ProviderStatus: ...
+
+    # INSTRUCTION-136A V7 Task 4b: sibling addition for rate-curve consumers
+    # (TariffOptimiserController). Sibling-addition only — no semantic change
+    # to current_price() or any other 150-series Protocol method.
+    def rates_for_window(
+        self,
+        start_ts: float,
+        end_ts: float,
+    ) -> List[Tuple[float, float, float]]:
+        """Return the rate slots intersecting [start_ts, end_ts] as a continuous
+        wall-clock window. Each tuple is (slot_start_ts, slot_end_ts, price_per_kwh).
+        Empty list if no rate data available for the requested window.
+
+        The returned list MAY span midnight (UK local time) — providers do not
+        artificially truncate at day boundaries. Slots are returned in
+        chronological order.
+
+        This method exposes the rate cache the provider already maintains
+        internally to back current_price(). It is NOT a fetch-on-demand call —
+        no network IO is implied. If the provider has no cached data for the
+        requested window, return an empty list.
+        """
+        ...
 
 
 @runtime_checkable

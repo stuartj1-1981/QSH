@@ -18,10 +18,12 @@ function gapClass(el: Element): string | null {
 }
 
 describe('WizardShell progress bar / label alignment', () => {
-  it('renders one segment and one label cell per step (13-step HA variant)', () => {
+  it('renders one segment and one label cell per step (14-step HA variant)', () => {
+    // INSTRUCTION-162B: HA path gained `Auxiliary outputs` between `Rooms`
+    // and `Tariff` (13 → 14).
     const labels = [
       'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
-      'Sensors', 'Rooms', 'Tariff', 'Schedules', 'Thermal',
+      'Sensors', 'Rooms', 'Auxiliary outputs', 'Tariff', 'Schedules', 'Thermal',
       'Hot Water', 'Disclaimer', 'Review',
     ]
     const { getByTestId } = render(
@@ -33,10 +35,11 @@ describe('WizardShell progress bar / label alignment', () => {
     expect(labelRow.children.length).toBe(labels.length)
   })
 
-  it('renders one segment and one label cell per step (14-step MQTT variant)', () => {
+  it('renders one segment and one label cell per step (15-step MQTT variant)', () => {
+    // INSTRUCTION-162B: MQTT path also gained `Auxiliary outputs` (14 → 15).
     const labels = [
       'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
-      'MQTT Broker', 'Sensors', 'Rooms', 'Tariff', 'Schedules',
+      'MQTT Broker', 'Sensors', 'Rooms', 'Auxiliary outputs', 'Tariff', 'Schedules',
       'Thermal', 'Hot Water', 'Disclaimer', 'Review',
     ]
     const { getByTestId } = render(
@@ -68,12 +71,12 @@ describe('WizardShell progress bar / label alignment', () => {
     const variants: string[][] = [
       [
         'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
-        'Sensors', 'Rooms', 'Tariff', 'Schedules', 'Thermal',
+        'Sensors', 'Rooms', 'Auxiliary outputs', 'Tariff', 'Schedules', 'Thermal',
         'Hot Water', 'Disclaimer', 'Review',
       ],
       [
         'Restore', 'Welcome', 'Data Sharing', 'Connection', 'Heat Source',
-        'MQTT Broker', 'Sensors', 'Rooms', 'Tariff', 'Schedules',
+        'MQTT Broker', 'Sensors', 'Rooms', 'Auxiliary outputs', 'Tariff', 'Schedules',
         'Thermal', 'Hot Water', 'Disclaimer', 'Review',
       ],
     ]

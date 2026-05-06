@@ -2,7 +2,9 @@ import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { sourceShortName } from '../lib/sourceLabels'
+import { DEFAULT_TARIFF_AGGRESSION_MODE, TARIFF_LABELS } from '../lib/tariff'
 import type { RoomState, DriverStatus, HeatSourceState } from '../types/api'
+import type { TariffAggressionMode } from '../types/config'
 import type { Page } from '../App'
 import { EntityValue } from './EntityValue'
 
@@ -70,6 +72,11 @@ interface StatusBannerProps {
   // banner only ever calls onNavigate(SETUP_MODE_NAV_TARGET).
   setupMode?: boolean
   onNavigate?: (page: typeof SETUP_MODE_NAV_TARGET) => void
+  // INSTRUCTION-182: tariff strategy displayed inline in the subtitle.
+  // Suppressed entirely when summerMonitoring is true (no configured tariff
+  // aggression takes effect in summer monitoring).
+  tariffMode?: TariffAggressionMode
+  summerMonitoring?: boolean
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -91,9 +98,18 @@ export const StatusBanner = memo(function StatusBanner({
   lastReadbackMismatchAlarmTime = 0,
   setupMode,
   onNavigate,
+  tariffMode,
+  summerMonitoring,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
+
+  // INSTRUCTION-182: tariff strategy segment in subtitle. Hidden in summer
+  // monitoring (operational gate — no configured tariff aggression takes
+  // effect there).
+  const showTariff = !summerMonitoring
+  const resolvedTariffMode = tariffMode ?? DEFAULT_TARIFF_AGGRESSION_MODE
+  const tariffMeta = TARIFF_LABELS[resolvedTariffMode]
 
   // Derive rooms with unavailable occupancy sensors from live WebSocket data
   const fallbackRooms = rooms
@@ -208,9 +224,17 @@ export const StatusBanner = memo(function StatusBanner({
             <div className={cn('w-3 h-3 rounded-full', stateColor)} />
             <div>
               <div className="font-semibold text-lg">{operatingState}</div>
-              <div className="text-xs text-[var(--text-muted)]">
+              <div className="text-xs text-[var(--text-muted)]" data-testid="status-banner-subtitle">
                 {controlEnabled ? 'Active control' : 'Shadow mode'}
                 {appliedMode !== 'off' && ` · ${appliedFlow.toFixed(0)}°C flow`}
+                {showTariff && (
+                  <>
+                    {' · Tariff: '}
+                    <span className={cn('font-medium', tariffMeta.tone)} data-testid="status-banner-tariff">
+                      {tariffMeta.short}
+                    </span>
+                  </>
+                )}
               </div>
               {/* Shadow mode recommendation */}
               {!controlEnabled && optimalMode && (

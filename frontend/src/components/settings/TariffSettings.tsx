@@ -23,6 +23,8 @@ import { useTariffStatus } from '../../hooks/useTariffStatus'
 import { testEdfRegionResponseSchema } from '../../types/schemas'
 import { HelpTip } from '../HelpTip'
 import { TARIFF } from '../../lib/helpText'
+import { useLive } from '../../hooks/useLive'
+import { DEFAULT_TARIFF_AGGRESSION_MODE } from '../../lib/tariff'
 import type {
   Driver,
   ElectricityProviderKind,
@@ -32,6 +34,8 @@ import type {
   GasTariffConfig,
   HeatSourceYaml,
   OctopusTestResponse,
+  PersistOctopusTariffCodesResponse,
+  TariffAggressionMode,
 } from '../../types/config'
 import type { Fuel, ProviderKind, ProviderStatus } from '../../types/api'
 
@@ -128,8 +132,15 @@ export function TariffSettings({
   const [energy, setEnergy] = useState<EnergyYaml>(initial)
   const [electricity, setElectricity] = useState<ElectricityTariffConfig>(() => hydrateElectricity(initial))
   const [gas, setGas] = useState<GasTariffConfig>(() => hydrateGas(initial))
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<OctopusTestResponse | null>(null)
+  const [testingElectricity, setTestingElectricity] = useState(false)
+  const [testingGas, setTestingGas] = useState(false)
+  // INSTRUCTION-174: phase flag for the auto-persist call after a successful
+  // Test Connection. Future polish (a distinct spinner) can read it; today
+  // the test result message text reflects the phase. Setter-only — getter
+  // intentionally elided to avoid an unused-locals warning.
+  const [, setAutoPersisting] = useState(false)
+  const [testResultElectricity, setTestResultElectricity] = useState<OctopusTestResponse | null>(null)
+  const [testResultGas, setTestResultGas] = useState<OctopusTestResponse | null>(null)
   const [edfTesting, setEdfTesting] = useState(false)
   const [edfTestResult, setEdfTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const { patch, saving } = usePatchConfig()
@@ -161,12 +172,26 @@ export function TariffSettings({
     if (result) onRefetch()
   }
 
-  const testOctopus = async () => {
+  const testOctopus = async (fuel: 'electricity' | 'gas') => {
+    const setTesting = fuel === 'electricity' ? setTestingElectricity : setTestingGas
+    const setResult = fuel === 'electricity' ? setTestResultElectricity : setTestResultGas
     setTesting(true)
-    setTestResult(null)
+    setResult(null)
     try {
-      const apiKey = electricity.octopus_api_key || gas.octopus_api_key || ''
-      const accountNumber = electricity.octopus_account_number || gas.octopus_account_number || ''
+      // V2 M1: per-fuel credential resolution as a PAIR. Never mix one
+      // fuel's api_key with the other's account_number — that produces a
+      // Frankenstein request that walks the wrong account or 401s. The
+      // split-billing dual-source case (Defect 2) is exactly where pair
+      // integrity matters. The originating fuel wins ONLY when its pair is
+      // complete; otherwise the other fuel's complete pair is used;
+      // otherwise empty.
+      const ownKey = fuel === 'electricity' ? electricity.octopus_api_key : gas.octopus_api_key
+      const otherKey = fuel === 'electricity' ? gas.octopus_api_key : electricity.octopus_api_key
+      const ownAcct = fuel === 'electricity' ? electricity.octopus_account_number : gas.octopus_account_number
+      const otherAcct = fuel === 'electricity' ? gas.octopus_account_number : electricity.octopus_account_number
+      const useOwn = Boolean(ownKey && ownAcct)
+      const apiKey = useOwn ? (ownKey as string) : (otherKey || '')
+      const accountNumber = useOwn ? (ownAcct as string) : (otherAcct || '')
       const resp = await fetch(apiUrl('api/wizard/test-octopus'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -174,21 +199,83 @@ export function TariffSettings({
       })
       if (!resp.ok) {
         const text = await resp.text()
-        setTestResult({ success: false, message: `Server error ${resp.status}: ${text.slice(0, 120)}` })
+        setResult({ success: false, message: `Server error ${resp.status}: ${text.slice(0, 120)}` })
         return
       }
       const data: OctopusTestResponse = await resp.json()
-      setTestResult(data)
-      if (data.success) {
-        if (data.tariff_code) {
-          setElectricity((prev) => ({ ...prev, octopus_tariff_code: data.tariff_code as string }))
-        }
-        if (hasGas && data.gas_tariff_code) {
-          setGas((prev) => ({ ...prev, octopus_tariff_code: data.gas_tariff_code as string }))
+      setResult(data)
+      // Per-fuel persistence — independent of data.success. The shared
+      // account walk (wizard.py V2 C-M2) returns both tariff codes from one
+      // round-trip when present; we write each one only if discovered.
+      if (data.tariff_code) {
+        setElectricity((prev) => ({ ...prev, octopus_tariff_code: data.tariff_code as string }))
+      }
+      if (hasGas && data.gas_tariff_code) {
+        setGas((prev) => ({ ...prev, octopus_tariff_code: data.gas_tariff_code as string }))
+      }
+      // INSTRUCTION-174: Auto-persist discovered tariff codes immediately so
+      // the user does not have to remember a second click. Surgical endpoint
+      // touches only octopus_tariff_code; the form's other in-progress edits
+      // stay in local state until Save Changes.
+      //
+      // V2 DESIGN gate: forward a code only when the corresponding fuel's
+      // provider is "octopus" — defence-in-depth alongside the backend gate.
+      // Mixed-provider households (Octopus elec + non-Octopus gas, or
+      // vice-versa) get both codes back from test-octopus's single account
+      // walk; only the Octopus-fuel code may be persisted.
+      const elecCode = (electricity.provider === 'octopus' ? data.tariff_code : null) ?? null
+      const gasCode = (hasGas && gas.provider === 'octopus' ? data.gas_tariff_code : null) ?? null
+      if (elecCode || gasCode) {
+        setAutoPersisting(true)
+        try {
+          const persistResp = await fetch(apiUrl('api/wizard/persist-octopus-tariff-codes'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              electricity_tariff_code: elecCode,
+              gas_tariff_code: gasCode,
+            }),
+          })
+          if (!persistResp.ok) {
+            // V2 LOW: do not echo raw error body to UI — risks leaking server
+            // internals (paths, stack fragments). Extract structured `detail`
+            // when the response is JSON; otherwise show a fixed string and
+            // direct the user to the server log.
+            let detail = 'auto-persist failed — see server log'
+            try {
+              const errBody = await persistResp.json()
+              if (errBody && typeof errBody.detail === 'string' && errBody.detail.length <= 200) {
+                detail = `auto-persist failed: ${errBody.detail}`
+              }
+            } catch {
+              // non-JSON body — keep the fixed string
+            }
+            // Augment but do not overwrite — the credential test itself succeeded.
+            setResult({ ...data, message: `${data.message} · ${detail}` })
+          } else {
+            const persistData = (await persistResp.json()) as PersistOctopusTariffCodesResponse
+            const anyPersisted = persistData.persisted.electricity || persistData.persisted.gas
+            if (persistData.restart_required) {
+              setResult({ ...data, message: `${data.message} · pipeline restarting` })
+            } else if (anyPersisted) {
+              // V2 MEDIUM: persist succeeded but restart flag write failed —
+              // surface this so the user knows changes won't take effect
+              // until manual restart.
+              setResult({ ...data, message: `${data.message} · ${persistData.message}` })
+            }
+            // else: nothing persisted (e.g. provider was non-Octopus on
+            // backend gate, or fuel block missing) — leave message untouched.
+          }
+        } catch (e) {
+          setResult({ ...data, message: `${data.message} · auto-persist failed — see server log` })
+          // Network-error detail goes to the console for engineering, not the UI.
+          console.error('persist-octopus-tariff-codes network error:', e)
+        } finally {
+          setAutoPersisting(false)
         }
       }
     } catch (e) {
-      setTestResult({ success: false, message: `Network error: ${e instanceof Error ? e.message : e}` })
+      setResult({ success: false, message: `Network error: ${e instanceof Error ? e.message : e}` })
     } finally {
       setTesting(false)
     }
@@ -226,12 +313,13 @@ export function TariffSettings({
 
   const setElectricityProvider = (provider: ElectricityProviderKind) => {
     setElectricity((prev) => ({ ...prev, provider }))
-    setTestResult(null)
+    setTestResultElectricity(null)
     setEdfTestResult(null)
   }
 
   const setGasProvider = (provider: GasProviderKind) => {
     setGas((prev) => ({ ...prev, provider }))
+    setTestResultGas(null)
   }
 
   return (
@@ -270,9 +358,9 @@ export function TariffSettings({
             accountNumber={electricity.octopus_account_number || ''}
             onApiKey={(v) => setElectricity((prev) => ({ ...prev, octopus_api_key: v }))}
             onAccount={(v) => setElectricity((prev) => ({ ...prev, octopus_account_number: v }))}
-            testing={testing}
-            testResult={testResult}
-            onTest={testOctopus}
+            testing={testingElectricity}
+            testResult={testResultElectricity}
+            onTest={() => testOctopus('electricity')}
           />
         )}
 
@@ -336,9 +424,9 @@ export function TariffSettings({
               accountNumber={gas.octopus_account_number || electricity.octopus_account_number || ''}
               onApiKey={(v) => setGas((prev) => ({ ...prev, octopus_api_key: v }))}
               onAccount={(v) => setGas((prev) => ({ ...prev, octopus_account_number: v }))}
-              testing={testing}
-              testResult={testResult}
-              onTest={testOctopus}
+              testing={testingGas}
+              testResult={testResultGas}
+              onTest={() => testOctopus('gas')}
               showGasCode
             />
           )}
@@ -374,6 +462,24 @@ export function TariffSettings({
           />
         </section>
       )}
+
+      {/* INSTRUCTION-163: Tariff Aggression slider — configuration UI must
+          always be settable. The runtime-state gate that previously hid this
+          section in summer monitoring has been moved to the Home-page
+          operational display (TariffAggressionStatus). In summer the section
+          renders disabled with an explanatory caption. */}
+      <TariffAggressionSection
+        value={
+          (energy.tariff_aggression_mode as TariffAggressionMode | undefined) ??
+          DEFAULT_TARIFF_AGGRESSION_MODE
+        }
+        onChange={(mode) => {
+          // Save eagerly via patch — same `usePatchConfig` path as the rest
+          // of the section. Local state mirrors the optimistic update.
+          setEnergy((prev) => ({ ...prev, tariff_aggression_mode: mode }))
+          void patch('energy', { tariff_aggression_mode: mode })
+        }}
+      />
 
       {/* Provider Status panel — V5 C-2 / V2 E-M4: backend owns the display
           string via ProviderStatus.tariff_label. Frontend is a pass-through. */}
@@ -416,6 +522,97 @@ export function TariffSettings({
 }
 
 // ───── Sub-components ─────
+
+// INSTRUCTION-136A Task 6: three-way Comfort/Optimise/Aggressive selector.
+// Hidden in summer mode (per V2 plan). Saves via the parent's usePatchConfig
+// path through onChange.
+const TARIFF_AGGRESSION_OPTIONS: {
+  value: TariffAggressionMode
+  label: string
+  desc: string
+}[] = [
+  {
+    value: 'comfort',
+    label: 'Comfort',
+    desc: 'Never reduce flow temp for cost — comfort is paramount.',
+  },
+  {
+    value: 'optimise',
+    label: 'Optimise',
+    desc: 'Drop flow temp when net savings exceed 10% of period cost.',
+  },
+  {
+    value: 'aggressive',
+    label: 'Aggressive',
+    desc: 'Drop flow temp on any positive net savings — minor comfort dips OK.',
+  },
+]
+
+function TariffAggressionSection({
+  value,
+  onChange,
+}: {
+  value: TariffAggressionMode
+  onChange: (mode: TariffAggressionMode) => void
+}) {
+  // INSTRUCTION-163: configuration UI is never gated on operational state.
+  // In summer monitoring the section renders disabled with a caption; the
+  // runtime-state gate lives on the Home page (TariffAggressionStatus).
+  const { data } = useLive()
+  const summerActive = Boolean(
+    data && data.type === 'cycle' && data.engineering?.summer_monitoring,
+  )
+  return (
+    <div
+      className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-3"
+      data-testid="tariff-aggression-section"
+    >
+      <h3 className="text-sm font-medium text-[var(--text)]">Tariff Aggression</h3>
+      <p className="text-xs text-[var(--text-muted)]">
+        Controls how aggressively QSH drops flow temperature during peak tariff slots.
+      </p>
+      {summerActive && (
+        <p
+          className="text-xs text-[var(--amber)]"
+          data-testid="tariff-aggression-summer-note"
+        >
+          System is currently in summer monitoring — selection takes effect at the next heating season.
+        </p>
+      )}
+      <div
+        role="radiogroup"
+        aria-label="tariff-aggression"
+        aria-disabled={summerActive}
+        className="grid grid-cols-3 gap-3"
+      >
+        {TARIFF_AGGRESSION_OPTIONS.map((opt) => {
+          const selected = value === opt.value
+          return (
+            <button
+              key={opt.value}
+              role="radio"
+              aria-checked={selected}
+              aria-disabled={summerActive}
+              disabled={summerActive}
+              onClick={() => onChange(opt.value)}
+              data-testid={`tariff-aggression-${opt.value}`}
+              className={cn(
+                'p-3 rounded-lg border text-left transition-colors',
+                selected
+                  ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                  : 'border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)]/60',
+                'disabled:opacity-60 disabled:cursor-not-allowed',
+              )}
+            >
+              <div className="text-sm font-medium text-[var(--text)]">{opt.label}</div>
+              <div className="mt-1 text-xs text-[var(--text-muted)]">{opt.desc}</div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 function ProviderStatusPanel({ byFuel }: { byFuel: Partial<Record<Fuel, ProviderStatus>> }) {
   const fuels = Object.keys(byFuel) as Fuel[]
@@ -578,24 +775,32 @@ function OctopusFields({
           {testing && <Loader2 size={14} className="animate-spin" />}
           Test Connection
         </button>
-        {testResult && (
-          <div className={cn(
-            'flex items-center gap-2 text-sm',
-            testResult.success ? 'text-[var(--green)]' : 'text-[var(--red)]',
-          )}>
-            {testResult.success ? <Check size={14} /> : <X size={14} />}
-            {testResult.message}
-          </div>
-        )}
+        {testResult && (() => {
+          const tickOnGas = showGasCode
+            ? Boolean(testResult.gas_tariff_code)
+            : Boolean(testResult.tariff_code)
+          // V2 H1: gas card never displays electricity wording. When
+          // tariff_code is truthy but gas_tariff_code is null, the account
+          // walk found electricity and proves the gas meter is absent —
+          // this is gas-side information, not an electricity success.
+          const banner = showGasCode
+            ? (testResult.gas_tariff_code
+                ? `Connected. Gas tariff: ${testResult.gas_tariff_code}`
+                : (testResult.tariff_code
+                    ? 'No gas tariff discovered on this account'
+                    : (testResult.message || 'Test failed')))
+            : testResult.message
+          return (
+            <div className={cn(
+              'flex items-center gap-2 text-sm',
+              tickOnGas ? 'text-[var(--green)]' : 'text-[var(--red)]',
+            )}>
+              {tickOnGas ? <Check size={14} /> : <X size={14} />}
+              {banner}
+            </div>
+          )
+        })()}
       </div>
-      {testResult?.success && testResult.tariff_code && (
-        <div className="text-xs text-[var(--text-muted)] space-y-1">
-          <div>Import: <span className="font-mono text-[var(--text)]">{testResult.tariff_code}</span></div>
-          {showGasCode && testResult.gas_tariff_code && (
-            <div>Gas: <span className="font-mono text-[var(--text)]">{testResult.gas_tariff_code}</span></div>
-          )}
-        </div>
-      )}
     </div>
   )
 }

@@ -281,6 +281,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         lastReadbackMismatchAlarmTime={lastReadbackMismatchAlarmTime}
         setupMode={initial?.setup_mode}
         onNavigate={onNavigate}
+        tariffMode={configData?.energy?.tariff_aggression_mode}
+        summerMonitoring={Boolean(eng?.summer_monitoring)}
       />
 
       {/* Comfort temperature & shadow/live toggle */}

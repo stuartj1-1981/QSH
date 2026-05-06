@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { Home } from '../Home'
+import type { CycleMessage } from '../../types/api'
+import type { QshConfigYaml } from '../../types/config'
 
 // Mock all the hooks used by Home
+let mockLiveData: CycleMessage | null = null
 vi.mock('../../hooks/useLive', () => ({
-  useLive: () => ({ data: null, isConnected: false }),
+  useLive: () => ({ data: mockLiveData, isConnected: false }),
 }))
 
 let mockStatusData: Record<string, unknown> | null = null
@@ -30,8 +33,9 @@ vi.mock('../../hooks/useSourceSelection', () => ({
   useSourceSelection: () => ({ data: null, setMode: vi.fn(), setPreference: vi.fn() }),
 }))
 
+let mockRawConfigData: QshConfigYaml | null = null
 vi.mock('../../hooks/useConfig', () => ({
-  useRawConfig: () => ({ data: null, refetch: vi.fn() }),
+  useRawConfig: () => ({ data: mockRawConfigData, refetch: vi.fn() }),
 }))
 
 // Mock recharts
@@ -50,6 +54,8 @@ describe('Home migration banner', () => {
   afterEach(() => {
     mockStatusData = null
     mockVersion = '1.1.11'
+    mockLiveData = null
+    mockRawConfigData = null
   })
 
   it('banner shown when migration_pending is true', () => {
@@ -83,6 +89,8 @@ describe('Home version footer', () => {
   afterEach(() => {
     mockStatusData = null
     mockVersion = '1.1.11'
+    mockLiveData = null
+    mockRawConfigData = null
   })
 
   it('renders the addon version when useVersion resolves', () => {
@@ -96,7 +104,7 @@ describe('Home version footer', () => {
     mockStatusData = {}
     mockVersion = null
     render(<Home engineering={false} />)
-    expect(screen.getByText('QSH v\u2026')).toBeInTheDocument()
+    expect(screen.getByText('QSH v…')).toBeInTheDocument()
   })
 
   it('renders "unknown" literally when config.json is unreadable', () => {
@@ -110,6 +118,8 @@ describe('Home version footer', () => {
 describe('Home Live/Shadow optimistic toggle', () => {
   afterEach(() => {
     mockStatusData = null
+    mockLiveData = null
+    mockRawConfigData = null
     vi.restoreAllMocks()
   })
 
@@ -152,5 +162,59 @@ describe('Home Live/Shadow optimistic toggle', () => {
     // After the failed POST, the button should return to "Live" — the
     // optimistic overlay must not mask a server-side rejection.
     expect(await screen.findByRole('button', { name: /Live/ })).toBeInTheDocument()
+  })
+})
+
+describe('Home tariff strategy integration — INSTRUCTION-182', () => {
+  afterEach(() => {
+    mockStatusData = null
+    mockLiveData = null
+    mockRawConfigData = null
+  })
+
+  it('renders the tariff strategy in the status banner subtitle when not in summer monitoring', () => {
+    mockStatusData = {}
+    mockLiveData = {
+      type: 'cycle',
+      engineering: {
+        det_flow: 35,
+        rl_flow: null,
+        rl_blend: 0,
+        rl_reward: 0,
+        shoulder_monitoring: false,
+        summer_monitoring: false,
+      },
+    } as unknown as CycleMessage
+    mockRawConfigData = {
+      energy: { tariff_aggression_mode: 'aggressive' },
+    } as unknown as QshConfigYaml
+
+    render(<Home engineering={false} />)
+
+    const node = screen.getByTestId('status-banner-tariff')
+    expect(node).toBeInTheDocument()
+    expect(node.textContent).toContain('Aggressive')
+  })
+
+  it('hides the tariff strategy segment when in summer monitoring', () => {
+    mockStatusData = {}
+    mockLiveData = {
+      type: 'cycle',
+      engineering: {
+        det_flow: 35,
+        rl_flow: null,
+        rl_blend: 0,
+        rl_reward: 0,
+        shoulder_monitoring: false,
+        summer_monitoring: true,
+      },
+    } as unknown as CycleMessage
+    mockRawConfigData = {
+      energy: { tariff_aggression_mode: 'aggressive' },
+    } as unknown as QshConfigYaml
+
+    render(<Home engineering={false} />)
+
+    expect(screen.queryByTestId('status-banner-tariff')).toBeNull()
   })
 })

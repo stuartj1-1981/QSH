@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 import time as _time
 
 from ...paths import YAML_PATH
-from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml
+from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml, read_modify_write
+from qsh.config import validate_auxiliary_output_block
 
 try:
     import paho.mqtt.client as _paho_mqtt
@@ -813,6 +814,27 @@ def validate_config(req: WizardValidateRequest):
                     f"Use 'direct_type1', 'direct_type2', or 'generic'."
                 )
 
+    if req.step == "aux_outputs" or req.step is None:
+        # INSTRUCTION-162B: per-room auxiliary_output validation. Delegates to
+        # the shared `validate_auxiliary_output_block` validator from 162A so
+        # the wizard preview matches what /api/rooms/{name} would accept.
+        # control_mode default mirrors qsh/config.py runtime behaviour:
+        # 'indirect' if a TRV is configured, else 'none'.
+        rooms = cfg.get("rooms", {})
+        driver = cfg.get("driver", "ha")
+        for name, rc in rooms.items():
+            aux_raw = rc.get("auxiliary_output")
+            if aux_raw is None:
+                continue
+            cm = rc.get("control_mode")
+            if cm is None:
+                cm = "indirect" if rc.get("trv_entity") else "none"
+            e, w = validate_auxiliary_output_block(
+                aux_raw, driver=driver, control_mode=cm
+            )
+            errors.extend(f"Room '{name}': {msg}" for msg in e)
+            warnings.extend(f"Room '{name}': {msg}" for msg in w)
+
     if req.step == "mqtt_broker" or (req.step is None and cfg.get("driver") == "mqtt"):
         mqtt_cfg = cfg.get("mqtt", {})
         broker = mqtt_cfg.get("broker", "")
@@ -1024,6 +1046,148 @@ def test_octopus(req: OctopusTestRequest):
         "export_tariff": elec_result.export_tariff,
         "gas_tariff_code": gas_tariff_code,
         "account_number": account,
+    }
+
+
+class PersistOctopusTariffCodesRequest(BaseModel):
+    electricity_tariff_code: Optional[str] = None
+    gas_tariff_code: Optional[str] = None
+
+
+@router.post("/persist-octopus-tariff-codes")
+def persist_octopus_tariff_codes(req: PersistOctopusTariffCodesRequest):
+    """INSTRUCTION-174: Persist Octopus tariff codes discovered by
+    POST /test-octopus directly to YAML, bypassing the form-state Save
+    Changes path. Surgical write — touches only
+    energy.<fuel>.octopus_tariff_code on the supplied fuel(s) AND only
+    when energy.<fuel>.provider == "octopus". Triggers the standard
+    pipeline restart so the new OctopusGasProvider /
+    OctopusElectricityProvider instance is built with the persisted
+    tariff_code.
+
+    Reads on-disk YAML, not frontend form state, so no other edit is
+    pushed. Failure on a single fuel (missing block, non-Octopus
+    provider, write error) is logged and reported but does not block
+    the other fuel.
+
+    Cross-provider safety: test-octopus performs a single account walk
+    and returns BOTH electricity and gas tariff codes when present.
+    Mixed-provider users (Octopus electricity + fixed/HA-entity gas)
+    must NOT have an Octopus gas tariff code persisted into a
+    non-Octopus gas block — the value would be stranded (never read by
+    the active provider) but pollute YAML on subsequent form loads.
+    The provider gate inside _apply() enforces this; the frontend
+    gates symmetrically as defence-in-depth.
+
+    Second writer to energy.<fuel>.octopus_tariff_code (also mutated by
+    PATCH /api/config/energy); ordering is serialised by
+    read_modify_write so the dual-writer arrangement is race-safe.
+
+    Wizard-owned write path to a config-owned field — co-located with
+    test-octopus for caller convenience; the config.py PATCH path
+    remains the canonical surface for all other tariff edits.
+    """
+    # Validation: reject oversize OR empty / whitespace-only codes.
+    # Empty codes persisted to YAML behave identically to None for the
+    # provider but mask misconfiguration in the form (shows as "saved")
+    # and silence the existing "tariff_code not configured" warning.
+    for label, code in (
+        ("electricity_tariff_code", req.electricity_tariff_code),
+        ("gas_tariff_code", req.gas_tariff_code),
+    ):
+        if code is not None and (len(code) > 64 or not code.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} invalid (must be non-empty and ≤64 chars)",
+            )
+
+    if req.electricity_tariff_code is None and req.gas_tariff_code is None:
+        return {
+            "persisted": {"electricity": False, "gas": False},
+            "restart_required": False,
+            "message": "No tariff codes supplied — nothing to persist",
+        }
+
+    persisted = {"electricity": False, "gas": False}
+
+    def _apply(raw: dict) -> dict:
+        energy = raw.get("energy")
+        if not isinstance(energy, dict):
+            logger.warning(
+                "persist-octopus-tariff-codes: energy block missing or "
+                "non-dict — cannot persist"
+            )
+            return raw
+        for fuel, code in (
+            ("electricity", req.electricity_tariff_code),
+            ("gas", req.gas_tariff_code),
+        ):
+            if code is None:
+                continue
+            block = energy.get(fuel)
+            if not isinstance(block, dict):
+                logger.warning(
+                    "persist-octopus-tariff-codes: energy.%s block "
+                    "missing or non-dict — skipping",
+                    fuel,
+                )
+                continue
+            # V2 DESIGN gate: do not persist into a non-Octopus fuel block.
+            # Caller obtained this code via test-octopus account walk; if
+            # the active provider for this fuel is fixed/ha_entity/edf,
+            # the code is informational only and must not pollute YAML.
+            # V3 MEDIUM: fail-closed when `provider:` is absent — explicit
+            # provider has been canonical since INSTRUCTION-150C V5 E-M5.
+            # An absent key indicates malformed or pre-migration YAML;
+            # writing into it would compound the problem.
+            if block.get("provider") != "octopus":
+                logger.debug(
+                    "persist-octopus-tariff-codes: energy.%s.provider=%r "
+                    "(not 'octopus') — skipping persist for this fuel",
+                    fuel,
+                    block.get("provider"),
+                )
+                continue
+            block["octopus_tariff_code"] = code
+            persisted[fuel] = True
+        return raw
+
+    read_modify_write(_apply)
+
+    any_persisted = persisted["electricity"] or persisted["gas"]
+    restart_required = False
+    flag_write_failed = False
+    if any_persisted:
+        try:
+            with open("/config/qsh_restart_requested", "w") as f:
+                f.write("1")
+            restart_required = True
+        except OSError as e:
+            logger.error(
+                "persist-octopus-tariff-codes: persisted tariff code(s) "
+                "but failed to write restart flag at "
+                "/config/qsh_restart_requested: %s — user must restart "
+                "manually for changes to take effect",
+                e,
+            )
+            flag_write_failed = True
+
+    fuels = [k for k, v in persisted.items() if v]
+    if not any_persisted:
+        msg = "No persistence performed (energy blocks missing or non-Octopus provider)"
+    elif flag_write_failed:
+        msg = (
+            f"Persisted tariff code(s) for {', '.join(fuels)} but "
+            "restart flag could not be written — restart manually for "
+            "changes to take effect"
+        )
+    else:
+        msg = f"Persisted tariff code(s) for {', '.join(fuels)} — pipeline restarting"
+
+    return {
+        "persisted": persisted,
+        "restart_required": restart_required,
+        "message": msg,
     }
 
 

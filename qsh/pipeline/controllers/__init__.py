@@ -35,6 +35,7 @@ from .shoulder_controller import ShoulderController
 from .summer_controller import SummerController
 from .hw_controller import HWController
 from .cascade_controller import CascadeController
+from .auxiliary_output_controller import AuxiliaryOutputController
 from .flow_controller import FlowController
 from .rl_controller import RLController
 from .source_selection import SourceSelectionController
@@ -42,6 +43,7 @@ from .hardware_controller import HardwareController
 from .shadow_controller import ShadowController
 from .cost_controller import CostController
 from .historian_controller import HistorianController
+from .tariff_optimiser import TariffOptimiserController
 
 __all__ = [
     "BoostController",
@@ -57,6 +59,7 @@ __all__ = [
     "SummerController",
     "HWController",
     "CascadeController",
+    "AuxiliaryOutputController",
     "FlowController",
     "RLController",
     "SourceSelectionController",
@@ -64,4 +67,5 @@ __all__ = [
     "ShadowController",
     "CostController",
     "HistorianController",
+    "TariffOptimiserController",
 ]

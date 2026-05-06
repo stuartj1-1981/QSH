@@ -7,6 +7,7 @@ import { StepHeatSource } from '../components/wizard/StepHeatSource'
 import { StepMqttBroker } from '../components/wizard/StepMqttBroker'
 import { StepSensors } from '../components/wizard/StepSensors'
 import { StepRooms } from '../components/wizard/StepRooms'
+import { StepAuxOutputs } from '../components/wizard/StepAuxOutputs'
 import { StepTariff } from '../components/wizard/StepTariff'
 import { StepSchedules } from '../components/wizard/StepSchedules'
 import { StepThermal } from '../components/wizard/StepThermal'
@@ -88,6 +89,13 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
       case 'rooms':
         return (
           <StepRooms
+            config={wizard.config}
+            onUpdate={wizard.updateConfig}
+          />
+        )
+      case 'aux_outputs':
+        return (
+          <StepAuxOutputs
             config={wizard.config}
             onUpdate={wizard.updateConfig}
           />

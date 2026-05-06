@@ -417,6 +417,28 @@ class HADriver:
                     dfan_control=control_enabled,
                 )
 
+        # ── Auxiliary boolean outputs (per-room aux actuators, INSTRUCTION-131B) ──
+        if outputs.auxiliary_outputs_changed and outputs.auxiliary_outputs:
+            from .hardware_dispatch import set_auxiliary_output
+
+            aux_cfg = config.get("auxiliary_outputs", {})
+            for room, state in outputs.auxiliary_outputs.items():
+                room_aux = aux_cfg.get(room, {})
+                if not room_aux.get("enabled"):
+                    continue
+                entity = room_aux.get("ha_entity")
+                if not entity:
+                    outputs.auxiliary_dispatch_failures.add(room)
+                    continue
+                if control_enabled:
+                    ok = set_auxiliary_output(config, entity, state)
+                    if not ok:
+                        outputs.auxiliary_dispatch_failures.add(room)
+                else:
+                    logging.debug(
+                        "SHADOW MODE: suppressed aux %s=%s → %s", room, state, entity
+                    )
+
         # ── Notifications ──
         if outputs.notifications:
             from .integration import set_ha_service

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Layout } from './components/Layout'
+import { ReconnectingOverlay } from './components/ReconnectingOverlay'
 import { Home } from './pages/Home'
 import { Rooms } from './pages/Rooms'
 import { Wizard } from './pages/Wizard'
@@ -11,6 +12,7 @@ import { Historian } from './pages/Historian'
 import { Balancing } from './pages/Balancing'
 import { Statistics } from './pages/Statistics'
 import { LiveView } from './pages/LiveView'
+import { useLive } from './hooks/useLive'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
@@ -34,6 +36,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('qsh-engineering', String(engineering))
   }, [engineering])
+
+  const { disconnectedSince } = useLive()
 
   // Guard: if engineering toggle is off and current page is engineering-only, show home
   const activePage = !engineering && (ENGINEERING_PAGES as readonly string[]).includes(page)
@@ -84,34 +88,40 @@ export default function App() {
   // Wizard is full-screen (no sidebar)
   if (activePage === 'wizard') {
     return (
-      <Wizard
-        onComplete={() => { setWizardCanExit(false); setPage('home') }}
-        onExit={wizardCanExit ? () => { setWizardCanExit(false); setPage('settings') } : undefined}
-      />
+      <>
+        <Wizard
+          onComplete={() => { setWizardCanExit(false); setPage('home') }}
+          onExit={wizardCanExit ? () => { setWizardCanExit(false); setPage('settings') } : undefined}
+        />
+        <ReconnectingOverlay disconnectedSince={disconnectedSince} />
+      </>
     )
   }
 
   return (
-    <Layout
-      page={activePage}
-      onNavigate={setPage}
-      engineering={engineering}
-      onToggleEngineering={() => setEngineering(!engineering)}
-      dark={dark}
-      onToggleDark={() => setDark(!dark)}
-    >
-      {activePage === 'home' && <Home engineering={engineering} onNavigate={setPage} />}
-      {activePage === 'liveview' && <LiveView dark={dark} engineering={engineering} />}
-      {activePage === 'rooms' && <Rooms engineering={engineering} />}
-      {activePage === 'schedule' && <Schedule />}
-      {activePage === 'away' && <Away />}
-      {activePage === 'engineering' && <Engineering />}
-      {activePage === 'historian' && <Historian />}
-      {activePage === 'balancing' && <Balancing />}
-      {activePage === 'statistics' && <Statistics />}
-      {activePage === 'settings' && (
-        <Settings onRunWizard={() => { setWizardCanExit(true); setPage('wizard') }} />
-      )}
-    </Layout>
+    <>
+      <Layout
+        page={activePage}
+        onNavigate={setPage}
+        engineering={engineering}
+        onToggleEngineering={() => setEngineering(!engineering)}
+        dark={dark}
+        onToggleDark={() => setDark(!dark)}
+      >
+        {activePage === 'home' && <Home engineering={engineering} onNavigate={setPage} />}
+        {activePage === 'liveview' && <LiveView dark={dark} engineering={engineering} />}
+        {activePage === 'rooms' && <Rooms engineering={engineering} />}
+        {activePage === 'schedule' && <Schedule />}
+        {activePage === 'away' && <Away />}
+        {activePage === 'engineering' && <Engineering />}
+        {activePage === 'historian' && <Historian />}
+        {activePage === 'balancing' && <Balancing />}
+        {activePage === 'statistics' && <Statistics />}
+        {activePage === 'settings' && (
+          <Settings onRunWizard={() => { setWizardCanExit(true); setPage('wizard') }} />
+        )}
+      </Layout>
+      <ReconnectingOverlay disconnectedSince={disconnectedSince} />
+    </>
   )
 }
