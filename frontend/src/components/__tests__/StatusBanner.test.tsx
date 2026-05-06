@@ -477,3 +477,36 @@ describe('Tariff strategy', () => {
     expect(tariff.parentElement).toBe(subtitle)
   })
 })
+
+// INSTRUCTION-186: active control-method diagnostic badge.
+describe('StatusBanner control-method badge', () => {
+  it('renders the badge when controlMethod is a known value', () => {
+    render(<StatusBanner {...baseProps} controlMethod="octopus_api" />)
+    const badge = screen.getByTestId('control-method-badge')
+    expect(badge).toBeDefined()
+    expect(badge.getAttribute('data-control-method')).toBe('octopus_api')
+    expect(badge.textContent).toBe('Octopus API')
+  })
+
+  it('hides the badge when controlMethod is unknown, pending, or undefined', () => {
+    const { rerender } = render(<StatusBanner {...baseProps} controlMethod="unknown" />)
+    expect(screen.queryByTestId('control-method-badge')).toBeNull()
+
+    rerender(<StatusBanner {...baseProps} controlMethod="pending" />)
+    expect(screen.queryByTestId('control-method-badge')).toBeNull()
+
+    rerender(<StatusBanner {...baseProps} />)
+    expect(screen.queryByTestId('control-method-badge')).toBeNull()
+
+    rerender(<StatusBanner {...baseProps} controlMethod="" />)
+    expect(screen.queryByTestId('control-method-badge')).toBeNull()
+  })
+
+  it('renders unmapped methods using the raw value (forward-compat for fleet upgrade lag)', () => {
+    render(<StatusBanner {...baseProps} controlMethod="future_method" />)
+    const badge = screen.getByTestId('control-method-badge')
+    expect(badge).toBeDefined()
+    expect(badge.getAttribute('data-control-method')).toBe('future_method')
+    expect(badge.textContent).toBe('future_method')
+  })
+})

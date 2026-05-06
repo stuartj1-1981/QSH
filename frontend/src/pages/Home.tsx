@@ -283,6 +283,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         onNavigate={onNavigate}
         tariffMode={configData?.energy?.tariff_aggression_mode}
         summerMonitoring={Boolean(eng?.summer_monitoring)}
+        controlMethod={initial?.control_method}
       />
 
       {/* Comfort temperature & shadow/live toggle */}

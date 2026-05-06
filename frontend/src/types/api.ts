@@ -131,6 +131,21 @@ export interface DriverStatus {
   error: string | null
 }
 
+// INSTRUCTION-186: read-only diagnostic surface for the active control
+// routing path. Mirrors qsh/config.py:1879-1897 resolution + the "pending"
+// sentinel from line 1686 + the "unknown" defensive default in
+// qsh/api/routes/status.py. Used only for display; not a wire-format
+// constraint on any input path.
+export type ControlMethod =
+  | 'octopus_api'
+  | 'ha_service'
+  | 'mqtt'
+  | 'entity'
+  | 'trvs_only'
+  | 'monitor_only'
+  | 'pending'
+  | 'unknown'
+
 export interface HealthResponse {
   status: 'ok' | 'degraded' | 'error'
   pipeline_age_seconds: number
@@ -183,6 +198,8 @@ export interface StatusResponse {
   // fields for REST consumers). Optional during phase 7 rollout.
   tariff_providers_status?: Partial<Record<Fuel, ProviderStatus>>
   available_provider_kinds?: ProviderKind[]
+  // INSTRUCTION-186: active control routing path — display-only.
+  control_method?: ControlMethod
 }
 
 export interface RoomsResponse {

@@ -5,6 +5,8 @@ from typing import Literal, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from qsh.config import HOUSE_CONFIG
+
 from ..state import (
     build_heat_source_payload,
     build_hp_shim,
@@ -117,6 +119,11 @@ def get_status():
             snap.tariff_providers_status
         ),
         "available_provider_kinds": list(snap.available_provider_kinds),
+        # INSTRUCTION-186 — read-only diagnostic surface for active control
+        # routing path. Defensive default covers the early-startup window
+        # where HOUSE_CONFIG["control_method"] may still be "pending"
+        # (config.py:1686) before Octopus API init resolves it.
+        "control_method": HOUSE_CONFIG.get("control_method", "unknown"),
     }
 
 
