@@ -14,6 +14,7 @@ Public API:
 
 import os
 from pathlib import Path
+from typing import List, Tuple
 
 from qsh.paths import find_state_file
 from .context import CycleContext
@@ -35,6 +36,7 @@ from .controllers import (
     SummerController,
     HWController,
     CascadeController,
+    AuxiliaryOutputController,
     FlowController,
     RLController,
     SourceSelectionController,
@@ -42,6 +44,7 @@ from .controllers import (
     ShadowController,
     CostController,
     HistorianController,
+    TariffOptimiserController,
 )
 
 __all__ = [
@@ -64,6 +67,7 @@ __all__ = [
     "SummerController",
     "HWController",
     "CascadeController",
+    "AuxiliaryOutputController",
     "FlowController",
     "RLController",
     "SourceSelectionController",
@@ -71,6 +75,7 @@ __all__ = [
     "ShadowController",
     "CostController",
     "HistorianController",
+    "TariffOptimiserController",
 ]
 
 
@@ -263,7 +268,7 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
     return resolved
 
 
-def build_pipeline(config, **kwargs):
+def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputController]:
     """
     Build the full controller pipeline in correct execution order.
 
@@ -279,7 +284,14 @@ def build_pipeline(config, **kwargs):
             injection points.
 
     Returns:
-        List of Controller instances in execution order.
+        Tuple of (controllers, aux_controller):
+        - controllers: List of Controller instances in execution order.
+        - aux_controller: Explicit handle to the AuxiliaryOutputController
+          instance in the list (V6/B12). The orchestrator (qsh/main.py)
+          uses this handle to call aux_controller.post_dispatch_finalise(ctx)
+          AFTER driver.write_outputs(...) returns and BEFORE the next
+          cycle's pipeline. Wiring of the post-dispatch hook is 131B's
+          responsibility; 131A defines the interface.
     """
     driver_type = config.get("driver", "ha")
     if driver_type == "mock":
@@ -318,10 +330,20 @@ def build_pipeline(config, **kwargs):
         cycle_protection_gate=cycle_protection_gate,  # SAME instance
     )
     boost = BoostController()
+    # INSTRUCTION-131A — AuxiliaryOutputController sits immediately after
+    # CascadeController and before FlowController. Constructor takes only
+    # the config slice it needs (V3/A6). The instance is also returned
+    # alongside the controllers list so the orchestrator gets a stable
+    # handle for post_dispatch_finalise(ctx) without isinstance filtering.
+    from ..thermal import SETPOINT_DEADBAND_C as _AUX_DEADBAND
+    aux_controller = AuxiliaryOutputController(
+        auxiliary_outputs=config.get("auxiliary_outputs", {}),
+        setpoint_deadband_c=_AUX_DEADBAND,
+    )
     controllers = [
         SensorController(
             config=config,
-            zone_offsets=kw.get("zone_offsets"),
+            fixed_setpoints=kw.get("fixed_setpoints"),
             trv_offset_tracker=kw.get("trv_offset_tracker"),
             sysid=kw.get("sysid"),
         ),
@@ -341,6 +363,18 @@ def build_pipeline(config, **kwargs):
             config=config,
             weather_forecaster=kw.get("weather_forecaster"),
         ),
+        # INSTRUCTION-136A V7 Task 6: TariffOptimiserController inserted
+        # between ForecastController and CycleController. Reads the active
+        # electricity TariffProvider directly via DI (parent V3-NEW-A3 lock —
+        # single source of truth; same `tariff_providers` registry kwarg
+        # EnergyController consumes) and ctx.forecast_state. Must run before
+        # any controller that consumes the modified det_flow (i.e. before
+        # FlowController). Does NOT read ctx.current_rate or
+        # ctx.price_per_input_kwh.
+        TariffOptimiserController(
+            config=config,
+            providers=kw.get("tariff_providers"),
+        ),
         CycleController(
             config=config,
             cycle_detector=kw.get("cycle_detector"),
@@ -357,6 +391,7 @@ def build_pipeline(config, **kwargs):
             hw_aware_controller=kw.get("hw_aware_controller"),
         ),
         CascadeController(),
+        aux_controller,
         FlowController(
             calculate_deterministic_flow_fn=kw.get("calculate_deterministic_flow_fn"),
             determine_hp_mode_fn=kw.get("determine_hp_mode_fn"),
@@ -383,11 +418,11 @@ def build_pipeline(config, **kwargs):
         ),
         ShadowController(
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),
-            zone_offsets=kw.get("zone_offsets"),
+            fixed_setpoints=kw.get("fixed_setpoints"),
         ),
         CostController(),
         HistorianController(
             room_control_state=kw.get("room_control_state"),
         ),
     ]
-    return controllers
+    return controllers, aux_controller

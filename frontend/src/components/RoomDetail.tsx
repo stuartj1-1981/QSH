@@ -57,6 +57,11 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
           </EntityValue>
           <div className="text-lg text-[var(--text-muted)]">
             Target: <EntityValue entityId={entityIds?.trv_entity} engineering={engineering}>{formatTemp(room.target)}</EntityValue>
+            {sysid?.fixed_setpoint != null && (
+              <span className="ml-2 text-xs text-[var(--text-muted)]" data-testid="fixed-target-annotation">
+                (fixed)
+              </span>
+            )}
           </div>
           {!(room.status === 'heating' && !hpActive) && (
             <div className={cn('text-sm font-medium capitalize mt-1', statusColor(room.status))}>
@@ -152,6 +157,48 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
               <DetailItem label="PC fits" value={String(sysid.pc_fits)} />
             </div>
           </div>
+        )}
+
+        {/* Auxiliary output (INSTRUCTION-131C V6) */}
+        {room.aux_state !== undefined && room.aux_state !== null && (
+          <section className="mt-4 pt-4 border-t border-[var(--border)]">
+            <h3 className="text-sm font-semibold mb-2">Auxiliary output</h3>
+            <div className="flex items-center gap-3">
+              {/* INSTRUCTION-131C/C2 — non-interactive readout for v1.
+                  Add role="status" and aria-label if aux gains interactive controls. */}
+              <span className={cn(
+                'inline-flex items-center px-2 py-1 rounded text-xs font-medium',
+                room.aux_state
+                  ? 'bg-green-500/15 text-green-400'
+                  : 'bg-[var(--bg)] text-[var(--text-muted)]'
+              )}>
+                {room.aux_state ? 'ON' : 'OFF'}
+              </span>
+              <span className="text-xs text-[var(--text-muted)]">
+                {(room.aux_rated_kw ?? 0) > 0
+                  ? `${(room.aux_rated_kw ?? 0).toFixed(1)} kW`
+                  : 'monitor only'}
+              </span>
+              {/* Dispatch-fault badge — fires ONLY when the controller is asserting ON
+                  AND the last live attempt failed. Shadow (aux_dispatched === null)
+                  and never-attempted (aux_dispatched === null) cases do NOT trigger.
+                  See V4/C5 contract. */}
+              {room.aux_state === true && room.aux_dispatched === false && (
+                <span
+                  className="text-xs text-amber-400"
+                  title="Last live dispatch did not reach hardware"
+                >
+                  dispatch fault
+                </span>
+              )}
+            </div>
+            {engineering && room.aux_min_on_s !== null && room.aux_min_on_s !== undefined && (
+              <div className="mt-2 text-xs text-[var(--text-muted)]">
+                Min on/off: {room.aux_min_on_s}s / {room.aux_min_off_s}s
+                {' · '}Max {room.aux_max_cycles_per_hour}/h
+              </div>
+            )}
+          </section>
         )}
         </div>
 

@@ -77,6 +77,19 @@ export interface RoomEnvelopeYaml {
   ceiling?: FaceValue | null
 }
 
+/** Per-room boolean output (INSTRUCTION-131A schema, exposed via 162A).
+ *  Validation rules live in qsh.config.validate_auxiliary_output_block on
+ *  the backend; the frontend mirrors them client-side via AuxOutputEditor. */
+export interface AuxiliaryOutputYaml {
+  enabled?: boolean
+  ha_entity?: string | null
+  mqtt_topic?: string | null
+  rated_kw?: number
+  min_on_time_s?: number
+  min_off_time_s?: number
+  max_cycles_per_hour?: number
+}
+
 export interface RoomConfigYaml {
   area_m2: number
   facing?: string
@@ -99,6 +112,13 @@ export interface RoomConfigYaml {
   occupancy_debounce?: number
   occupancy_fallback?: 'schedule' | 'occupied' | 'last_known'
   last_known_timeout_s?: number
+  /** Per-room auxiliary boolean output (INSTRUCTION-131A schema). */
+  auxiliary_output?: AuxiliaryOutputYaml | null
+
+  /** INSTRUCTION-172 — per-room absolute target override for monitor-only
+   *  zones with manual TRVs. Range [10.0, 25.0] °C. Backend rejects unless
+   *  `control_mode === 'none'`. */
+  fixed_setpoint?: number
 
   // Per-zone away internal values (36C — N3)
   away_active_internal?: boolean
@@ -110,6 +130,25 @@ export interface EnvelopePatchResponse {
   updated: string[]
   warnings: string[]
   restart_required: boolean
+}
+
+/** Response from POST/PUT /api/rooms/{name} (INSTRUCTION-162A).
+ *  `created` is set on POST, `updated` on PUT. `warnings` always present
+ *  (empty list when nothing fired). */
+export interface RoomCrudResponse {
+  created?: string
+  updated?: string
+  restart_required: boolean
+  warnings: string[]
+}
+
+/** 422 detail shape when auxiliary_output validation fails (INSTRUCTION-162A).
+ *  Other 422 paths still return `detail: string` per the existing convention;
+ *  discriminate via `typeof detail === 'object' && detail.kind === 'aux'`. */
+export interface AuxValidationErrorDetail {
+  errors: string[]
+  warnings: string[]
+  kind: 'aux'
 }
 
 export interface HeatSourceYaml {
@@ -226,6 +265,20 @@ export interface FixedOnlyTariffConfig {
   fixed_rate: number
 }
 
+// INSTRUCTION-136A Task 6: tariff aggression mode + thresholds.
+export type TariffAggressionMode = 'comfort' | 'optimise' | 'aggressive'
+
+export interface TariffAggressionConfig {
+  comfort_threshold?: number
+  optimise_threshold?: number
+  aggressive_threshold?: number
+  preheat_lookahead_hours?: number
+  overshoot_guard_c?: number
+  sysid_immaturity_fallback_fraction?: number
+  u_maturity_observations?: number
+  c_maturity_observations?: number
+}
+
 export interface EnergyYaml {
   octopus?: OctopusYaml
   fixed_rates?: {
@@ -244,6 +297,9 @@ export interface EnergyYaml {
   gas?: GasTariffConfig
   lpg?: FixedOnlyTariffConfig
   oil?: FixedOnlyTariffConfig
+  // INSTRUCTION-136A Task 6: aggression slider state.
+  tariff_aggression_mode?: TariffAggressionMode
+  tariff_aggression?: TariffAggressionConfig
 }
 
 export interface ThermalYaml {
@@ -454,6 +510,15 @@ export interface OctopusTestResponse {
   /** INSTRUCTION-150C: gas tariff code discovered alongside electricity
    *  on the same Octopus account. null when no gas meter is registered. */
   gas_tariff_code?: string | null
+}
+
+/** Response from POST /api/wizard/persist-octopus-tariff-codes
+ *  (INSTRUCTION-174). Auto-persists tariff codes discovered by
+ *  POST /test-octopus directly to YAML. */
+export interface PersistOctopusTariffCodesResponse {
+  persisted: { electricity: boolean; gas: boolean }
+  restart_required: boolean
+  message: string
 }
 
 /** Response from POST /api/wizard/test-edf-region (INSTRUCTION-150D Task 5

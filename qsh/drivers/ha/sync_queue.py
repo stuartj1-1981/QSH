@@ -5,7 +5,7 @@ Imported by both API routes (qsh.api.routes.control) and pipeline controllers
 there is no circular dependency risk.
 
 Contents are NEVER persisted to yaml — lost on restart by design.  Any key
-stored in config risks being serialised to qsh.yaml by _read_modify_write(), surviving
+stored in config risks being serialised to qsh.yaml by read_modify_write(), surviving
 a restart, and triggering a spurious HA service call against a stale value on
 next boot.  This module is the correct home for transient retry state.
 

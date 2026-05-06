@@ -5,7 +5,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 from typing import Optional, Union, Dict, List
 
-from .config import _read_modify_write
+from qsh.config import validate_auxiliary_output_block
+
+from .config import read_modify_write
 
 router = APIRouter(tags=["rooms"])
 
@@ -115,6 +117,23 @@ class RoomEnvelope(BaseModel):
         return self
 
 
+class AuxiliaryOutput(BaseModel):
+    """Per-room boolean output (INSTRUCTION-131A schema).
+
+    Validation rules live in qsh.config.validate_auxiliary_output_block — this
+    Pydantic model is shape-only. The shared validator runs inside the
+    rooms-CRUD transform callback (see add_room / update_room) so the
+    same rules apply at YAML load and at HTTP write time.
+    """
+    enabled: bool = False
+    ha_entity: Optional[str] = None
+    mqtt_topic: Optional[str] = None
+    rated_kw: float = 0.0
+    min_on_time_s: int = 60
+    min_off_time_s: int = 60
+    max_cycles_per_hour: int = 6
+
+
 class RoomConfig(BaseModel):
     area_m2: float
     facing: str = "interior"
@@ -129,6 +148,11 @@ class RoomConfig(BaseModel):
     control_mode: Optional[str] = None
     valve_hardware: Optional[str] = None
     valve_scale: Optional[int] = None
+    auxiliary_output: Optional[AuxiliaryOutput] = None
+    # INSTRUCTION-172 — per-room absolute target override for monitor-only
+    # zones with manual TRVs. Range [10.0, 25.0] °C. Cross-field rule:
+    # rejected unless control_mode == 'none'.
+    fixed_setpoint: Optional[float] = None
 
     @field_validator("floor")
     @classmethod
@@ -140,6 +164,26 @@ class RoomConfig(BaseModel):
                 f"floor must be an integer in range [{FLOOR_MIN}, {FLOOR_MAX}]"
             )
         return v
+
+    @field_validator("fixed_setpoint")
+    @classmethod
+    def fixed_setpoint_in_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not (10.0 <= v <= 25.0):
+            raise ValueError(
+                f"fixed_setpoint must be in range [10.0, 25.0] °C, got {v}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def fixed_setpoint_requires_control_mode_none(self):
+        if self.fixed_setpoint is not None and self.control_mode != "none":
+            raise ValueError(
+                f"fixed_setpoint requires control_mode='none', "
+                f"got '{self.control_mode}'"
+            )
+        return self
 
 
 class RoomEnvelopeBulkItem(BaseModel):
@@ -219,10 +263,35 @@ def _envelope_to_yaml(env: RoomEnvelope) -> dict:
 
 
 def _room_to_yaml(room: RoomConfig) -> dict:
-    """Serialize a RoomConfig to a YAML-friendly dict, flattening nested models."""
+    """Serialize a RoomConfig to a YAML-friendly dict, flattening nested models.
+
+    INSTRUCTION-162A: when an auxiliary_output block is the all-defaults shape
+    (disabled, no entity/topic, rated_kw=0), strip it from the output dict so
+    the YAML stays clean — matches 131A's "absence-by-default" convention. When
+    the user disables aux via the Settings UI, any non-default
+    `min_on_time_s` / `min_off_time_s` / `max_cycles_per_hour` values they
+    previously set are deliberately lost (must re-enter on re-enable). This
+    preserves the invariant: aux block present in YAML iff aux is enabled OR
+    someone is mid-edit with non-default protection numerics.
+    """
     data = room.model_dump(exclude_none=True)
     if room.envelope is not None:
         data["envelope"] = _envelope_to_yaml(room.envelope)
+    if room.auxiliary_output is not None:
+        aux = room.auxiliary_output
+        is_all_default = (
+            aux.enabled is False
+            and aux.ha_entity is None
+            and aux.mqtt_topic is None
+            and aux.rated_kw == 0
+            and aux.min_on_time_s == 60
+            and aux.min_off_time_s == 60
+            and aux.max_cycles_per_hour == 6
+        )
+        if is_all_default:
+            data.pop("auxiliary_output", None)
+        else:
+            data["auxiliary_output"] = aux.model_dump(exclude_none=True)
     return data
 
 
@@ -236,6 +305,13 @@ def _face_literal_valid_for_key(face_key: str, literal: str) -> bool:
     return False
 
 
+def _resolve_control_mode(room: RoomConfig) -> str:
+    """Mirror qsh/config.py's control_mode default: indirect when trv_entity, else none."""
+    if room.control_mode:
+        return room.control_mode
+    return "indirect" if room.trv_entity else "none"
+
+
 @router.post("/rooms/{room_name}")
 def add_room(room_name: str, room: RoomConfig):
     """Add a new room to qsh.yaml."""
@@ -246,8 +322,27 @@ def add_room(room_name: str, room: RoomConfig):
         )
 
     room_data = _room_to_yaml(room)
+    aux_warnings: List[str] = []
 
     def transform(raw: dict) -> dict:
+        # INSTRUCTION-162A H3: validate the auxiliary_output block inside the
+        # transform callback. The driver value lives at top-level of `raw`,
+        # so we read it once here without a second I/O round-trip.
+        nonlocal aux_warnings
+        if room.auxiliary_output is not None:
+            driver = raw.get("driver", "ha")
+            cm = _resolve_control_mode(room)
+            errors, warnings = validate_auxiliary_output_block(
+                room.auxiliary_output.model_dump(),
+                driver=driver,
+                control_mode=cm,
+            )
+            if errors:
+                # ValueError-with-dict pattern; the discriminator below maps
+                # this shape to HTTP 422 (the existing collision path raises
+                # ValueError-with-str and maps to 409).
+                raise ValueError({"errors": errors, "warnings": warnings, "kind": "aux"})
+            aux_warnings = warnings
         rooms = raw.setdefault("rooms", {})
         if room_name in rooms:
             raise ValueError(f"Room '{room_name}' already exists")
@@ -255,12 +350,18 @@ def add_room(room_name: str, room: RoomConfig):
         return raw
 
     try:
-        _read_modify_write(transform)
+        read_modify_write(transform)
     except ValueError as e:
+        if e.args and isinstance(e.args[0], dict) and e.args[0].get("kind") == "aux":
+            raise HTTPException(status_code=422, detail=e.args[0])
         raise HTTPException(status_code=409, detail=str(e))
 
     _signal_restart()
-    return {"created": room_name, "restart_required": True}
+    return {
+        "created": room_name,
+        "restart_required": True,
+        "warnings": aux_warnings,
+    }
 
 
 @router.put("/rooms/{room_name}")
@@ -273,8 +374,23 @@ def update_room(room_name: str, room: RoomConfig):
         )
 
     room_data = _room_to_yaml(room)
+    aux_warnings: List[str] = []
 
     def transform(raw: dict) -> dict:
+        # INSTRUCTION-162A H3: validate the auxiliary_output block inside the
+        # transform callback. Same pattern as POST — single read of `raw`.
+        nonlocal aux_warnings
+        if room.auxiliary_output is not None:
+            driver = raw.get("driver", "ha")
+            cm = _resolve_control_mode(room)
+            errors, warnings = validate_auxiliary_output_block(
+                room.auxiliary_output.model_dump(),
+                driver=driver,
+                control_mode=cm,
+            )
+            if errors:
+                raise ValueError({"errors": errors, "warnings": warnings, "kind": "aux"})
+            aux_warnings = warnings
         rooms = raw.get("rooms", {})
         if room_name not in rooms:
             raise KeyError(f"Room '{room_name}' not found")
@@ -282,12 +398,21 @@ def update_room(room_name: str, room: RoomConfig):
         return raw
 
     try:
-        _read_modify_write(transform)
+        read_modify_write(transform)
+    except ValueError as e:
+        if e.args and isinstance(e.args[0], dict) and e.args[0].get("kind") == "aux":
+            raise HTTPException(status_code=422, detail=e.args[0])
+        # Existing convention: any non-aux ValueError is a write-time error.
+        raise HTTPException(status_code=400, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e).strip("'\""))
 
     _signal_restart()
-    return {"updated": room_name, "restart_required": True}
+    return {
+        "updated": room_name,
+        "restart_required": True,
+        "warnings": aux_warnings,
+    }
 
 
 @router.delete("/rooms/{room_name}")
@@ -301,7 +426,7 @@ def delete_room(room_name: str):
         return raw
 
     try:
-        _read_modify_write(transform)
+        read_modify_write(transform)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e).strip("'\""))
 
@@ -413,7 +538,7 @@ def bulk_update_envelope(req: RoomEnvelopeBulkRequest, apply: bool = True):
         return raw
 
     try:
-        _read_modify_write(transform)
+        read_modify_write(transform)
     except KeyError as e:
         missing = str(e).strip("'\"")
         raise HTTPException(status_code=404, detail=f"Room '{missing}' not found")

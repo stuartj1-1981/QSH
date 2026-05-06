@@ -8,8 +8,14 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 
 import { useLive } from '../useLive'
+import { LiveProvider } from '../LiveProvider'
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <LiveProvider>{children}</LiveProvider>
+)
 
 // MockWebSocket lets us drive onmessage / onopen / onclose from tests.
 class MockWebSocket {
@@ -69,7 +75,7 @@ afterEach(() => {
 
 describe('useLive — runtime parse integration', () => {
   it('propagates a valid CycleSnapshot to consumers', async () => {
-    const { result } = renderHook(() => useLive())
+    const { result } = renderHook(() => useLive(), { wrapper })
     const ws = MockWebSocket.instances[0]
     act(() => {
       ws.triggerOpen()
@@ -82,7 +88,7 @@ describe('useLive — runtime parse integration', () => {
 
   it('keeps last-known-good snapshot when WebSocket sends invalid JSON', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { result } = renderHook(() => useLive())
+    const { result } = renderHook(() => useLive(), { wrapper })
     const ws = MockWebSocket.instances[0]
     act(() => {
       ws.triggerOpen()
@@ -103,7 +109,7 @@ describe('useLive — runtime parse integration', () => {
 
   it('keeps last-known-good snapshot when payload fails schema validation', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { result } = renderHook(() => useLive())
+    const { result } = renderHook(() => useLive(), { wrapper })
     const ws = MockWebSocket.instances[0]
     act(() => {
       ws.triggerOpen()
@@ -136,7 +142,7 @@ describe('useLive — runtime parse integration', () => {
 
   it('console.warn fires once per malformed payload', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    renderHook(() => useLive())
+    renderHook(() => useLive(), { wrapper })
     const ws = MockWebSocket.instances[0]
     act(() => {
       ws.triggerOpen()
@@ -144,5 +150,60 @@ describe('useLive — runtime parse integration', () => {
     })
     expect(warnSpy).toHaveBeenCalledTimes(1)
     warnSpy.mockRestore()
+  })
+})
+
+describe('useLive — disconnect tracking', () => {
+  it('reports disconnectedSince=null on initial mount', () => {
+    const { result } = renderHook(() => useLive(), { wrapper })
+    expect(result.current.disconnectedSince).toBeNull()
+  })
+
+  it('sets disconnectedSince to a timestamp on close', () => {
+    const before = Date.now()
+    const { result } = renderHook(() => useLive(), { wrapper })
+    const ws = MockWebSocket.instances[0]
+    act(() => { ws.triggerOpen() })
+    act(() => { ws.close() })
+    expect(result.current.disconnectedSince).not.toBeNull()
+    expect(result.current.disconnectedSince!).toBeGreaterThanOrEqual(before)
+  })
+
+  it('preserves disconnectedSince across reconnect attempts', async () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useLive(), { wrapper })
+    let ws = MockWebSocket.instances[0]
+    act(() => { ws.triggerOpen() })
+    act(() => { ws.close() })
+    const firstDisconnect = result.current.disconnectedSince
+    expect(firstDisconnect).not.toBeNull()
+
+    // Backoff timer fires, new socket created, immediately closes.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    ws = MockWebSocket.instances[1]
+    act(() => { ws.close() })
+    expect(result.current.disconnectedSince).toBe(firstDisconnect)
+    vi.useRealTimers()
+  })
+
+  it('clears disconnectedSince when the reconnect path completes (close → backoff → new socket → open)', async () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useLive(), { wrapper })
+    const ws = MockWebSocket.instances[0]
+    act(() => { ws.triggerOpen() })
+    act(() => { ws.close() })
+    expect(result.current.disconnectedSince).not.toBeNull()
+
+    // Advance past the 1 s initial backoff — useLive's setTimeout(connect, 1000)
+    // fires and creates MockWebSocket.instances[1].
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2)
+    const reconnectWs = MockWebSocket.instances[1]
+
+    // The new socket's open handler clears disconnectedSince via setIsConnected
+    // and setDisconnectedSince(null) in the onopen branch.
+    act(() => { reconnectWs.triggerOpen() })
+    expect(result.current.disconnectedSince).toBeNull()
+    vi.useRealTimers()
   })
 })

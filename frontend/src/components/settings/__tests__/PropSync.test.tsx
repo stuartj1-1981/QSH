@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { LiveProvider } from '../../../hooks/LiveProvider'
 
 /* ── shared mocks ──────────────────────────────────────────────────── */
 
@@ -51,7 +52,8 @@ describe('Prop-sync: components re-sync local state when props change', () => {
     const eB = { fallback_rates: { cheap: 0.08, standard: 0.15, peak: 0.30, export: 0.04 } }
 
     const { rerender } = render(
-      <TariffSettings energy={eA} driver="ha" onRefetch={noop} />
+      <TariffSettings energy={eA} driver="ha" onRefetch={noop} />,
+      { wrapper: LiveProvider },
     )
     expect(screen.getByDisplayValue('0.05')).toBeInTheDocument()
 

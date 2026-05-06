@@ -109,8 +109,10 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   const hasLpg = installHasFuel(config, 'lpg')
   const hasOil = installHasFuel(config, 'oil')
 
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<OctopusTestResponse | null>(null)
+  const [testingElectricity, setTestingElectricity] = useState(false)
+  const [testingGas, setTestingGas] = useState(false)
+  const [testResultElectricity, setTestResultElectricity] = useState<OctopusTestResponse | null>(null)
+  const [testResultGas, setTestResultGas] = useState<OctopusTestResponse | null>(null)
   const [edfTesting, setEdfTesting] = useState(false)
   const [edfTestResult, setEdfTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const edfDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -145,7 +147,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   const setElectricityProvider = (provider: ElectricityProviderKind) => {
     const updated: ElectricityTariffConfig = { ...electricity, provider }
     setElectricity(updated)
-    setTestResult(null)
+    setTestResultElectricity(null)
     setEdfTestResult(null)
     persist({ electricity: updated })
   }
@@ -153,15 +155,30 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   const setGasProvider = (provider: GasProviderKind) => {
     const updated: GasTariffConfig = { ...gas, provider }
     setGas(updated)
+    setTestResultGas(null)
     persist({ gas: updated })
   }
 
-  const testOctopus = async () => {
+  const testOctopus = async (fuel: 'electricity' | 'gas') => {
+    const setTesting = fuel === 'electricity' ? setTestingElectricity : setTestingGas
+    const setResult = fuel === 'electricity' ? setTestResultElectricity : setTestResultGas
     setTesting(true)
-    setTestResult(null)
+    setResult(null)
     try {
-      const apiKey = electricity.octopus_api_key || gas.octopus_api_key || ''
-      const accountNumber = electricity.octopus_account_number || gas.octopus_account_number || ''
+      // V2 M1: per-fuel credential resolution as a PAIR. Never mix one
+      // fuel's api_key with the other's account_number — that produces a
+      // Frankenstein request that walks the wrong account or 401s. The
+      // split-billing dual-source case (Defect 2) is exactly where pair
+      // integrity matters. The originating fuel wins ONLY when its pair is
+      // complete; otherwise the other fuel's complete pair is used;
+      // otherwise empty.
+      const ownKey = fuel === 'electricity' ? electricity.octopus_api_key : gas.octopus_api_key
+      const otherKey = fuel === 'electricity' ? gas.octopus_api_key : electricity.octopus_api_key
+      const ownAcct = fuel === 'electricity' ? electricity.octopus_account_number : gas.octopus_account_number
+      const otherAcct = fuel === 'electricity' ? gas.octopus_account_number : electricity.octopus_account_number
+      const useOwn = Boolean(ownKey && ownAcct)
+      const apiKey = useOwn ? (ownKey as string) : (otherKey || '')
+      const accountNumber = useOwn ? (ownAcct as string) : (otherAcct || '')
       const resp = await fetch(apiUrl('api/wizard/test-octopus'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,36 +186,35 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
       })
       if (!resp.ok) {
         const text = await resp.text()
-        setTestResult({ success: false, message: `Server error ${resp.status}: ${text.slice(0, 120)}` })
+        setResult({ success: false, message: `Server error ${resp.status}: ${text.slice(0, 120)}` })
         return
       }
       const data: OctopusTestResponse = await resp.json()
-      setTestResult(data)
+      setResult(data)
 
-      // V2 B-M2: persist discovered tariff codes onto the per-fuel configs
-      // so the wizard's onAdvance PATCH carries them.
-      if (data.success) {
-        const elecPatch: Partial<ElectricityTariffConfig> = {}
-        if (data.tariff_code) elecPatch.octopus_tariff_code = data.tariff_code
-        const gasPatch: Partial<GasTariffConfig> = {}
-        if (data.gas_tariff_code) gasPatch.octopus_tariff_code = data.gas_tariff_code
+      // Per-fuel persistence — independent of data.success. The shared
+      // account walk (wizard.py V2 C-M2) returns both tariff codes from
+      // one round-trip when present; we write each one only if discovered.
+      const elecPatch: Partial<ElectricityTariffConfig> = {}
+      if (data.tariff_code) elecPatch.octopus_tariff_code = data.tariff_code
+      const gasPatch: Partial<GasTariffConfig> = {}
+      if (data.gas_tariff_code) gasPatch.octopus_tariff_code = data.gas_tariff_code
 
-        let nextElec = electricity
-        let nextGas = gas
-        if (Object.keys(elecPatch).length > 0) {
-          nextElec = { ...electricity, ...elecPatch }
-          setElectricity(nextElec)
-        }
-        if (hasGas && Object.keys(gasPatch).length > 0) {
-          nextGas = { ...gas, ...gasPatch, provider: gas.provider }
-          setGas(nextGas)
-        }
-        if (nextElec !== electricity || nextGas !== gas) {
-          persist({ electricity: nextElec, gas: nextGas })
-        }
+      let nextElec = electricity
+      let nextGas = gas
+      if (Object.keys(elecPatch).length > 0) {
+        nextElec = { ...electricity, ...elecPatch }
+        setElectricity(nextElec)
+      }
+      if (hasGas && Object.keys(gasPatch).length > 0) {
+        nextGas = { ...gas, ...gasPatch, provider: gas.provider }
+        setGas(nextGas)
+      }
+      if (nextElec !== electricity || nextGas !== gas) {
+        persist({ electricity: nextElec, gas: nextGas })
       }
     } catch (e) {
-      setTestResult({ success: false, message: `Network error: ${e instanceof Error ? e.message : e}` })
+      setResult({ success: false, message: `Network error: ${e instanceof Error ? e.message : e}` })
     } finally {
       setTesting(false)
     }
@@ -286,9 +302,9 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
             accountNumber={electricity.octopus_account_number || ''}
             onApiKey={(v) => updateElectricity({ octopus_api_key: v })}
             onAccount={(v) => updateElectricity({ octopus_account_number: v })}
-            testing={testing}
-            testResult={testResult}
-            onTest={testOctopus}
+            testing={testingElectricity}
+            testResult={testResultElectricity}
+            onTest={() => testOctopus('electricity')}
           />
         )}
 
@@ -339,9 +355,9 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
               accountNumber={gas.octopus_account_number || electricity.octopus_account_number || ''}
               onApiKey={(v) => updateGas({ octopus_api_key: v })}
               onAccount={(v) => updateGas({ octopus_account_number: v })}
-              testing={testing}
-              testResult={testResult}
-              onTest={testOctopus}
+              testing={testingGas}
+              testResult={testResultGas}
+              onTest={() => testOctopus('gas')}
               showGasCode
             />
           )}
@@ -518,33 +534,40 @@ function OctopusFields({
         Test Connection
       </button>
 
-      {testResult && (
-        <div className="space-y-2">
-          <div
-            className={cn(
-              'flex items-center gap-2 p-3 rounded-lg text-sm',
-              testResult.success
-                ? 'bg-[var(--green)]/10 text-[var(--green)]'
-                : 'bg-[var(--red)]/10 text-[var(--red)]',
-            )}
-          >
-            {testResult.success ? <Check size={16} /> : <X size={16} />}
-            <span>{testResult.message}</span>
-          </div>
-
-          {testResult.success && testResult.tariff_code && (
-            <div className="p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-2 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-[var(--text-muted)]">Import tariff</span>
-                <span className="font-mono text-xs text-[var(--text)]">{testResult.tariff_code}</span>
-              </div>
-              {showGasCode && testResult.gas_tariff_code && (
-                <div className="flex justify-between gap-2">
-                  <span className="text-[var(--text-muted)]">Gas tariff</span>
-                  <span className="font-mono text-xs text-[var(--text)]">{testResult.gas_tariff_code}</span>
-                </div>
+      {testResult && (() => {
+        const tickOnGas = showGasCode
+          ? Boolean(testResult.gas_tariff_code)
+          : Boolean(testResult.tariff_code)
+        // V2 H1: gas card never displays electricity wording. When
+        // tariff_code is truthy but gas_tariff_code is null, the account
+        // walk found electricity and proves the gas meter is absent —
+        // this is gas-side information, not an electricity success.
+        const banner = showGasCode
+          ? (testResult.gas_tariff_code
+              ? `Connected. Gas tariff: ${testResult.gas_tariff_code}`
+              : (testResult.tariff_code
+                  ? 'No gas tariff discovered on this account'
+                  : (testResult.message || 'Test failed')))
+          : testResult.message
+        return (
+          <div className="space-y-2">
+            <div
+              className={cn(
+                'flex items-center gap-2 p-3 rounded-lg text-sm',
+                tickOnGas
+                  ? 'bg-[var(--green)]/10 text-[var(--green)]'
+                  : 'bg-[var(--red)]/10 text-[var(--red)]',
               )}
-              {testResult.export_tariff && (
+            >
+              {tickOnGas ? <Check size={16} /> : <X size={16} />}
+              <span>{banner}</span>
+            </div>
+
+            {/* Electricity-side metadata: export tariff (informational) and
+                additional-import-tariff warning. Suppressed in the gas card
+                (V2 H1: gas card never leaks electricity wording). */}
+            {!showGasCode && testResult.export_tariff && (
+              <div className="p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-sm">
                 <div className="flex justify-between gap-2">
                   <span className="text-[var(--text-muted)]">
                     Export tariff (informational — QSH does not optimise export)
@@ -553,32 +576,34 @@ function OctopusFields({
                     {testResult.export_tariff}
                   </span>
                 </div>
-              )}
-              {testResult.additional_import_tariffs
-                && testResult.additional_import_tariffs.length > 0 && (
-                <p className="text-xs text-[var(--amber)]">
-                  Multiple import tariffs detected (e.g., Economy 7 day/night).
-                  {' '}Using primary: <span className="font-mono">{testResult.tariff_code}</span>.
-                  {' '}Additional:{' '}
-                  <span className="font-mono">
-                    {testResult.additional_import_tariffs.join(', ')}
-                  </span>
-                  . If this is incorrect, select the correct tariff manually.
-                </p>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {!testResult.success && testResult.export_tariff && (
-            <div className="p-3 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30 text-sm text-[var(--amber)]">
-              Only an export (Outgoing) tariff was found for this account:{' '}
-              <span className="font-mono">{testResult.export_tariff}</span>.
-              {' '}QSH optimises import cost. To use QSH, add your import
-              tariff agreement in the Octopus dashboard and retry.
-            </div>
-          )}
-        </div>
-      )}
+            {!showGasCode
+              && testResult.additional_import_tariffs
+              && testResult.additional_import_tariffs.length > 0 && (
+              <p className="text-xs text-[var(--amber)]">
+                Multiple import tariffs detected (e.g., Economy 7 day/night).
+                {' '}Using primary: <span className="font-mono">{testResult.tariff_code}</span>.
+                {' '}Additional:{' '}
+                <span className="font-mono">
+                  {testResult.additional_import_tariffs.join(', ')}
+                </span>
+                . If this is incorrect, select the correct tariff manually.
+              </p>
+            )}
+
+            {!showGasCode && !testResult.success && testResult.export_tariff && (
+              <div className="p-3 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30 text-sm text-[var(--amber)]">
+                Only an export (Outgoing) tariff was found for this account:{' '}
+                <span className="font-mono">{testResult.export_tariff}</span>.
+                {' '}QSH optimises import cost. To use QSH, add your import
+                tariff agreement in the Octopus dashboard and retry.
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -10,9 +10,7 @@ import math
 import os
 import logging
 import time
-import requests
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/away", tags=["away"])
 
-HA_TIMEOUT = 5
 _AWAY_TIMESTAMPS_FILENAME = "away_timestamps.json"
 
 
@@ -88,16 +85,6 @@ def _days_remaining(key: str, days_set: float) -> float:
     return max(remaining, 0.0)
 
 
-def _get_ha_headers():
-    """Lazily resolve HA Supervisor credentials."""
-    token = os.getenv("SUPERVISOR_TOKEN")
-    if not token:
-        return None, None, None
-    url = "http://supervisor/core"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    return url, token, headers
-
-
 def _slugify(name: str) -> str:
     return name.lower().replace(" ", "_").replace("-", "_")
 
@@ -122,35 +109,6 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
             client.publish(topic, payload, retain=True, qos=1)
     except Exception as e:
         logger.warning("MQTT write-back failed for %s: %s", control_key, e)
-
-
-def _set_entity_state(entity_id: str, value: Any):
-    """Set an HA entity's state via service call."""
-    ha_url, _, ha_headers = _get_ha_headers()
-    if not ha_headers:
-        raise HTTPException(status_code=503, detail="No SUPERVISOR_TOKEN")
-
-    if entity_id.startswith("input_boolean."):
-        service = "turn_on" if value else "turn_off"
-        payload = {"entity_id": entity_id}
-        svc_domain = "input_boolean"
-    elif entity_id.startswith("input_number."):
-        service = "set_value"
-        payload = {"entity_id": entity_id, "value": float(value)}
-        svc_domain = "input_number"
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported entity type: {entity_id}")
-
-    try:
-        resp = requests.post(
-            f"{ha_url}/api/services/{svc_domain}/{service}",
-            headers=ha_headers,
-            json=payload,
-            timeout=HA_TIMEOUT,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"HA service call failed: {e}")
 
 
 # ── Away State Read ──
@@ -265,35 +223,36 @@ def set_away_mode(body: dict):
     active = body.get("active", False)
     days = body.get("days")
 
-    if shared_state.is_ha_driver():
-        _set_entity_state("input_boolean.qsh_away_mode", active)
-        if days is not None:
-            _set_entity_state("input_number.qsh_days_away", days)
-    else:
-        # Non-HA path: write to internal config values
-        config = shared_state.get_config()
-        if not config:
-            raise HTTPException(status_code=503, detail="Config not loaded")
+    # Update in-memory config (live effect, no restart).
+    # Per INSTRUCTION-168 (HA Away Toggle Persistence Fix), config["away_active_internal"]
+    # is now the canonical store for both HA and MQTT drivers. The pre-fix HA branch wrote
+    # to input_boolean.qsh_away_mode / input_number.qsh_days_away; those helpers were
+    # retired with INSTRUCTION-44 (HA helper auto-creation removal) and have no consumers.
+    # Do not "restore" the HA branch on the assumption it was load-bearing — the HA
+    # driver reads from this key at qsh/drivers/ha/driver.py:261-262.
+    config = shared_state.get_config()
+    if not config:
+        raise HTTPException(status_code=503, detail="Config not loaded")
 
-        # 1. Update in-memory config (live effect, no restart)
-        config["away_active_internal"] = active
-        if days is not None:
-            config["away_days_internal"] = float(days)
+    config["away_active_internal"] = active
+    if days is not None:
+        config["away_days_internal"] = float(days)
 
-        # 2. Persist to YAML (survives restart)
-        try:
-            from .config import _read_modify_write
+    # Persist to YAML (survives restart).
+    # _apply_away is intentionally inline as a closure capturing `active` and `days` from
+    # the enclosing PUT-handler scope — these per-call values are what read_modify_write
+    # applies to the YAML. Do not promote module-level.
+    try:
+        from .config import read_modify_write
 
-            def _apply_away(raw: dict) -> dict:
-                if not raw.get("rooms"):
-                    return raw
-                raw["away_active_internal"] = active
-                if days is not None:
-                    raw["away_days_internal"] = float(days)
-                return raw
-            _read_modify_write(_apply_away)
-        except Exception as e:
-            logger.warning("Failed to persist away state: %s", e)
+        def _apply_away(raw: dict) -> dict:
+            raw["away_active_internal"] = active
+            if days is not None:
+                raw["away_days_internal"] = float(days)
+            return raw
+        read_modify_write(_apply_away)
+    except Exception as e:
+        logger.warning("Failed to persist away state: %s", e)
 
     # MQTT write-back for away state
     _mqtt_writeback("away", str(active).lower())
@@ -310,19 +269,13 @@ def set_away_mode(body: dict):
     if not active:
         config = shared_state.get_config()
         if config:
-            if shared_state.is_ha_driver():
-                for room in config.get("rooms", {}).keys():
-                    slug = _slugify(room)
-                    _set_entity_state(f"input_boolean.qsh_{slug}_away", False)
-                    _clear_activation(f"zone_{slug}")
-            else:
-                # Clear per-zone internals in-memory
-                room_internals = config.get("room_internals", {})
-                for room in config.get("rooms", {}).keys():
-                    slug = _slugify(room)
-                    room_cfg = room_internals.get(room, {})
-                    room_cfg["away_active_internal"] = False
-                    _clear_activation(f"zone_{slug}")
+            # Per-zone state is in-memory-only by design — see Task 2 comment.
+            room_internals = config.setdefault("room_internals", {})
+            for room in config.get("rooms", {}).keys():
+                slug = _slugify(room)
+                room_cfg = room_internals.setdefault(room, {})
+                room_cfg["away_active_internal"] = False
+                _clear_activation(f"zone_{slug}")
 
     return {
         "set": "whole_house",
@@ -358,17 +311,17 @@ def set_zone_away(room: str, body: dict):
     days = body.get("days", 1.0)
     slug = _slugify(room)
 
-    if shared_state.is_ha_driver():
-        _set_entity_state(f"input_boolean.qsh_{slug}_away", active)
-        if days is not None:
-            _set_entity_state(f"input_number.qsh_{slug}_away_days", days)
-    else:
-        # Non-HA path: write to room_internals
-        room_internals = config.setdefault("room_internals", {})
-        room_cfg = room_internals.setdefault(room, {})
-        room_cfg["away_active_internal"] = active
-        if days is not None:
-            room_cfg["away_days_internal"] = float(days)
+    # Per-zone away state is intentionally ephemeral on disk: writes only to the
+    # in-memory config["room_internals"] map, not to qsh.yaml. This mirrors the
+    # pre-fix non-HA branch behaviour and keeps this fix narrowly scoped to the
+    # whole-house round-trip. Whether per-zone away should persist across addon
+    # restarts is a separate decision — see INSTRUCTION-168 → Future Work for the
+    # persistence follow-up.
+    room_internals = config.setdefault("room_internals", {})
+    room_cfg = room_internals.setdefault(room, {})
+    room_cfg["away_active_internal"] = active
+    if days is not None:
+        room_cfg["away_days_internal"] = float(days)
 
     # MQTT write-back for per-zone away
     _mqtt_writeback(f"{room}/away", str(active).lower())

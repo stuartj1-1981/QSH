@@ -472,6 +472,29 @@ def set_heat_source_mode(config, mode, dfan_control=True):
         logging.error(f"Unknown control_method: {control_method}")
 
 
+def set_auxiliary_output(config, entity: str, state: bool) -> bool:
+    """Dispatch switch.turn_on / turn_off (or input_boolean.turn_on / turn_off)
+    for an auxiliary boolean output entity.
+
+    Returns True on successful dispatch, False on failure. Caller must surface
+    failures to OutputBlock.auxiliary_dispatch_failures so the controller can
+    revert state on the next cycle (per INSTRUCTION-131B Task 1).
+    """
+    domain = entity.split(".", 1)[0]
+    service = "turn_on" if state else "turn_off"
+    if domain not in ("switch", "input_boolean"):
+        logging.warning(
+            "set_auxiliary_output: unsupported domain '%s' for %s", domain, entity
+        )
+        return False
+    try:
+        set_ha_service(domain, service, {"entity_id": entity})
+        return True
+    except Exception as e:
+        logging.warning("set_auxiliary_output: dispatch failed for %s: %s", entity, e)
+        return False
+
+
 def get_current_heat_source_mode(config):
     """
     Read current heat source mode at startup.

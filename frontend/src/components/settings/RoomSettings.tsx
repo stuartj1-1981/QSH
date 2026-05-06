@@ -2,9 +2,11 @@ import { useState, useMemo, useCallback } from 'react'
 import { Plus, Trash2, Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml } from '../../types/config'
+import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
+import { AuxOutputEditor } from './AuxOutputEditor'
 
 interface RoomSettingsProps {
   rooms: Record<string, RoomConfigYaml>
@@ -49,6 +51,12 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
   const [newName, setNewName] = useState('')
   const { patch, saving } = usePatchConfig()
+  // INSTRUCTION-162A: per-room aux validity. False means the AuxOutputEditor
+  // has reported an invalid state (e.g. enabled with empty target field) and
+  // the parent Save button must be disabled to avoid a guaranteed 422.
+  // Default-valid: rooms not present in the map are assumed valid.
+  const [auxValidByRoom, setAuxValidByRoom] = useState<Record<string, boolean>>({})
+  const allValid = Object.values(auxValidByRoom).every((v) => v !== false)
 
   const allEntityIds = useMemo(
     () => {
@@ -157,7 +165,10 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
 
   const save = async () => {
     const cleaned = Object.fromEntries(
-      Object.entries(editedRooms).map(([n, r]) => [n, stripEmptyMqttTopics(r)])
+      Object.entries(editedRooms).map(([n, r]) => [
+        n,
+        stripFixedSetpointForControlMode(stripEmptyMqttTopics(r)),
+      ])
     )
     const result = await patch('rooms', cleaned)
     if (result) onRefetch()
@@ -173,7 +184,7 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
         <h2 className="text-lg font-bold text-[var(--text)]">Rooms</h2>
         <button
           onClick={save}
-          disabled={saving}
+          disabled={saving || !allValid}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -360,6 +371,35 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     </div>
                   )}
                 </>
+              )}
+              {room.control_mode === 'none' && (
+                <div data-testid={`fixed-setpoint-${name}`}>
+                  <label className="block text-xs text-[var(--text-muted)] mb-1">
+                    Fixed Setpoint (°C)
+                  </label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={25}
+                    step={0.5}
+                    value={room.fixed_setpoint ?? ''}
+                    placeholder="Uses global comfort"
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      if (raw === '') {
+                        updateRoom(name, { fixed_setpoint: undefined })
+                        return
+                      }
+                      const val = parseFloat(raw)
+                      if (isNaN(val) || val < 10 || val > 25) return
+                      updateRoom(name, { fixed_setpoint: val })
+                    }}
+                    className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                  />
+                  <p className="text-xs text-[var(--text-muted)] mt-1">
+                    Use when the room has a manual TRV that caps below comfort temp.
+                  </p>
+                </div>
               )}
             </div>
 
@@ -642,6 +682,34 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                 )}
               </div>
             )}
+
+            {/* INSTRUCTION-162A: Per-room auxiliary boolean output editor.
+                Driver-aware (HA entity vs MQTT topic). Toggling off sets
+                auxiliary_output to null which strips the YAML key on save. */}
+            <div className="pt-3 border-t border-[var(--border)] space-y-2">
+              <div>
+                <h4 className="text-sm font-medium text-[var(--text)]">
+                  Auxiliary output
+                </h4>
+                <p className="text-xs text-[var(--text-muted)]">
+                  Per-room boolean output for direct electric heaters, panel heaters, etc.
+                </p>
+              </div>
+              <AuxOutputEditor
+                value={room.auxiliary_output}
+                onChange={(next: AuxiliaryOutputYaml | null) =>
+                  updateRoom(name, { auxiliary_output: next })
+                }
+                onValidityChange={(valid) =>
+                  setAuxValidByRoom((prev) =>
+                    prev[name] === valid ? prev : { ...prev, [name]: valid }
+                  )
+                }
+                driver={driver}
+                controlMode={room.control_mode}
+                resolved={resolved}
+              />
+            </div>
           </div>
         ))}
       </div>

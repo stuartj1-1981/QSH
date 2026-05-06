@@ -16,6 +16,7 @@ def get_sysid():
 
     config = shared_state.get_config()
     room_areas = config.get('rooms', {}) if config else {}
+    fixed_setpoints = config.get('room_fixed_setpoint', {}) if config else {}
 
     result = {}
     for room_name in room_areas:
@@ -29,6 +30,9 @@ def get_sysid():
                 "pc_fits": sysid.pc_fits(room_name),
                 "solar_gain": round(sysid.solar_gain(room_name), 3),
                 "confidence": _confidence_level(sysid, room_name),
+                # INSTRUCTION-172 — surface the per-room fixed setpoint so the
+                # UI can annotate "(fixed)" on the room target line.
+                "fixed_setpoint": fixed_setpoints.get(room_name),
             }
         except Exception:
             result[room_name] = {"error": "Failed to read SysID for this room"}
@@ -45,6 +49,7 @@ def get_sysid_room(room: str):
 
     config = shared_state.get_config()
     room_areas = config.get('rooms', {}) if config else {}
+    fixed_setpoints = config.get('room_fixed_setpoint', {}) if config else {}
 
     if room not in room_areas:
         raise HTTPException(status_code=404, detail=f"Room '{room}' not found")
@@ -61,6 +66,8 @@ def get_sysid_room(room: str):
             "solar_gain": round(sysid.solar_gain(room), 3),
             "gate_stats": sysid.gate_stats(room),
             "confidence": _confidence_level(sysid, room),
+            # INSTRUCTION-172 — see /sysid endpoint above.
+            "fixed_setpoint": fixed_setpoints.get(room),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

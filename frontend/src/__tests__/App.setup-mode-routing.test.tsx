@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import App from '../App'
+import { LiveProvider } from '../hooks/LiveProvider'
 
 // jsdom does not implement WebSocket. useLive constructs one on mount; stub
 // the global so the constructor and its handlers exist as no-ops, otherwise
@@ -63,7 +64,7 @@ describe('App — INSTRUCTION-142 setup-mode routing', () => {
   it('routes to Wizard when /api/status reports setup_mode=true', async () => {
     makeFetchSpy(SETUP_STATUS_BODY, VALID_CONFIG_BODY)
 
-    render(<App />)
+    render(<App />, { wrapper: LiveProvider })
 
     await waitFor(() => {
       expect(screen.getByText('QSH Setup Wizard')).toBeDefined()
@@ -73,7 +74,7 @@ describe('App — INSTRUCTION-142 setup-mode routing', () => {
   it('does not redirect to Wizard when setup_mode=false and config is valid', async () => {
     makeFetchSpy(NORMAL_STATUS_BODY, VALID_CONFIG_BODY)
 
-    render(<App />)
+    render(<App />, { wrapper: LiveProvider })
 
     // Home renders the connection indicator with "Reconnecting..." until the
     // WebSocket connects (the stubbed ws never invokes onopen).

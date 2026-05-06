@@ -79,3 +79,74 @@ describe('RoomDetail temperature source row', () => {
     expect(screen.getByText('Independent sensor')).toBeInTheDocument()
   })
 })
+
+
+// =============================================================================
+// INSTRUCTION-172 — fixed_setpoint annotation on the target line
+// =============================================================================
+
+
+describe('RoomDetail fixed_setpoint annotation', () => {
+  const sysidBase = {
+    u_kw_per_c: 0.05,
+    c_kwh_per_c: 0.5,
+    u_observations: 100,
+    c_observations: 50,
+    c_source: 'measured' as const,
+    pc_fits: 5,
+    solar_gain: 0.0,
+    confidence: 'high' as const,
+  }
+
+  it('renders "(fixed)" annotation when sysid.fixed_setpoint is set', () => {
+    render(
+      <RoomDetail
+        name="spare"
+        room={baseRoom}
+        sysid={{ ...sysidBase, fixed_setpoint: 19.0 }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.getByTestId('fixed-target-annotation')).toBeInTheDocument()
+    expect(screen.getByText('(fixed)')).toBeInTheDocument()
+  })
+
+  it('omits "(fixed)" annotation when sysid.fixed_setpoint is null', () => {
+    render(
+      <RoomDetail
+        name="spare"
+        room={baseRoom}
+        sysid={{ ...sysidBase, fixed_setpoint: null }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('fixed-target-annotation')).toBeNull()
+  })
+
+  it('omits "(fixed)" annotation when sysid is not provided', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={baseRoom}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('fixed-target-annotation')).toBeNull()
+  })
+
+  it('omits "(fixed)" annotation when sysid omits fixed_setpoint key', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={baseRoom}
+        sysid={sysidBase}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('fixed-target-annotation')).toBeNull()
+  })
+})

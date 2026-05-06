@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..state import shared_state
-from .config import _read_modify_write
+from .config import read_modify_write
 from qsh.occupancy.comfort_schedule import get_comfort_schedule_store
 
 logger = logging.getLogger(__name__)
@@ -169,7 +169,7 @@ def set_antifrost_threshold(body: AntifrostThresholdBody):
 
     # 2. Persist to YAML (survives restart)
     try:
-        _read_modify_write(_update_config_key("antifrost.oat_threshold", body.value))
+        read_modify_write(_update_config_key("antifrost.oat_threshold", body.value))
     except Exception as e:
         logger.warning("Failed to persist antifrost threshold: %s", e)
 
@@ -207,7 +207,7 @@ def set_comfort_temp(body: ComfortTempBody):
 
     # 2. Persist to YAML (survives restart)
     try:
-        _read_modify_write(_update_config_key("comfort_temp", body.value))
+        read_modify_write(_update_config_key("comfort_temp", body.value))
     except Exception as e:
         logger.warning("Failed to persist comfort_temp: %s", e)
 
@@ -219,7 +219,7 @@ def set_comfort_temp(body: ComfortTempBody):
     if config is not None:
         config["pid_target_internal"] = body.value
     try:
-        _read_modify_write(_update_config_key("pid_target_internal", body.value))
+        read_modify_write(_update_config_key("pid_target_internal", body.value))
     except Exception as e:
         logger.warning("Failed to persist pid_target_internal: %s", e)
 
@@ -284,7 +284,7 @@ def set_control_mode(body: ControlModeBody):
 
     # 2. Persist to YAML (survives restart)
     try:
-        _read_modify_write(_update_config_key("control_enabled", body.enabled))
+        read_modify_write(_update_config_key("control_enabled", body.enabled))
     except HTTPException:
         raise  # Task 6: safety-critical — caller must see 503
     except Exception as e:
@@ -372,7 +372,7 @@ def set_flow_min_internal(body: FlowMinBody):
 
     # Persist to YAML
     try:
-        _read_modify_write(_update_config_key("flow_min_internal", body.value))
+        read_modify_write(_update_config_key("flow_min_internal", body.value))
     except Exception as e:
         logger.warning("Failed to persist flow_min_internal: %s", e)
 
@@ -411,7 +411,7 @@ def set_flow_max_internal(body: FlowMaxBody):
 
     # Persist to YAML
     try:
-        _read_modify_write(_update_config_key("flow_max_internal", body.value))
+        read_modify_write(_update_config_key("flow_max_internal", body.value))
     except Exception as e:
         logger.warning("Failed to persist flow_max_internal: %s", e)
 
@@ -442,7 +442,7 @@ def set_pid_target_internal(body: PidTargetBody):
 
     # Persist to YAML
     try:
-        _read_modify_write(_update_config_key("pid_target_internal", body.value))
+        read_modify_write(_update_config_key("pid_target_internal", body.value))
     except Exception as e:
         logger.warning("Failed to persist pid_target_internal: %s", e)
 
@@ -469,7 +469,7 @@ def set_dfan_control_internal(body: DfanControlBody):
         config["control_enabled"] = body.enabled
 
     try:
-        _read_modify_write(_update_config_key("control_enabled", body.enabled))
+        read_modify_write(_update_config_key("control_enabled", body.enabled))
     except HTTPException:
         raise  # Task 6: safety-critical — caller must see 503
     except Exception as e:
@@ -552,7 +552,7 @@ def set_shoulder_threshold(body: ShoulderThresholdBody):
 
     # Persist to qsh.yaml
     try:
-        _read_modify_write(_update_config_key("shoulder.hp_min_output_kw", body.value))
+        read_modify_write(_update_config_key("shoulder.hp_min_output_kw", body.value))
     except Exception as e:
         logger.warning("Failed to persist shoulder threshold: %s", e)
 
@@ -601,7 +601,7 @@ def set_overtemp_protection(body: OvertempProtectionBody):
 
     # Persist to qsh.yaml
     try:
-        _read_modify_write(_update_config_key("thermal.overtemp_protection", body.value))
+        read_modify_write(_update_config_key("thermal.overtemp_protection", body.value))
     except Exception as e:
         logger.warning("Failed to persist overtemp protection: %s", e)
 
@@ -683,7 +683,7 @@ def set_external_setpoints(body: ExternalSetpointsBody):
                 else:
                     ext_sp[key] = value
             return raw
-        _read_modify_write(_apply_external_setpoints)
+        read_modify_write(_apply_external_setpoints)
     except Exception as e:
         logger.warning("Failed to persist external setpoints: %s", e)
 

@@ -62,8 +62,12 @@ def _load_raw_yaml():
         return None
 
 
-def _read_modify_write(transform: Callable[[dict], dict]) -> dict:
-    """Thread-safe config update for HTTP route callers.
+def read_modify_write(transform: Callable[[dict], dict]) -> dict:
+    """Canonical YAML read-modify-write helper for HTTP route callers, used by
+    both PATCH /api/config/{section} and POST /api/wizard/persist-octopus-tariff-codes
+    (INSTRUCTION-174 V2 LOW). Promoted from a leading-underscore private name
+    when a second cross-module caller (wizard.py) was introduced — the
+    underscore signal would otherwise be silently violated.
 
     Resolves the YAML path via the search-list (the alpha-install backwards-
     compat affordance) and uses the local _load_raw_yaml / _atomic_write_yaml
@@ -338,7 +342,7 @@ def patch_config_section(section: str, body: dict):
                         )
             return raw
 
-        _read_modify_write(_apply_root)
+        read_modify_write(_apply_root)
         return {
             "updated": "root",
             "restart_required": False,
@@ -394,7 +398,7 @@ def patch_config_section(section: str, body: dict):
             )
         return raw
 
-    _read_modify_write(_apply_patch)
+    read_modify_write(_apply_patch)
 
     # Always restart to adopt changes
     try:
@@ -436,7 +440,7 @@ def delete_config_section(section: str):
         removed[0] = raw.pop(section, None)
         return raw
 
-    _read_modify_write(_apply_delete)
+    read_modify_write(_apply_delete)
     was_present = removed[0] is not None
 
     if not was_present:

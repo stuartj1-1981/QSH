@@ -832,6 +832,36 @@ class MQTTDriver:
                     len(outputs.valve_setpoints),
                 )
 
+        # ── Auxiliary boolean outputs (per-room aux actuators, INSTRUCTION-131B) ──
+        if outputs.auxiliary_outputs_changed and outputs.auxiliary_outputs:
+            aux_cfg = config.get("auxiliary_outputs", {})
+            for room, state in outputs.auxiliary_outputs.items():
+                room_aux = aux_cfg.get(room, {})
+                if not room_aux.get("enabled"):
+                    continue
+                topic = room_aux.get("mqtt_topic")
+                if not topic:
+                    outputs.auxiliary_dispatch_failures.add(room)
+                    continue
+                if control_enabled:
+                    payload = "ON" if state else "OFF"
+                    try:
+                        # retain=True: aux output is desired-state semantics, not
+                        # event semantics. Reconnecting subscribers (or restarted
+                        # brokers) must receive last commanded state immediately,
+                        # otherwise relay state is blacked out until next demand
+                        # transition (could be hours). Edge-triggered publish +
+                        # retain=True is the standard HA-aware MQTT pattern for
+                        # commanded states.
+                        self._mqtt.publish(topic, payload, qos=1, retain=True)
+                    except Exception as e:
+                        logger.warning("MQTT aux dispatch failed for %s: %s", topic, e)
+                        outputs.auxiliary_dispatch_failures.add(room)
+                else:
+                    logger.debug(
+                        "SHADOW MODE: suppressed aux %s=%s → %s", room, state, topic
+                    )
+
         # ── TRV setpoints ──
         # Gated on control_enabled. Shadow mode suppresses actuation but still
         # allows shadow-entity publishes below for operator visibility.

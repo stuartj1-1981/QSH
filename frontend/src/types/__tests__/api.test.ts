@@ -13,6 +13,7 @@ import {
   testEdfRegionResponseSchema,
   cycleSnapshotSchema,
 } from '../schemas'
+import type { RoomState } from '../api'
 
 describe('providerStatusSchema', () => {
   it('parses a representative Octopus electricity payload', () => {
@@ -177,5 +178,86 @@ describe('cycleSnapshotSchema', () => {
       future_field_added_in_152: { whatever: true },
     }
     expect(() => cycleSnapshotSchema.parse(payload)).not.toThrow()
+  })
+})
+
+describe('RoomState aux fields (INSTRUCTION-131C V6)', () => {
+  // These tests are TS-level shape gates. `tsc -b --noEmit` enforces the
+  // type contract; the runtime assertions below double as a smoke check that
+  // the literal values fit the declared type without `as` casts.
+
+  it('accepts a RoomState without any aux fields (legacy backend payload)', () => {
+    const room: RoomState = {
+      temp: 20.0,
+      target: 21.0,
+      valve: 50,
+      occupancy: 'occupied',
+      status: 'heating',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+    }
+    expect(room.aux_state).toBeUndefined()
+    expect(room.aux_dispatched).toBeUndefined()
+  })
+
+  it('accepts aux_state and aux_dispatched as null (room not configured)', () => {
+    const room: RoomState = {
+      temp: 20.0,
+      target: 21.0,
+      valve: 50,
+      occupancy: 'occupied',
+      status: 'heating',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+      aux_state: null,
+      aux_dispatched: null,
+      aux_rated_kw: 0,
+      aux_min_on_s: null,
+      aux_min_off_s: null,
+      aux_max_cycles_per_hour: null,
+    }
+    expect(room.aux_state).toBeNull()
+    expect(room.aux_dispatched).toBeNull()
+  })
+
+  it('accepts aux_state=true with aux_dispatched=null (shadow mode)', () => {
+    const room: RoomState = {
+      temp: 20.0,
+      target: 21.0,
+      valve: 50,
+      occupancy: 'occupied',
+      status: 'heating',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+      aux_state: true,
+      aux_dispatched: null,
+      aux_rated_kw: 1.5,
+      aux_min_on_s: 90,
+      aux_min_off_s: 120,
+      aux_max_cycles_per_hour: 4,
+    }
+    expect(room.aux_state).toBe(true)
+    expect(room.aux_dispatched).toBeNull()
+  })
+
+  it('accepts aux_state=true with aux_dispatched=false (live failed — alarm)', () => {
+    const room: RoomState = {
+      temp: 20.0,
+      target: 21.0,
+      valve: 50,
+      occupancy: 'occupied',
+      status: 'heating',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+      aux_state: true,
+      aux_dispatched: false,
+      aux_rated_kw: 1.5,
+    }
+    expect(room.aux_state).toBe(true)
+    expect(room.aux_dispatched).toBe(false)
   })
 })
