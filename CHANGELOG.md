@@ -2,6 +2,14 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.2] — 2026-05-06
+
+### Changed
+- Octopus Cosy: HP API communication hardening (flow-temperature clamp, new-schema api_key)
+
+### Added
+- Diagnostics: read-only control-method status badge
+
 ## [1.3.1] — 2026-05-06
 
 ### Added
