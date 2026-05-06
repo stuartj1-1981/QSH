@@ -13,6 +13,22 @@ const PAUSE_STRATEGIES = [
   'defrost', 'oil recovery', 'short cycle pause',
 ]
 
+// INSTRUCTION-186: active control-method diagnostic chip. Labels mirror the
+// values resolved at qsh/config.py:1879-1897 plus the pending/unknown
+// sentinels suppressed by HIDDEN_METHODS. Unmapped values fall back to the
+// raw string at render time so a backend release introducing a new method
+// does not silently render a blank chip.
+const CONTROL_METHOD_LABELS: Record<string, string> = {
+  octopus_api:  'Octopus API',
+  ha_service:   'HA Service',
+  mqtt:         'MQTT',
+  entity:       'Entity',
+  trvs_only:    'TRVs Only',
+  monitor_only: 'Monitor',
+}
+
+const HIDDEN_METHODS = new Set(['', 'unknown', 'pending'])
+
 // INSTRUCTION-135 V2 Finding 4: compile-time assertion that the wizard route
 // id is a valid member of App.tsx's Page union. The `as const` narrows the
 // literal so the onNavigate prop signature can stay tight (avoids forcing
@@ -77,6 +93,10 @@ interface StatusBannerProps {
   // aggression takes effect in summer monitoring).
   tariffMode?: TariffAggressionMode
   summerMonitoring?: boolean
+  // INSTRUCTION-186: active control routing path — read-only diagnostic
+  // chip. Loose `string` type tolerates unknown future backend values
+  // (forward-compat — see the unmapped-value test).
+  controlMethod?: string
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -100,6 +120,7 @@ export const StatusBanner = memo(function StatusBanner({
   onNavigate,
   tariffMode,
   summerMonitoring,
+  controlMethod,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -223,7 +244,21 @@ export const StatusBanner = memo(function StatusBanner({
           <div className="flex items-center gap-3">
             <div className={cn('w-3 h-3 rounded-full', stateColor)} />
             <div>
-              <div className="font-semibold text-lg">{operatingState}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-lg">{operatingState}</span>
+                {controlMethod && !HIDDEN_METHODS.has(controlMethod) && (
+                  <span
+                    data-control-method={controlMethod}
+                    data-testid="control-method-badge"
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
+                      'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+                    )}
+                  >
+                    {CONTROL_METHOD_LABELS[controlMethod] ?? controlMethod}
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-[var(--text-muted)]" data-testid="status-banner-subtitle">
                 {controlEnabled ? 'Active control' : 'Shadow mode'}
                 {appliedMode !== 'off' && ` · ${appliedFlow.toFixed(0)}°C flow`}

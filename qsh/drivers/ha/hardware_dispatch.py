@@ -57,24 +57,57 @@ def _is_finite_number(value) -> bool:
 
 
 def _clamp_and_round_flow(config, flow_svc, optimal_flow):
-    """Clamp to entity-advertised min_temp/max_temp and round to entity step
-    (or vendor override). The HA climate entity is the authoritative source
-    for what hardware will accept; user-config flow_min/flow_max are used
-    only as fallback when the entity attributes cannot be read.
+    """Clamp the dispatched LWT flow temperature and round to the dispatched
+    step.
+
+    INSTRUCTION-185: the entity-advertised ``min_temp``/``max_temp`` are LWT
+    bounds ONLY when the dispatched HA service writes the entity's
+    ``temperature`` attribute -- ``climate.set_temperature`` (Daikin /
+    Vaillant / Samsung) and ``climate.set_control_setpoint`` (OpenTherm).
+    For any other service the entity at ``flow_control.entity_id`` is a
+    routing target rather than an LWT setpoint; reading its min/max is a
+    category error.
+
+    Concrete failure mode the gate prevents (Connor 6 May 2026): for Octopus
+    Cosy via ``octopus_energy.set_heat_pump_flow_temp_config`` the climate
+    entity is the **room-temperature setpoint** ("Heating Setpoint",
+    min_temp=7, max_temp=30, step=0.5). Reading those bounds as LWT clamps
+    silently pinned every flow demand >=30°C to 30°C, starving the HP of
+    capacity on real cold days.
+
+    When the gate evaluates False (non-LWT service), bounds come from the
+    HOUSE_CONFIG runtime values: ``flow_min_internal`` /
+    ``flow_max_internal`` (API-managed, defaults 25/50 per
+    ``qsh/config.py:651-652``) with legacy ``flow_min`` / ``flow_max``
+    (defaults 25/55 per ``qsh/config.py:1595-1596``) as a second-tier
+    fallback. ``config`` IS HOUSE_CONFIG (top-level), not the
+    ``flow_control`` sub-block -- the ``_internal`` keys live at the top
+    level. The Octopus primary write path goes via
+    ``_apply_flow_octopus_api`` and bypasses this function entirely once
+    ``has_octopus`` resolves True; this function is the safety-net path for
+    api-key-loss / runtime-fallback / future-vendor cases.
     """
     entity_id = flow_svc.get("entity_id")
+    service = flow_svc.get("service", "")
 
-    # Defaults from user config + 0.5 °C step fallback. Used when entity
-    # attributes can't be read or are incomplete.
-    fallback_min = float(config.get("flow_min", 25.0))
-    fallback_max = float(config.get("flow_max", 60.0))
+    # Entity-advertised min/max are LWT-relevant ONLY when the dispatched
+    # service writes the entity's temperature attribute. Custom services
+    # (e.g. octopus_energy.set_heat_pump_flow_temp_config) treat the climate
+    # entity as a routing target only -- their min/max are room-temp bounds.
+    entity_is_lwt_setpoint = service in ("set_temperature", "set_control_setpoint")
+
+    # Fallback priority: HOUSE_CONFIG _internal values (API-managed runtime
+    # bounds, always present, defaults 25/50) > heat_source legacy keys
+    # (defaults 25/55). config IS HOUSE_CONFIG (top-level), not flow_control.
+    fallback_min = float(config.get("flow_min_internal", config.get("flow_min", 25.0)))
+    fallback_max = float(config.get("flow_max_internal", config.get("flow_max", 55.0)))
     fallback_step = 0.5
 
     min_temp = fallback_min
     max_temp = fallback_max
     step = fallback_step
 
-    if entity_id:
+    if entity_id and entity_is_lwt_setpoint:
         cached = _FLOW_ENTITY_ATTR_CACHE.get(entity_id)
         if cached is not None:
             min_temp, max_temp, step = cached
@@ -97,9 +130,13 @@ def _clamp_and_round_flow(config, flow_svc, optimal_flow):
                     _FLOW_ENTITY_ATTR_CACHE[entity_id] = (min_temp, max_temp, step)
                 # else: leave cache empty so next dispatch retries; use
                 # fallbacks for THIS dispatch only.
+    # else: entity_is_lwt_setpoint is False -- min_temp/max_temp/step retain
+    # the config-derived fallback values above.
 
-    # Per-vendor step override (e.g. Daikin EDLA082 advertises 0.5 but only
-    # retains integers). Applies AFTER min/max are determined. The runtime
+    # Per-vendor step override applies in BOTH branches: it lives outside the
+    # entity-attr block so it overrides both the entity-advertised step
+    # (LWT-setpoint path) and the 0.5 default (non-LWT path).
+    # Daikin EDLA082 advertises 0.5 but only retains integers. The runtime
     # source is heat_source.flow_control.step_override from qsh.yaml, which
     # the config loader exposes as hp_flow_service[step_override] (the
     # flow_control dict is pass-through). config["flow_control"] is the
@@ -121,10 +158,17 @@ def _clamp_and_round_flow(config, flow_svc, optimal_flow):
     rounded = round(rounded, 4)  # cleanup floating-point artefacts
 
     if rounded != optimal_flow:
-        logging.info(
-            "HA service: clamped flow %.2f → %.2f (entity %s, range %.1f-%.1f, step %.2f)",
-            optimal_flow, rounded, entity_id or "<none>", min_temp, max_temp, step,
-        )
+        if entity_is_lwt_setpoint:
+            logging.info(
+                "HA service: clamped flow %.2f → %.2f (entity %s, range %.1f-%.1f, step %.2f)",
+                optimal_flow, rounded, entity_id or "<none>", min_temp, max_temp, step,
+            )
+        else:
+            logging.info(
+                "HA service: clamped flow %.2f → %.2f (range %.1f-%.1f, config bounds, "
+                "entity attrs not used for service '%s')",
+                optimal_flow, rounded, min_temp, max_temp, service,
+            )
 
     return rounded
 
