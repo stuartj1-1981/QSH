@@ -868,9 +868,133 @@ def validate_config(req: WizardValidateRequest):
                 errors.append(f"peak_loss_kw={peak} outside valid range [0.5, 50.0]")
 
     if req.step == "energy" or req.step is None:
+        # INSTRUCTION-188 Task 3: provider-aware energy.electricity validation.
+        # Replaces the V1 warning-only check that accepted any malformed
+        # shape and produced wizard YAMLs the runtime tariff factory then
+        # refused to load (Connor's 6 May 2026 22:21-22:41 outage).
         energy_cfg = cfg.get("energy", {})
-        if not energy_cfg.get("octopus") and not energy_cfg.get("fixed_rates"):
-            warnings.append("No tariff configured — using fallback rates")
+        electricity_cfg = energy_cfg.get("electricity") or {}
+        legacy_octopus = energy_cfg.get("octopus") or {}
+        fixed_rates = energy_cfg.get("fixed_rates") or {}
+
+        provider = electricity_cfg.get("provider")
+
+        if provider == "octopus":
+            # Both credentials required. New-schema location preferred;
+            # legacy block accepted as fallback to match the resolver's
+            # behaviour (Task 1 above + 185 V2.2 Task 1).
+            api_key = (
+                (electricity_cfg.get("octopus_api_key") or "").strip()
+                or (legacy_octopus.get("api_key") or "").strip()
+            )
+            account_number = (
+                (electricity_cfg.get("octopus_account_number") or "").strip()
+                or (legacy_octopus.get("account_number") or "").strip()
+            )
+            if not api_key:
+                errors.append(
+                    "energy.electricity.provider='octopus' requires "
+                    "energy.electricity.octopus_api_key (or legacy "
+                    "energy.octopus.api_key) to be set"
+                )
+            if not account_number:
+                errors.append(
+                    "energy.electricity.provider='octopus' requires "
+                    "energy.electricity.octopus_account_number (or legacy "
+                    "energy.octopus.account_number) to be set"
+                )
+
+            # INSTRUCTION-190 Task 4b: diagnose hp_euid derivation failure at
+            # wizard time so multi-zone Cosy users see the issue before deploy,
+            # not at first cycle. The wizard validator owns its own warnings
+            # list -- this is a parallel addition to Task 4a's `result.warn()`
+            # call in validate_yaml.validate_energy(), but message construction
+            # is shared via the Task 4 helper.
+            from qsh.octopus_identifiers import (
+                _derive_octopus_identifiers,
+                _resolve_heat_source,
+                diagnose_hp_euid_derive_failure,
+            )
+            resolved_oct = _derive_octopus_identifiers(
+                _resolve_heat_source(cfg),
+                legacy_octopus,
+                energy_cfg,
+            )
+            if not resolved_oct.get("hp_euid"):
+                flow_entity = (
+                    _resolve_heat_source(cfg).get("flow_control", {}).get("entity_id") or ""
+                )
+                warnings.append(diagnose_hp_euid_derive_failure(flow_entity))
+
+        elif provider == "ha_entity":
+            # rates_entity required. This is the malformed shape Connor's
+            # wizard run produced 22:21-22:41 on 6 May 2026 -- without this
+            # gate, the wizard would re-emit the same YAML on next run.
+            rates_entity = (electricity_cfg.get("rates_entity") or "").strip()
+            if not rates_entity:
+                errors.append(
+                    "energy.electricity.provider='ha_entity' requires "
+                    "energy.electricity.rates_entity to be set "
+                    "(e.g. event.octopus_energy_electricity_..._current_day_rates)"
+                )
+
+        elif provider == "edf_freephase":
+            # V2 L-5 closure -- asymmetry vs octopus / ha_entity branches
+            # ACCEPTED EXPLICITLY. Rationale: EDF Freephase has lower fleet
+            # coverage than the bedrock providers (octopus / ha_entity) and
+            # its credential schema is more likely to evolve; tightening
+            # here would couple the wizard validator to EDF-specific schema
+            # changes that don't warrant invalidating in-flight wizard
+            # sessions. Runtime EDFFreephaseProvider.__init__ raises on
+            # missing credentials -- observable (the addon won't start, log
+            # surfaces the cause). If a field event surfaces a real
+            # EDF-shape gap, raise a separate instruction at that point
+            # rather than pre-engineering for hypotheticals.
+            warnings.append(
+                "energy.electricity.provider='edf_freephase' — credentials "
+                "not validated at wizard step; verify at deploy"
+            )
+
+        elif provider == "fixed":
+            # V2 M-2 closure -- align strictness with octopus / ha_entity
+            # branches. V1's key-present check (`if "fixed_rate" not in
+            # electricity_cfg`) accepted `fixed_rate: ""` and
+            # `fixed_rate: null` (parses as Python None) as valid, which
+            # are semantically broken. Match the .strip() non-empty
+            # pattern used elsewhere in this branch set.
+            fixed_rate = electricity_cfg.get("fixed_rate")
+            if fixed_rate is None or (
+                isinstance(fixed_rate, str) and not fixed_rate.strip()
+            ):
+                errors.append(
+                    "energy.electricity.provider='fixed' requires "
+                    "energy.electricity.fixed_rate to be set"
+                )
+
+        elif provider is None:
+            # No new-schema provider declared. Fall back to the legacy
+            # paths. The existing behaviour (warn if no tariff sources at
+            # all) is preserved for backward compatibility with pre-150C
+            # installs that have never touched the wizard.
+            if not legacy_octopus and not fixed_rates:
+                warnings.append("No tariff configured — using fallback rates")
+
+        else:
+            # V2 M-1 closure -- VALID_ELECTRICITY_PROVIDERS imported from
+            # qsh.tariff (Sub-step 3.0). Single source of truth shared
+            # with the runtime factory at qsh/tariff/__init__.py:
+            # _build_provider; adding a new provider registers it in the
+            # constant and the factory's branch in lockstep, so wizard
+            # validator and runtime stay aligned without ongoing
+            # coordination overhead.
+            from qsh.tariff import VALID_ELECTRICITY_PROVIDERS
+
+            valid_list = ", ".join(VALID_ELECTRICITY_PROVIDERS)
+            errors.append(
+                f"energy.electricity.provider='{provider}' is unrecognised. "
+                f"Valid: {valid_list}, or omit to use legacy "
+                f"energy.octopus / energy.fixed_rates."
+            )
 
     if req.step == "hot_water" or req.step is None:
         hw_plan = cfg.get("hw_plan")
