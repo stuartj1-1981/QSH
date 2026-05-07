@@ -140,6 +140,25 @@ class CredentialedProvider(TariffProvider, Protocol):
     def test_credentials(self) -> CredentialTestResult: ...
 
 
+# Public registry of provider strings recognised by `_build_provider` for
+# the electricity fuel. Single source of truth for provider validation:
+# any new provider added to the branches in `_build_provider()` must be
+# added here in lockstep, and vice versa. Imported by
+# `qsh/api/routes/wizard.py:validate_config` for wizard-step validation
+# (INSTRUCTION-188 Task 3 / V2 M-1 closure). T-30-aligned mirror --
+# wizard validator and runtime factory share state without ongoing
+# coordination overhead. The structural lockstep tests in
+# `qsh/tariff/tests/test_factory.py` (constant <-> factory) and
+# `qsh/api/tests/test_wizard_validate.py` (constant <-> wizard validator)
+# fail if any of the three places drifts.
+VALID_ELECTRICITY_PROVIDERS: tuple[str, ...] = (
+    "octopus",
+    "ha_entity",
+    "fixed",
+    "edf_freephase",
+)
+
+
 def fuel_for_source(source_type: str) -> Fuel:
     """Map heat_source type to fuel. Single source of truth for the mapping.
     Raises KeyError for unrecognised source types — caller must have already
@@ -340,6 +359,7 @@ __all__ = [
     "ConfigurationError",
     "TARIFF_HTTP_TIMEOUT_SECONDS",
     "SUPPORTED_PROVIDER_KINDS",
+    "VALID_ELECTRICITY_PROVIDERS",
     "fuel_for_source",
     "create_tariff_providers",
     "FixedRateProvider",

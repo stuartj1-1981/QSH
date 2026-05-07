@@ -84,13 +84,30 @@ class HADriver:
         # Init Octopus direct API if configured
         if config.get("has_octopus"):
             octopus_cfg = config.get("octopus_config", {})
-            octopus_api.init(
+            init_ok = octopus_api.init(
                 api_key=octopus_cfg.get("api_key", ""),
                 hp_euid=octopus_cfg.get("hp_euid", ""),
                 account_number=octopus_cfg.get("account_number", ""),
                 zone_entity_id=octopus_cfg.get("zone_entity_id", ""),
             )
-            logging.info("Octopus Energy API initialized")
+            if init_ok:
+                logging.info("Octopus Energy API initialized")
+            else:
+                # has_octopus=True but credentials missing -- config broke
+                # between validator and runtime. Most common cause:
+                # hp_euid/zone_entity_id auto-derive from
+                # heat_source.flow_control.entity_id failed (e.g. multi-zone
+                # Cosy entity with `_zone_N` suffix on a build predating
+                # INSTRUCTION-190, or non-Octopus climate entity). See
+                # INSTRUCTION-190 background section for the full diagnosis
+                # path.
+                logging.warning(
+                    "Octopus Energy API NOT initialised despite has_octopus=True. "
+                    "Control method 'octopus_api' will fail every cycle. "
+                    "Check energy.octopus.hp_euid and energy.octopus.zone_entity_id "
+                    "in qsh.yaml -- set explicitly if auto-derive from "
+                    "heat_source.flow_control.entity_id failed."
+                )
 
         prev_mode = get_current_heat_source_mode(config)
         self._cycle_interval = config.get("cycle_interval", 30)
