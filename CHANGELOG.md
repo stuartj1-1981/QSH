@@ -2,6 +2,17 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.4] — 2026-05-07
+
+### Changed
+- Octopus Cosy: multi-zone HP entity regex coverage and init-failure visibility
+
+## [1.3.3] — 2026-05-07
+
+### Changed
+- Octopus Cosy: account-number resolver fallback and wizard provider validation
+- Octopus Cosy: electricity REST fallback cascade and refresh-path resilience
+
 ## [1.3.2] — 2026-05-06
 
 ### Changed
