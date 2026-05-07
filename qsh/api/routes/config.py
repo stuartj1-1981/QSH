@@ -313,6 +313,42 @@ def patch_config_section(section: str, body: dict):
     if section not in valid_sections:
         raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
 
+    # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
+    # as fatal here — patch_config_section requires an existing qsh.yaml
+    # (the section being patched lives in it). Other failures abort the
+    # write so the operator's recovery path is preserved.
+    from qsh.api.snapshots import (
+        snapshot_capture,
+        SnapshotCaptureError,
+        SourceMissingError,
+    )
+    try:
+        # Pass the resolved YAML path so the snapshot captures the same
+        # file read_modify_write is about to mutate (the YAML search
+        # list returns the same path the write will hit).
+        snapshot_capture(
+            trigger_path="settings_patch",
+            source_path=_find_yaml_path(),
+        )
+    except SourceMissingError as exc:
+        logger.error(
+            "module=config_snapshot event=capture_failed trigger_path=settings_patch error=%r",
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration snapshot failed (source missing); write aborted.",
+        ) from exc
+    except SnapshotCaptureError as exc:
+        logger.error(
+            "module=config_snapshot event=capture_failed trigger_path=settings_patch error=%r",
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration snapshot failed; write aborted to preserve recoverability.",
+        ) from exc
+
     incoming = body.get("data", body)
 
     # "root" section merges individual keys at the YAML root level

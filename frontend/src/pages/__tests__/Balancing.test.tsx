@@ -131,4 +131,26 @@ describe('Balancing page', () => {
       expect(patchCall).toBeDefined()
     })
   })
+
+  it('renders tooltip text when help icon clicked (regression: D1 portal escape)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => MOCK_RESPONSE,
+    } as Response)
+
+    render(<Balancing />)
+
+    // Wait for table to render
+    await screen.findByText('Lounge')
+
+    // Click the first help icon (Deviation column)
+    const helpButtons = screen.getAllByRole('button', { name: /help/i })
+    expect(helpButtons.length).toBeGreaterThanOrEqual(2) // Deviation + Suggestion
+
+    fireEvent.click(helpButtons[0])
+
+    // BALANCING.severity text from helpText.ts, surfaced via role="tooltip"
+    const tip = await screen.findByRole('tooltip')
+    expect(tip).toHaveTextContent(/how far the zone flow deviates/i)
+  })
 })

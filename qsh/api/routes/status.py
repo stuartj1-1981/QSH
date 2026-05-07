@@ -95,6 +95,23 @@ def get_status():
             "cost_today_pence": round(snap.cost_today_pence, 1),
             "energy_today_kwh": round(snap.energy_today_kwh, 2),
             "predicted_saving": round(snap.predicted_saving, 1),
+            # INSTRUCTION-191B: mode-resolved SCOP today-rolling.
+            "daily_cop_combined": (
+                round(snap.daily_cop_combined, 2)
+                if snap.daily_cop_combined is not None else None
+            ),
+            "daily_cop_ch": (
+                round(snap.daily_cop_ch, 2)
+                if snap.daily_cop_ch is not None else None
+            ),
+            "daily_cop_hw": (
+                round(snap.daily_cop_hw, 2)
+                if snap.daily_cop_hw is not None else None
+            ),
+            "energy_today_kwh_ch": round(snap.energy_today_kwh_ch, 2),
+            "energy_today_kwh_hw": round(snap.energy_today_kwh_hw, 2),
+            "thermal_kwh_today_ch": round(snap.thermal_kwh_today_ch, 2),
+            "thermal_kwh_today_hw": round(snap.thermal_kwh_today_hw, 2),
         },
         "away": {
             "active": snap.away_mode_active,

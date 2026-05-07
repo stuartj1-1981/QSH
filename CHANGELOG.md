@@ -2,6 +2,15 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.5] — 2026-05-07
+
+### Added
+- SCOP page with mode-resolved CoP/SCOP tracking (separate hot water and central heating efficiency)
+- Config snapshots with manual revert from Settings
+
+### Fixed
+- HelpTip: portal-rendered and viewport-clamped (no more clipping at panel edges)
+
 ## [1.3.4] — 2026-05-07
 
 ### Changed

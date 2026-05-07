@@ -1,9 +1,9 @@
-import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity } from 'lucide-react'
+import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface SidebarProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean
@@ -66,6 +66,12 @@ export function Sidebar({
           label="Statistics"
           active={page === 'statistics'}
           onClick={() => onNavigate('statistics')}
+        />
+        <NavItem
+          icon={<Gauge size={18} />}
+          label="SCOP"
+          active={page === 'scop'}
+          onClick={() => onNavigate('scop')}
         />
         {engineering && (
           <>

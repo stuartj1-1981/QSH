@@ -16,6 +16,16 @@ export function formatPower(kw: number): string {
   return `${kw.toFixed(1)}kW`
 }
 
+export function formatScop(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return value.toFixed(2)
+}
+
+export function formatKwh(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return `${value.toFixed(1)} kWh`
+}
+
 export function statusColor(status: string): string {
   switch (status) {
     case 'ok': return 'text-[var(--green)]'
