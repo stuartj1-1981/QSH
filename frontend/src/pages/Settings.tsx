@@ -17,6 +17,7 @@ import { HotWaterSettings } from '../components/settings/HotWaterSettings'
 import { HistorianSettings } from '../components/settings/HistorianSettings'
 import { DataSharingSettings } from '../components/settings/DataSharingSettings'
 import { BackupRestore } from '../components/settings/BackupRestore'
+import { SnapshotsPanel } from '../components/settings/SnapshotsPanel'
 import { SystemSettings } from '../components/settings/SystemSettings'
 import { Loader2 } from 'lucide-react'
 import type { Driver } from '../types/config'
@@ -147,7 +148,12 @@ export function Settings({ onRunWizard }: SettingsProps) {
           />
         )
       case 'backup':
-        return <BackupRestore driver={driver} />
+        return (
+          <div className="space-y-6">
+            <BackupRestore driver={driver} />
+            <SnapshotsPanel />
+          </div>
+        )
       case 'system':
         return <SystemSettings driver={driver} onRunWizard={onRunWizard} />
     }

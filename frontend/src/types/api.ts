@@ -56,6 +56,34 @@ export interface EnergyState {
   cost_today_pence: number
   energy_today_kwh: number
   predicted_saving?: number
+  // INSTRUCTION-191B/D: mode-resolved SCOP today-rolling values from
+  // CostController.get_daily_summary(). Null when bucket has no input.
+  daily_cop_combined: number | null
+  daily_cop_ch: number | null
+  daily_cop_hw: number | null
+  energy_today_kwh_ch: number
+  energy_today_kwh_hw: number
+  thermal_kwh_today_ch: number
+  thermal_kwh_today_hw: number
+}
+
+// INSTRUCTION-191C/D: SCOP windowed-aggregation response.
+export type ScopWindow = 'today' | '7d' | '30d' | '90d' | 'season'
+export type ScopMode = 'combined' | 'ch' | 'hw'
+
+export interface ScopResponse {
+  available: boolean
+  message?: string
+  window: ScopWindow
+  mode: ScopMode
+  window_start?: string
+  window_end?: string
+  scop?: number | null
+  thermal_kwh?: number
+  electrical_kwh?: number
+  data_quality?: {
+    deploy_date_in_window: boolean
+  }
 }
 
 // INSTRUCTION-150E: Tariff Provider Abstraction (frontend types).
@@ -390,4 +418,39 @@ export interface BalancingResponse {
   imbalanced_count: number
   total_observations: number
   error?: string
+}
+
+// INSTRUCTION-192: pre-write configuration snapshot mechanism.
+export interface Snapshot {
+  snapshot_id: string
+  captured_at: number
+  size_bytes: number
+  trigger_path: string
+}
+
+export interface DiffEntry {
+  path: string
+  old: unknown
+  new: unknown
+  is_secret: boolean
+  added?: boolean
+  removed?: boolean
+  type_change?: boolean
+}
+
+export interface SnapshotsResponse {
+  retention_count: number
+  snapshots: Snapshot[]
+}
+
+export interface DiffResponse {
+  snapshot_id: string
+  entries: DiffEntry[]
+}
+
+export interface RevertResponse {
+  reverted_to: Snapshot
+  pre_revert_snapshot: Snapshot
+  restart_required: boolean
+  message: string
 }

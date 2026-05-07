@@ -1733,6 +1733,35 @@ def deploy_config(req: WizardDeployRequest):
     # Strip them here so the on-disk YAML stays clean.
     _strip_empty_entity_list_entries(req.config)
 
+    # INSTRUCTION-192: pre-write snapshot. First-boot deploys (no
+    # pre-existing qsh.yaml) raise SourceMissingError, which is caught
+    # and logged but does not abort — there is nothing to snapshot.
+    # Other failures abort the deploy so the operator's recovery path
+    # is preserved.
+    from qsh.api.snapshots import (
+        snapshot_capture,
+        SnapshotCaptureError,
+        SourceMissingError,
+    )
+    try:
+        # Pass YAML_PATH explicitly so the snapshot captures the same
+        # file the wizard is about to overwrite, even when the test
+        # fixture monkeypatches wiz_mod.YAML_PATH only.
+        snapshot_capture(trigger_path="wizard_deploy", source_path=YAML_PATH)
+    except SourceMissingError:
+        logger.info(
+            "module=config_snapshot event=skipped_first_boot trigger_path=wizard_deploy"
+        )
+    except SnapshotCaptureError as exc:
+        logger.error(
+            "module=config_snapshot event=capture_failed trigger_path=wizard_deploy error=%r",
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration snapshot failed; deploy aborted to preserve recoverability.",
+        ) from exc
+
     # 2. Write YAML
     yaml_content = yaml.dump(
         req.config,

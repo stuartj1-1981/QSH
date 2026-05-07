@@ -89,6 +89,17 @@ class CycleSnapshot:
     predicted_saving: float = 0.0
     predicted_energy_saving: float = 0.0
 
+    # INSTRUCTION-191B: mode-resolved SCOP and underlying counters.
+    # Today-rolling values from CostController.get_daily_summary().
+    # None when bucket electrical input is zero.
+    daily_cop_combined: Optional[float] = None
+    daily_cop_ch: Optional[float] = None
+    daily_cop_hw: Optional[float] = None
+    energy_today_kwh_ch: float = 0.0
+    energy_today_kwh_hw: float = 0.0
+    thermal_kwh_today_ch: float = 0.0
+    thermal_kwh_today_hw: float = 0.0
+
     # Engineering (optional — only populated if requested)
     rl_blend: float = 0.0
     rl_flow: Optional[float] = None
@@ -478,6 +489,25 @@ class SharedState:
         if ctx.outputs:
             shadow = getattr(ctx.outputs, 'shadow_entities', {}) or {}
 
+        # INSTRUCTION-191B: read mode-resolved SCOP from CostController via the
+        # orchestrator handoff established by INSTRUCTION-154B. ctx.cost_controller
+        # is attached at qsh/pipeline/orchestrator.py:201-202 after the cost
+        # controller's execute() call. On the very first cycle (before the cost
+        # controller has run) the attribute is absent — fall back to a zero-state
+        # summary so CycleSnapshot construction never raises.
+        if hasattr(ctx, 'cost_controller') and ctx.cost_controller is not None:
+            cost_summary = ctx.cost_controller.get_daily_summary()
+        else:
+            cost_summary = {
+                "daily_cop_combined": None,
+                "daily_cop_ch": None,
+                "daily_cop_hw": None,
+                "energy_today_kwh_ch": 0.0,
+                "energy_today_kwh_hw": 0.0,
+                "thermal_kwh_today_ch": 0.0,
+                "thermal_kwh_today_hw": 0.0,
+            }
+
         snap = CycleSnapshot(
             timestamp=ctx.timestamp,
             cycle_number=ctx.cycle_number,
@@ -511,6 +541,15 @@ class SharedState:
             energy_today_kwh=shadow.get('input_number.qsh_hp_energy_today', 0.0),
             predicted_saving=shadow.get('input_number.qsh_predicted_saving', 0.0),
             predicted_energy_saving=shadow.get('input_number.qsh_predicted_energy_saving', 0.0),
+            # INSTRUCTION-191B: mode-resolved SCOP today-rolling from CostController
+            # (NOT from shadow entities — these fields are not published to HA).
+            daily_cop_combined=cost_summary["daily_cop_combined"],
+            daily_cop_ch=cost_summary["daily_cop_ch"],
+            daily_cop_hw=cost_summary["daily_cop_hw"],
+            energy_today_kwh_ch=cost_summary["energy_today_kwh_ch"],
+            energy_today_kwh_hw=cost_summary["energy_today_kwh_hw"],
+            thermal_kwh_today_ch=cost_summary["thermal_kwh_today_ch"],
+            thermal_kwh_today_hw=cost_summary["thermal_kwh_today_hw"],
             rl_blend=ctx.current_blend,
             rl_flow=ctx.rl_flow,
             rl_reward=ctx.reward,

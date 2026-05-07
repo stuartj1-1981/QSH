@@ -101,7 +101,37 @@ async def restore_backup(
                 status_code=400,
                 detail=f"qsh.yaml in backup is not valid YAML: {e}",
             )
+        # INSTRUCTION-192: pre-write snapshot. Fresh-install scenario
+        # (restoring into an addon with no prior config) raises
+        # SourceMissingError; logged and proceeds. Other failures
+        # abort the restore.
+        from qsh.api.snapshots import (
+            snapshot_capture,
+            SnapshotCaptureError,
+            SourceMissingError,
+        )
         target = _find_file(STATE_FILES["qsh.yaml"])
+        try:
+            # Pass the resolved write target so the snapshot captures
+            # the same file we're about to overwrite.
+            snapshot_capture(
+                trigger_path="backup_restore",
+                source_path=target,
+            )
+        except SourceMissingError:
+            logger.info(
+                "module=config_snapshot event=skipped_first_boot trigger_path=backup_restore"
+            )
+        except SnapshotCaptureError as exc:
+            logger.error(
+                "module=config_snapshot event=capture_failed trigger_path=backup_restore error=%r",
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Configuration snapshot failed; restore aborted to preserve recoverability.",
+            ) from exc
+
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "wb") as f:
             f.write(yaml_bytes)
