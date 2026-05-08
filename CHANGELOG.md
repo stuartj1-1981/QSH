@@ -2,6 +2,14 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.6] — 2026-05-08
+
+### Fixed
+- Tariff: open-ended slot handling (resolves empty-tariff problem on some installs)
+
+### Changed
+- Telemetry: improved data handling
+
 ## [1.3.5] — 2026-05-07
 
 ### Added
