@@ -154,6 +154,14 @@ class CycleSnapshot:
     tariff_providers_status: Dict[Fuel, ProviderStatus] = field(default_factory=dict)
     available_provider_kinds: Tuple[ProviderKind, ...] = SUPPORTED_PROVIDER_KINDS
 
+    # INSTRUCTION-193 Task 4: server-side revocation flag.
+    # True when the fleet collector has revoked this install (403 with
+    # body {"revoked": true}); telemetry pushes are suppressed locally.
+    # Cleared on successful re-registration. Surfaced via /api/status so
+    # the UI can render a banner; Zod schema parses via .passthrough()
+    # (frontend/src/types/schemas.ts:54-62) — no schema update required.
+    telemetry_revoked: bool = False
+
 
 def _resolve_operating_state(ctx) -> str:
     """Extract operating_state with clear priority and fallback.
@@ -319,6 +327,7 @@ class SharedState:
         self._balancing_ref = None  # Reference to BalancingDetector (set after API start)
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
+        self._telemetry_ref = None     # INSTRUCTION-193 Task 4: TelemetryService for is_revoked()
         self._migration_pending: bool = False
         self._driver_status: str = "pending"        # "pending" | "connected" | "error"
         self._driver_error: Optional[str] = None    # Human-readable error message
@@ -744,6 +753,15 @@ class SharedState:
     def set_balancing(self, detector):
         with self._lock:
             self._balancing_ref = detector
+
+    def get_telemetry(self):
+        """INSTRUCTION-193 Task 4: TelemetryService accessor for /api/status."""
+        with self._lock:
+            return self._telemetry_ref
+
+    def set_telemetry(self, service):
+        with self._lock:
+            self._telemetry_ref = service
 
     def get_boost_controller(self):
         with self._lock:

@@ -61,6 +61,19 @@ def get_status():
         if r['temp'] is not None and r['target'] is not None
         and r['temp'] < r['target'] - 0.3
     )
+
+    # INSTRUCTION-193 Task 4: surface revocation flag for the UI banner.
+    # Read live off the TelemetryService when wired in (post-startup);
+    # falls back to the snapshot field (default False) when the service is
+    # absent (test fixtures bypassing main.py, or telemetry opted out).
+    telemetry = shared_state.get_telemetry()
+    if telemetry is not None and hasattr(telemetry, "is_revoked"):
+        try:
+            telemetry_revoked = bool(telemetry.is_revoked())
+        except Exception:
+            telemetry_revoked = bool(snap.telemetry_revoked)
+    else:
+        telemetry_revoked = bool(snap.telemetry_revoked)
     return {
         "timestamp": snap.timestamp,
         "cycle_number": snap.cycle_number,
@@ -141,6 +154,8 @@ def get_status():
         # where HOUSE_CONFIG["control_method"] may still be "pending"
         # (config.py:1686) before Octopus API init resolves it.
         "control_method": HOUSE_CONFIG.get("control_method", "unknown"),
+        # INSTRUCTION-193 Task 4: telemetry revocation flag.
+        "telemetry_revoked": telemetry_revoked,
     }
 
 
