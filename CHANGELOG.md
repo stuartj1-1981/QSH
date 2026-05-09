@@ -2,6 +2,14 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.7] — 2026-05-09
+
+### Changed
+- Historian COP write — live-source gate
+- Forecast logging — unavailable edge-detect (HA + MQTT)
+- Weather forecast logging — unavailable-only policy
+- Starvation-based early shoulder shutdown
+
 ## [1.3.6] — 2026-05-08
 
 ### Fixed

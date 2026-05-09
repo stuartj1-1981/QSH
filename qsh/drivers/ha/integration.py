@@ -180,7 +180,7 @@ def _call_forecast_service(entity_id, forecast_type="hourly"):
         Each dict contains: datetime, temperature, condition, wind_speed, etc.
     """
     if not headers:
-        logging.warning("No SUPERVISOR_TOKEN found - forecast service skipped.")
+        logging.debug("No SUPERVISOR_TOKEN found - forecast service skipped.")
         return None
 
     try:
@@ -201,7 +201,7 @@ def _call_forecast_service(entity_id, forecast_type="hourly"):
             except Exception:
                 body = "(unreadable)"
             if response.status_code == 404:
-                logging.info(
+                logging.debug(
                     "Forecast service not available (404) for %s — weather entity may not support %s forecast",
                     entity_id,
                     forecast_type,
@@ -254,7 +254,7 @@ def _call_forecast_service(entity_id, forecast_type="hourly"):
         # If result is a list of context dicts (service call response),
         # the forecast might be in a different location
         if isinstance(result, list) and len(result) > 0:
-            logging.warning(
+            logging.debug(
                 "Forecast service for %s returned list (%d items, "
                 "first keys: %s) — may need response_variable approach",
                 entity_id,
@@ -262,7 +262,7 @@ def _call_forecast_service(entity_id, forecast_type="hourly"):
                 list(result[0].keys()) if isinstance(result[0], dict) else "?",
             )
 
-        logging.warning(
+        logging.debug(
             "Forecast service for %s returned unexpected structure (type=%s, keys=%s)",
             entity_id,
             type(result).__name__,
