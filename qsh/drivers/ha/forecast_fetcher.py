@@ -2,21 +2,23 @@
 
 Logging policy: edge-triggered. The fetcher is invoked once per
 FORECAST_CACHE_SECONDS (~30 min) by the wrapping cache in forecast.py.
-Without state tracking, every invocation that hits the daily-fallback
-or failure path would emit a redundant log line. Module-level state
-records the last-emitted condition; transitions are logged once,
-steady states are silent.
+Without state tracking, every invocation that hits the failure path
+would emit a redundant log line. Module-level state records the
+last-emitted condition; failure transitions are logged once, success
+states are silent.
 
 States tracked:
-    "hourly"   - hourly forecast call returned data
-    "daily"    - hourly call returned nothing, daily call returned data
-    "failed"   - both calls returned nothing, OR the service call raised
+    "hourly"   - hourly forecast call returned data (silent)
+    "daily"    - hourly empty, daily returned data (silent)
+    "failed"   - both calls empty OR service raised (DEBUG-emitting; the
+                 user-visible "Weather forecast unavailable" line is
+                 emitted upstream by WeatherForecaster, INSTRUCTION-210)
 
-Transitions out of "failed" emit at INFO (recovery is informational).
-Transitions into "failed" emit at ERROR with the underlying detail.
-The error detail string is also tracked separately so a change in the
-exception message (different root cause) re-emits even if the broad
-state is still "failed".
+Per INSTRUCTION-210, no logging.* call in this module emits at INFO or
+above (verified by survey in INSTRUCTION-210 Task 2c). State is still
+tracked so _log_failure() de-duplicates against prior mode/detail, and
+so a fresh failure following a success path records exactly once at
+DEBUG.
 
 Thread-safety contract: SINGLE-WRITER. The module-level _last_mode
 and _last_error_detail are read-modify-write without locking. The
@@ -49,44 +51,47 @@ def reset_log_state() -> None:
     _last_error_detail = None
 
 
-def _log_mode_transition(new_mode: str) -> None:
+def _record_mode_transition(new_mode: str) -> None:
     """
-    Emit a log line only when crossing a non-failure mode boundary.
+    Update mode-tracking state for a non-failure transition. Silent.
 
-    Owns transitions OUT of "failed" (success after error) and between
-    "hourly" / "daily". Does NOT handle entry to "failed" — that's
-    _log_failure()'s contract, because the failure log carries the
-    exception detail and uses ERROR level.
+    The forecast logging policy (INSTRUCTION-197) emits only on
+    unavailable-to-the-consumer conditions. Transitions between
+    "hourly" and "daily" both deliver forecast data to the control
+    loop — no log line is warranted. Transitions OUT of "failed" are
+    silent for the same reason: silence-on-recovery is the policy.
+
+    State is still tracked so that _log_failure() can de-duplicate
+    against the prior mode and so a fresh failure following a
+    success path emits exactly once.
     """
     assert new_mode in ("hourly", "daily"), (
-        f"_log_mode_transition: invalid mode {new_mode!r}; "
+        f"_record_mode_transition: invalid mode {new_mode!r}; "
         "use _log_failure() for the 'failed' state"
     )
     global _last_mode
-    if new_mode == _last_mode:
-        return
-    if new_mode == "hourly":
-        # Only worth logging if we were previously NOT on hourly
-        # (i.e., recovery from daily fallback or from failure).
-        if _last_mode is not None:
-            logging.info("Weather forecast: hourly forecast restored")
-    elif new_mode == "daily":
-        logging.info("Weather forecast: hourly not available, using daily forecast")
     _last_mode = new_mode
 
 
 def _log_failure(detail: str) -> None:
     """
-    Emit ERROR on entry to failed state OR on a change in failure detail.
+    De-duplicates DEBUG entries on entry to (or detail change within) the
+    "failed" state.
 
-    Owns transitions INTO "failed". _log_mode_transition() owns
-    transitions out of it. Two writers to _last_mode by design: the
-    partition is by-target-state, not by-variable.
+    The user-visible "Weather forecast unavailable" signal is owned
+    upstream by WeatherForecaster._entity_available (INSTRUCTION-210).
+    This function exists solely to keep the HTTP-layer detail string
+    (e.g. exception text, "no forecast data returned") in the DEBUG
+    stream once per distinct detail, rather than once per cycle.
+
+    State partition (preserved from INSTRUCTION-197): _record_mode_transition
+    owns transitions out of "failed"; _log_failure owns transitions into
+    "failed". Two writers to _last_mode by design.
     """
     global _last_mode, _last_error_detail
     if _last_mode == "failed" and detail == _last_error_detail:
         return
-    logging.error("Weather forecast fetch error: %s", detail)
+    logging.debug("Weather forecast fetch failed: %s", detail)
     _last_mode = "failed"
     _last_error_detail = detail
 
@@ -104,14 +109,14 @@ def fetch_forecast_from_ha(forecast_entity: str) -> Optional[List[Dict]]:
         result = _call_forecast_service(forecast_entity, forecast_type="hourly")
 
         if result:
-            _log_mode_transition("hourly")
+            _record_mode_transition("hourly")
             _last_error_detail = None
             return result
 
         result = _call_forecast_service(forecast_entity, forecast_type="daily")
 
         if result:
-            _log_mode_transition("daily")
+            _record_mode_transition("daily")
             _last_error_detail = None
             return result
 
