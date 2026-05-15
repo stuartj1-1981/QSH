@@ -2,6 +2,37 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] — 2026-05-15
+
+Major feature release.
+
+### Added
+- Weather-forecast-aware control across shoulder, flow, recovery, tariff, and valve decisions
+- New Forecast page with state panel, alarms, blend evolution, reconciliation against actuals, drift detection, and master-enable toggle
+- Multi-emitter direct-TRV zone support — multiple radiators on one zone, with per-emitter feedback in RoomDetail and the Historian emitter filter
+- Manual override at the valve dispatch layer with engineering Valves page and MANUAL badge / strip
+- Hybrid HP + boiler heat source with per-source dispatch, source-selection in Settings and the Home banner
+- Vendor write-budget knob in Settings and the Setup Wizard
+- Solar capacity observer surfaced via API
+- DHW signal inputs consolidated under Settings → Hot Water
+- Engineering page section and column tooltips
+- SCOP central-heating sparkline filtered by active heat source
+
+### Changed
+- Forecast subsystem rewritten with a clean provider seam (HA, MQTT, Mock)
+- Live View canvas CoP gated on the active performance source
+- Building 3D layout: lift the 2-floor cap
+
+### Fixed
+- Octopus tariff: gas prefix gate now strips rate class and accepts the current SILVER family
+- Octopus tariff routing keyed on the HP entity, not the tariff name
+- Home Assistant driver: `heating_entity` / `trv_entity` list-form contract; type guards added at three layers; legacy single-stem fallback restored
+- MQTT driver: first-fresh valve aggregation with last-winner recovery
+- TRV Name field now clearable, and hidden for multi-emitter zones
+- Forecast logging only edges on unavailable transitions (HA + MQTT parity)
+- Inferred-open valve fraction applied in none-mode at all call sites
+- Master-enable toggle URL corrected
+
 ## [1.3.7] — 2026-05-09
 
 ### Changed
