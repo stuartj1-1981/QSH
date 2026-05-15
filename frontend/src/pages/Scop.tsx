@@ -225,53 +225,39 @@ function CardSparkline({
   window: ScopWindow
   disabled: boolean
 }) {
-  if (mode === 'ch') {
-    /* CH sparkline — deferred per INSTRUCTION-191D Task 3 point 4 (V2 LOW-5).
-       Derivation approach when revisited:
-         1. Fetch qsh_system.cop and qsh_dhw.cop over the same window/interval.
-         2. Time-align both series on the InfluxDB GROUP BY time bucket.
-         3. For each bucket: if qsh_dhw has a sample at that timestamp, the
-            bucket is HW-dominated → exclude from CH trace; else render the
-            qsh_system.cop value.
-         4. Edge case: bucket interval > cycle period — multiple cycles per
-            bucket, mixed mode possible. Either tighten interval to the
-            cycle period (heavy on UI) or display CH as energy-weighted
-            per-bucket rather than instantaneous CoP (matches the SCOP
-            arithmetic but diverges from the sparkline framing of the other
-            two cards). Decision deferred to follow-up instruction.
-       The Combined and HW sparklines render natively from their measurements
-       and do not need this treatment. */
-    // TODO(191D-followup): see comment above for the derivation approach.
-    return (
-      <div className="h-full flex items-center justify-center text-[10px] text-[var(--text-muted)]">
-        sparkline pending
-      </div>
-    )
+  if (mode === 'combined') {
+    return <ScopSparkline measurement="qsh_system" window={window} disabled={disabled} />
   }
-
-  return (
-    <ScopSparkline
-      measurement={mode === 'combined' ? 'qsh_system' : 'qsh_dhw'}
-      window={window}
-      disabled={disabled}
-    />
-  )
+  if (mode === 'ch') {
+    return <ScopSparkline measurement="qsh_system" window={window} disabled={disabled} hwActive="false" />
+  }
+  // mode === 'hw' — retained on qsh_dhw for backwards compatibility with the
+  // existing HW kWh integration path (INSTRUCTION-191A). Could be switched to
+  // qsh_system + hwActive='true' in a follow-up; out of scope here.
+  return <ScopSparkline measurement="qsh_dhw" window={window} disabled={disabled} />
 }
 
 function ScopSparkline({
   measurement,
   window,
   disabled,
+  hwActive,
 }: {
   measurement: 'qsh_system' | 'qsh_dhw'
   window: ScopWindow
   disabled: boolean
+  hwActive?: 'true' | 'false'
 }) {
   const range = windowToHistorianRange(window)
   const { data, loading, error } = useHistorianQuery(
     disabled ? '' : measurement,
     disabled ? [] : ['cop'],
-    { timeFrom: range.from, timeTo: 'now()', interval: range.interval },
+    {
+      timeFrom: range.from,
+      timeTo: 'now()',
+      interval: range.interval,
+      hwActive: disabled ? undefined : hwActive,
+    },
   )
 
   if (disabled) {

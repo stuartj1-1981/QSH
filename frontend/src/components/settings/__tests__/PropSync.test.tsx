@@ -134,16 +134,22 @@ describe('Prop-sync: components re-sync local state when props change', () => {
   it('SourceSelectionSettings — min_dwell_minutes updates on rerender', () => {
     const ssA = { mode: 'auto' as const, preference: 0.5, min_dwell_minutes: 30, score_deadband_pct: 10, max_switches_per_day: 6 }
     const ssB = { mode: 'auto' as const, preference: 0.5, min_dwell_minutes: 60, score_deadband_pct: 10, max_switches_per_day: 6 }
+    // 228B Task 2: the panel only renders when >= 2 sources are configured;
+    // dwell input is engineering-gated.
+    localStorage.setItem('qsh-engineering', 'true')
+    const names = ['heat_pump', 'lpg_boiler']
 
     const { rerender } = render(
-      <SourceSelectionSettings config={ssA} sourceNames={[]} onRefetch={noop} />
+      <SourceSelectionSettings config={ssA} sourceNames={names} onRefetch={noop} />
     )
     expect(screen.getByDisplayValue('30')).toBeInTheDocument()
 
     rerender(
-      <SourceSelectionSettings config={ssB} sourceNames={[]} onRefetch={noop} />
+      <SourceSelectionSettings config={ssB} sourceNames={names} onRefetch={noop} />
     )
     expect(screen.getByDisplayValue('60')).toBeInTheDocument()
+
+    localStorage.removeItem('qsh-engineering')
   })
 
   it('DataSharingSettings — agreed toggle syncs on rerender', () => {

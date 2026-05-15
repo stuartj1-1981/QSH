@@ -13,6 +13,52 @@ from ...utils import safe_float
 from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
 from ..resolve import resolve_value, deep_get
 from ..hot_water_payloads import classify_hot_water_payload
+from ...events import EventKind, EventSpec, get_annunciator
+
+
+# =========================================================================
+# EVENT ANNUNCIATOR REGISTRATION (INSTRUCTION-221C)
+# =========================================================================
+# Per-call registration. The annunciator singleton can be reset between
+# tests; capturing it once at module-import time would leave dangling
+# refs. `register()` is idempotent for identical specs so the per-call
+# cost is a small dict lookup.
+def _register_events() -> None:
+    ann = get_annunciator()
+    ann.register(EventSpec(
+        name="HA.sensor_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("key", "entity", "temp"),
+        latch_key=("key",),
+        default_level=logging.INFO,
+    ))
+    ann.register(EventSpec(
+        name="HA.sensor_stale_no_history",
+        kind=EventKind.LATCHED,
+        payload_fields=("key", "entity", "fallback"),
+        latch_key=("key",),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="HA.sensor_no_entity_configured",
+        kind=EventKind.LATCHED,
+        payload_fields=("sensor_key",),
+        latch_key=("sensor_key",),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="HA.trv_all_stale",
+        kind=EventKind.LATCHED,
+        payload_fields=("room", "avg_temp"),
+        latch_key=("room",),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="HA.outdoor_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("temp",),
+        default_level=logging.INFO,
+    ))
 
 
 # =========================================================================
@@ -20,13 +66,30 @@ from ..hot_water_payloads import classify_hot_water_payload
 # =========================================================================
 _last_valid_outdoor_temp: Optional[float] = None
 _last_valid_independent: Dict[str, float] = {}
-_last_valid_heating_perc: Dict[str, float] = {}
+# INSTRUCTION-224B: per-emitter keying for stale-fallback memory. Outer key is
+# (room, stem). For rooms with no derived stems (control_mode "none" or
+# operator-declared legacy _heating entity), the synthetic stem "" is used so
+# the legacy room-level path shares the same map structure.
+_last_valid_heating_perc_per_emitter: Dict[Tuple[str, str], float] = {}
+# INSTRUCTION-231A V2 — tracks the entity_id of the most recently fresh
+# read for each list-form heating_entity room. Used in the all-stale-
+# with-history branch of _legacy_room_level_read to keep
+# heating_percs_per_emitter dict shape consistent across fresh / stale-
+# with-history / no-history states (HIGH-1 + MEDIUM-1 reviewer findings).
+# Without this, the all-stale fallback synthesizes a "" stem key, which
+# would interleave a synthetic "" series alongside real per-entity
+# series in 224D qsh_emitter historian writes.
+# Empty for single-string-declared rooms (they use the synthetic ""
+# legacy stem for both fresh and stale paths; shape is consistent
+# without the tracker).
+_last_winning_entity_per_room: Dict[str, str] = {}
 
 # =========================================================================
 # WARN-ONCE SETS (log once per entity, then suppress)
 # =========================================================================
 _warned_no_heating_entity: Set[str] = set()
-_warned_valve_stale_no_history: Set[str] = set()
+# INSTRUCTION-224B: keyed by (room, stem) to match _last_valid_heating_perc_per_emitter.
+_warned_valve_stale_no_history: Set[Tuple[str, str]] = set()
 
 # =========================================================================
 # POWER UNIT AUTO-DETECTION
@@ -113,6 +176,8 @@ def _fetch_with_staleness(entity_id: str, category: str, default=None, attr: str
 def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
     """Fetch all independent temperature sensors dynamically from config."""
     global _last_valid_independent
+    _register_events()
+    ann = get_annunciator()
     sensors = {}
 
     sensor_keys = {key for key in config["entities"] if key.startswith("independent_sensor")}
@@ -131,31 +196,36 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
     for sensor_key in sorted(sensor_keys):
         entity_id = config["entities"].get(sensor_key)
         if entity_id:
+            # Entity is now configured — clear any "no entity configured" latch.
+            ann.exited("HA.sensor_no_entity_configured", sensor_key=sensor_key)
             temp_raw, is_fresh = _fetch_with_staleness(entity_id, "temperature", default=fallback_temp)
 
             if is_fresh:
                 temp = safe_float(temp_raw, fallback_temp)
                 sensors[sensor_key] = temp
                 _last_valid_independent[sensor_key] = temp
+                # Fresh recovery: clear any stale latches for this sensor.
+                ann.exited("HA.sensor_stale_lastvalid", key=sensor_key)
+                ann.exited("HA.sensor_stale_no_history", key=sensor_key)
             else:
                 if sensor_key in _last_valid_independent:
                     sensors[sensor_key] = _last_valid_independent[sensor_key]
-                    logging.info(
-                        "Independent sensor %s (%s) stale - using last valid: %.1f°C",
-                        sensor_key,
-                        entity_id,
-                        _last_valid_independent[sensor_key],
+                    ann.entered(
+                        "HA.sensor_stale_lastvalid",
+                        key=sensor_key,
+                        entity=entity_id,
+                        temp=round(_last_valid_independent[sensor_key], 1),
                     )
                 else:
                     sensors[sensor_key] = fallback_temp
-                    logging.warning(
-                        "Independent sensor %s (%s) stale - no history, using %.1f°C fallback",
-                        sensor_key,
-                        entity_id,
-                        fallback_temp,
+                    ann.entered(
+                        "HA.sensor_stale_no_history",
+                        key=sensor_key,
+                        entity=entity_id,
+                        fallback=round(fallback_temp, 1),
                     )
         else:
-            logging.warning(f"No entity ID configured for {sensor_key}")
+            ann.entered("HA.sensor_no_entity_configured", sensor_key=sensor_key)
             sensors[sensor_key] = _last_valid_independent.get(sensor_key, config.get("overtemp_protection", 23.0))
 
     return sensors
@@ -321,9 +391,14 @@ def get_room_temperature(
 
         if temps:
             avg_temp = sum(temps) / len(temps)
+            _register_events()
+            ann = get_annunciator()
             if all_stale:
-                logging.warning(f"{room}: all TRV readings stale, using last known {avg_temp:.1f}C (may be inaccurate)")
+                ann.entered(
+                    "HA.trv_all_stale", room=room, avg_temp=round(avg_temp, 1),
+                )
             else:
+                ann.exited("HA.trv_all_stale", room=room)
                 logging.debug(f"{room} temp from climate entity (avg of {len(temps)} TRVs): {avg_temp:.1f}C")
             _mark_temperature_recovered(room)
             return avg_temp
@@ -376,60 +451,300 @@ def fetch_room_temperature_sources(config: Dict) -> Dict[str, str]:
     return {room: classify_temperature_source(room, config) for room in config["rooms"]}
 
 
-def fetch_heating_percentages(config: Dict) -> Tuple[Dict[str, float], float]:
-    """Fetch TRV valve positions (heating percentages) for all rooms."""
-    global _last_valid_heating_perc
-    heating_percs = {}
+def _enumerate_emitter_stems(room: str, config: Dict) -> "list[str]":
+    """Return the list of TRV stems for a room (INSTRUCTION-224B).
+
+    Pulls from ``config["room_trv_names"]`` which is populated at config-load
+    time from ``trv_name`` (explicit override) or derived from ``trv_entity``
+    (canonical case). Returns an empty list for rooms without any TRV
+    declaration — caller falls through to the legacy room-level read path.
+    """
+    return list(config.get("room_trv_names", {}).get(room, []))
+
+
+def _read_one_valve_position(
+    entity: str, room: str, stem: str, scale: int
+) -> Optional[float]:
+    """Read one valve_position entity with scale conversion and stale-fallback
+    keyed per (room, stem). INSTRUCTION-224B.
+
+    Returns:
+        Fresh scaled value (0-100) on success.
+        Last-valid value if HA is unavailable but history exists.
+        ``None`` if unavailable AND no history (caller falls back to room-level).
+    """
+    global _last_valid_heating_perc_per_emitter
+    key = (room, stem)
+    perc_raw, is_fresh = _fetch_with_staleness(entity, "valve", default=0.0)
+
+    if is_fresh:
+        perc = safe_float(perc_raw, 0.0)
+        if scale != 100:
+            perc = round(perc / float(scale) * 100.0, 1)
+        _last_valid_heating_perc_per_emitter[key] = perc
+        return perc
+
+    if key in _last_valid_heating_perc_per_emitter:
+        last = _last_valid_heating_perc_per_emitter[key]
+        logging.info(
+            "Valve %s/%s (%s) stale - using last valid: %.1f%%",
+            room, stem, entity, last,
+        )
+        return last
+
+    if key not in _warned_valve_stale_no_history:
+        logging.info(
+            "Valve %s/%s (%s) stale — no history, using 0%% fallback",
+            room, stem, entity,
+        )
+        _warned_valve_stale_no_history.add(key)
+    return None
+
+
+def _legacy_room_level_read(
+    room: str, config: Dict, scale: int
+) -> Tuple[float, Dict[str, float]]:
+    """Operator-declared ``<room>_heating`` entity read (INSTRUCTION-224B
+    legacy path, fallback semantics restored by INSTRUCTION-229,
+    list-form support added by INSTRUCTION-231A V2).
+
+    Exercised by ``fetch_heating_percentages`` whenever a room has
+    ``heating_entity`` declared in YAML. Bypasses the 224B per-emitter
+    auto-derive entirely; the declared entity (or list of entities) is
+    the authoritative feedback source.
+
+    Single-string ``heating_entity``: read the entity, apply scale
+    rescale, return aggregate + ``{"": value}`` per-emitter dict.
+
+    List-form ``heating_entity`` (length >= 2 — list-of-1 was collapsed
+    to scalar by ``config.py:967`` flattener): iterate in declaration
+    order, return the first fresh value, populate per-emitter dict with
+    ``{winning_entity_id: value}``. Mirror the value to the room's
+    legacy_key memory so the all-stale-with-history branch can recover
+    (V2 HIGH-1 fix). Track the winning entity in
+    ``_last_winning_entity_per_room`` so the all-stale-with-history
+    branch produces a consistent dict shape keyed by the last-winning
+    entity rather than synthesizing a ``""`` stem (V2 MEDIUM-1 fix).
+
+    If all entities are stale and ``legacy_key`` memory exists, return
+    the last-valid aggregate with the per-emitter dict keyed by the
+    last winning entity (list-form) or ``""`` (single-string). If no
+    history exists either, return 0.0 (preserving the 229 "no path
+    configured → 0%" contract).
+
+    Returns:
+        ``(aggregate_pct, per_emitter_dict)`` where aggregate is 0–100
+        and per_emitter_dict is keyed:
+        - ``{"": value}`` for single-string fresh or stale-with-history.
+        - ``{winning_entity_id: value}`` for list-form fresh.
+        - ``{last_winning_entity_id: last}`` for list-form
+          stale-with-history.
+        - ``{}`` for no path configured / no history available.
+    """
+    global _last_valid_heating_perc_per_emitter
+    global _last_winning_entity_per_room
+    heating_entity = config["entities"].get(room + "_heating")
+    legacy_key = (room, "")
+
+    if not heating_entity:
+        if room not in _warned_no_heating_entity:
+            logging.info(
+                "Room '%s' has no heating entity configured — using "
+                "fallback valve position.",
+                room,
+            )
+            _warned_no_heating_entity.add(room)
+        last = _last_valid_heating_perc_per_emitter.get(legacy_key, 0.0)
+        per_emitter = (
+            {"": last}
+            if legacy_key in _last_valid_heating_perc_per_emitter
+            else {}
+        )
+        return last, per_emitter
+
+    # Normalise to a list for unified iteration. Single-string is treated
+    # as a length-1 list internally; the synthetic legacy stem "" is used
+    # for last-valid keying to preserve pre-231A memory continuity.
+    if isinstance(heating_entity, list):
+        entity_list = heating_entity
+        single_string = False
+    else:
+        entity_list = [heating_entity]
+        single_string = True
+
+    # Iterate in declaration order; first fresh read wins.
+    for entity_id in entity_list:
+        # Per-entity last-valid key. Single-string uses the synthetic ""
+        # stem to preserve pre-231A last-valid memory continuity. List-
+        # form uses the entity_id as the stem so each entity has its own
+        # stale-fallback history under (room, entity_id).
+        key = legacy_key if single_string else (room, entity_id)
+        perc_raw, is_fresh = _fetch_with_staleness(
+            entity_id, "valve", default=0.0
+        )
+        if is_fresh:
+            perc = safe_float(perc_raw, 0.0)
+            if scale != 100:
+                perc = round(perc / float(scale) * 100.0, 1)
+            _last_valid_heating_perc_per_emitter[key] = perc
+            if not single_string:
+                # V2 HIGH-1 fix: mirror the fresh value to legacy_key so
+                # the all-stale-with-history branch can recover the
+                # aggregate from room-level memory. Without this, list-
+                # form rooms whose entities all go stale on the same
+                # cycle would drop to 0.0 (no-history contract) until at
+                # least one entity returned fresh again.
+                _last_valid_heating_perc_per_emitter[legacy_key] = perc
+                # V2 MEDIUM-1 fix: track the winning entity so the all-
+                # stale-with-history branch keys its per-emitter dict
+                # consistently by the last winning entity_id.
+                _last_winning_entity_per_room[room] = entity_id
+            return perc, {("" if single_string else entity_id): perc}
+
+    # All entities stale. Fall back to room-level last-valid memory under
+    # the synthetic legacy stem (V2: list-form fresh branch mirrors to
+    # legacy_key, so this branch is reachable for both shapes).
+    if legacy_key in _last_valid_heating_perc_per_emitter:
+        last = _last_valid_heating_perc_per_emitter[legacy_key]
+        if single_string:
+            return last, {"": last}
+        # V2 MEDIUM-1 fix: list-form — key the per-emitter dict by the
+        # last-winning entity rather than synthesizing "". Fallback to
+        # the first entity in declaration order if no winner has ever
+        # been recorded (edge case: legacy_key populated without a
+        # winner — shouldn't happen post-V2 fresh-branch mirror, but
+        # defensive).
+        last_winner = _last_winning_entity_per_room.get(
+            room, entity_list[0]
+        )
+        return last, {last_winner: last}
+
+    # All stale AND no history. Emit a single info log naming the first
+    # entity and return 0.0. Subsequent cycles in the same condition are
+    # suppressed via the existing warn-once set.
+    if legacy_key not in _warned_valve_stale_no_history:
+        first_entity = entity_list[0]
+        logging.info(
+            "Valve %s (%s%s) stale — no history, using 0%% fallback",
+            room,
+            first_entity,
+            f" and {len(entity_list) - 1} others" if not single_string else "",
+        )
+        _warned_valve_stale_no_history.add(legacy_key)
+    return 0.0, {}
+
+
+def fetch_heating_percentages(
+    config: Dict,
+) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], float]:
+    """Fetch TRV valve positions per room with per-emitter detail.
+
+    Post-INSTRUCTION-231A: operator-declared ``heating_entity`` is the
+    authoritative feedback path for every room. The 224B per-emitter
+    auto-derive (``number.<stem>_valve_position`` for each derived TRV
+    stem) is preserved as the fallback for installations that never
+    declared explicit ``heating_entity`` — typically Sonoff-only
+    installations using the auto-naming convention.
+
+    For rooms with ``heating_entity`` declared:
+    - Single string: pre-224B single-entity read (no auto-derive, no
+      spurious 404s for non-Sonoff hardware).
+    - List of strings: iterate in declaration order, return the first
+      fresh value; last-valid fallback follows the single-entity
+      staleness pattern.
+
+    Per-emitter dict ``heating_percs_per_emitter[room]`` is populated
+    with stable shape across cycles (V2 MEDIUM-1 contract):
+    - For single-string ``heating_entity``: ``{"": value}`` for fresh
+      and stale-with-history; ``{}`` for no-history.
+    - For list-form ``heating_entity``: ``{current_winner: value}`` for
+      fresh, ``{last_winner: last}`` for stale-with-history (the same
+      stem key is used across consecutive cycles so 224D qsh_emitter
+      historian writes maintain a continuous per-room time-series);
+      ``{}`` for no-history.
+    - For 224B auto-derive (no ``heating_entity`` declared):
+      ``{stem: value}`` per fresh per-emitter read.
+
+    Returns:
+        Tuple of:
+        - heating_percs: room → aggregate valve position 0-100.
+        - heating_percs_per_emitter: room → entity_or_stem → value.
+        - avg_open_frac: mean of room aggregates / 100 across rooms.
+    """
+    heating_percs: Dict[str, float] = {}
+    heating_percs_per_emitter: Dict[str, Dict[str, float]] = {}
     total_frac = 0.0
     num_rooms = len(config["rooms"])
 
     if num_rooms == 0:
         logging.warning("No rooms defined in HOUSE_CONFIG - skipping heating perc fetch.")
-        return {}, 0.0
+        return {}, {}, 0.0
 
     valve_scales = config.get("room_valve_scale", {})
-    type1_rooms = {r for r, hw in config.get("room_valve_hardware", {}).items() if hw == "direct_type1"}
+    type1_rooms = {
+        r for r, hw in config.get("room_valve_hardware", {}).items()
+        if hw == "direct_type1"
+    }
 
     for room in config["rooms"]:
-        heating_entity = config["entities"].get(room + "_heating")
-        if heating_entity:
-            perc_raw, is_fresh = _fetch_with_staleness(heating_entity, "valve", default=0.0)
+        scale = valve_scales.get(room, 255 if room in type1_rooms else 100)
+        declared_heating_entity = config["entities"].get(room + "_heating")
 
-            if is_fresh:
-                perc = safe_float(perc_raw, 0.0)
-
-                scale = valve_scales.get(room, 255 if room in type1_rooms else 100)
-                if scale != 100:
-                    perc = round(perc / float(scale) * 100.0, 1)
-
-                heating_percs[room] = perc
-                _last_valid_heating_perc[room] = perc
-            else:
-                if room in _last_valid_heating_perc:
-                    heating_percs[room] = _last_valid_heating_perc[room]
-                    logging.info(
-                        "Valve %s (%s) stale - using last valid: %.1f%%",
-                        room,
-                        heating_entity,
-                        _last_valid_heating_perc[room],
-                    )
-                else:
-                    heating_percs[room] = 0.0
-                    if room not in _warned_valve_stale_no_history:
-                        logging.info("Valve %s (%s) stale — no history, using 0%% fallback", room, heating_entity)
-                        _warned_valve_stale_no_history.add(room)
-
-            total_frac += heating_percs[room] / 100.0
+        if declared_heating_entity is not None:
+            # INSTRUCTION-231A — operator declared heating_entity for this
+            # room (str or list[str]); take it as authoritative and skip the
+            # 224B per-emitter auto-derive. This restores pre-224B
+            # single-read behaviour for single-emitter rooms (no spurious
+            # 404s for non-Sonoff hardware) and enables list-form iteration
+            # for multi-emitter zones with operator-declared per-emitter
+            # feedback entities. _legacy_room_level_read handles both shapes
+            # and populates heating_percs_per_emitter[room] with one entry
+            # keyed by the synthetic legacy stem (single-string case) or
+            # the winning / last-winning entity id (list-form case per V2
+            # MEDIUM-1 fix).
+            room_perc, per_emitter = _legacy_room_level_read(
+                room, config, scale
+            )
+            heating_percs[room] = room_perc
+            heating_percs_per_emitter[room] = per_emitter
         else:
-            if room not in _warned_no_heating_entity:
-                logging.info("Room '%s' has no heating entity configured — using fallback valve position.", room)
-                _warned_no_heating_entity.add(room)
-            heating_percs[room] = _last_valid_heating_perc.get(room, 0.0)
-            total_frac += heating_percs[room] / 100.0
+            # No declared heating_entity. Fall back to the 224B auto-derive
+            # path (Sonoff-only convenience shortcut for installations that
+            # never declared explicit feedback entities).
+            stems = _enumerate_emitter_stems(room, config)
+            per_emitter: Dict[str, float] = {}
+            for stem in stems:
+                entity = f"number.{stem}_valve_position"
+                perc = _read_one_valve_position(entity, room, stem, scale)
+                if perc is not None:
+                    per_emitter[stem] = perc
+
+            heating_percs_per_emitter[room] = per_emitter
+
+            if per_emitter:
+                aggregate = round(
+                    sum(per_emitter.values()) / len(per_emitter), 1
+                )
+                heating_percs[room] = aggregate
+            else:
+                # No fresh per-emitter reads AND no declared heating_entity.
+                # V2 LOW-2 fix: properly handle the per_emitter dict from
+                # the legacy path. If _legacy_room_level_read returns a
+                # non-empty dict (room-level last-valid memory exists from
+                # a prior cycle's successful auto-derive read), use it;
+                # else preserve the failed-auto-derive empty dict shape.
+                room_perc, per_emitter_legacy = _legacy_room_level_read(
+                    room, config, scale
+                )
+                heating_percs[room] = room_perc
+                if per_emitter_legacy:
+                    heating_percs_per_emitter[room] = per_emitter_legacy
+
+        total_frac += heating_percs[room] / 100.0
 
     avg_open_frac = total_frac / num_rooms if num_rooms > 0 else 0.0
 
-    return heating_percs, avg_open_frac
+    return heating_percs, heating_percs_per_emitter, avg_open_frac
 
 
 def fetch_heat_source_status(config: Dict) -> Dict:
@@ -635,16 +950,22 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
 
     outdoor_entity = config["entities"].get("outdoor_temp")
     if outdoor_entity:
+        _register_events()
+        ann = get_annunciator()
         temp_raw, is_fresh = _fetch_with_staleness(outdoor_entity, "outdoor", default=5.0)
         if is_fresh:
             data.outdoor_temp = safe_float(temp_raw, 5.0)
             data.has_outdoor = True
             _last_valid_outdoor_temp = data.outdoor_temp
+            ann.exited("HA.outdoor_stale_lastvalid")
         else:
             if _last_valid_outdoor_temp is not None:
                 data.outdoor_temp = _last_valid_outdoor_temp
                 data.has_outdoor = False
-                logging.info("Outdoor sensor stale - using last valid value: %.1f°C", _last_valid_outdoor_temp)
+                ann.entered(
+                    "HA.outdoor_stale_lastvalid",
+                    temp=round(_last_valid_outdoor_temp, 1),
+                )
             else:
                 data.outdoor_temp = 5.0
                 data.has_outdoor = False
@@ -653,7 +974,11 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         data.outdoor_temp = _last_valid_outdoor_temp if _last_valid_outdoor_temp is not None else 5.0
         data.has_outdoor = False
 
-    data.heating_percs, data.avg_open_frac = fetch_heating_percentages(config)
+    (
+        data.heating_percs,
+        data.heating_percs_per_emitter,
+        data.avg_open_frac,
+    ) = fetch_heating_percentages(config)
 
     hs_status = fetch_heat_source_status(config)
     data.hp_flow_temp = hs_status["flow_temp"]

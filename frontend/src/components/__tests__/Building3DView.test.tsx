@@ -177,7 +177,139 @@ describe('Building3DView', () => {
     expect(arg.system.flow_temp).toBe(35)
     expect(arg.system.outdoor_temp).toBe(5)
     expect(arg.system.power_kw).toBe(4.2)
+    // INSTRUCTION-232: live-HP branch of the performance provenance gate.
+    expect(arg.system.cop).toBe(3.5)
     expect(arg.cycle_number).toBe(42)
+  })
+
+  // INSTRUCTION-232: performance provenance gate.
+  // Mirrors the live/config/boiler tests in useLiveViewData.test.ts.
+  // Pins that `cycleToBuildingLive` only surfaces system.cop when the
+  // resolver marks `performance.source` as `'live'` AND the heat
+  // source is a heat pump. `BuildingLiveData.system.cop` is currently
+  // unread by `buildingEngine.ts`, but the field is on the type
+  // contract — the producer-side gate prevents any future consumer
+  // (debug overlay, new dashboard tile) from inheriting the
+  // caps-baseline-as-COP defect.
+
+  it('suppresses system.cop (= 0) when heat-pump performance.source is "config"', () => {
+    const engine = createEngineMock()
+    const ref = createRef<BuildingEngine | null>()
+    ;(ref as { current: EngineMock | null }).current = engine
+
+    const cycleMsg: CycleMessage = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 43,
+      status: {
+        operating_state: 'winter',
+        control_enabled: true,
+        comfort_temp: 20,
+        optimal_flow: 35,
+        applied_flow: 35,
+        optimal_mode: 'heating',
+        applied_mode: 'heating',
+        total_demand: 0,
+        outdoor_temp: 5,
+        recovery_time_hours: 0,
+        capacity_pct: 0,
+        hp_capacity_kw: 8,
+        min_load_pct: 20,
+        heat_source: {
+          type: 'heat_pump',
+          input_power_kw: 0,
+          thermal_output_kw: 0,
+          thermal_output_source: 'measured',
+          // HP off → resolver emits caps baseline (2.5) tagged 'config'.
+          performance: { value: 2.5, source: 'config' },
+          flow_temp: 25,
+          return_temp: 25,
+          delta_t: 0,
+          flow_rate: 0,
+        },
+        comfort_pct: 95,
+      },
+      hp: {
+        power_kw: 0,
+        cop: null,
+        flow_temp: 25,
+        return_temp: 25,
+        delta_t: 0,
+        flow_rate: 0,
+      },
+      rooms: {
+        lounge: {
+          temp: 20.5, target: 21, valve: 0, occupancy: 'occupied',
+          status: 'ok', facing: 'S', area_m2: 20, ceiling_m: 2.5,
+        },
+      },
+    }
+    mockUseLive.mockReturnValue({ data: cycleMsg, isConnected: true, lastUpdate: 1 })
+
+    render(<Building3DView engineRef={ref as unknown as React.RefObject<BuildingEngine | null>} />)
+
+    const arg = engine.setData.mock.calls[0][0]
+    expect(arg.system.cop).toBe(0)
+  })
+
+  it('suppresses system.cop (= 0) for boiler with performance.source "config"', () => {
+    const engine = createEngineMock()
+    const ref = createRef<BuildingEngine | null>()
+    ;(ref as { current: EngineMock | null }).current = engine
+
+    const cycleMsg: CycleMessage = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 44,
+      status: {
+        operating_state: 'winter',
+        control_enabled: true,
+        comfort_temp: 20,
+        optimal_flow: 60,
+        applied_flow: 60,
+        optimal_mode: 'heating',
+        applied_mode: 'heating',
+        total_demand: 5,
+        outdoor_temp: 5,
+        recovery_time_hours: 0,
+        capacity_pct: 50,
+        hp_capacity_kw: 8,
+        min_load_pct: 20,
+        heat_source: {
+          type: 'gas_boiler',
+          input_power_kw: 18,
+          thermal_output_kw: 16.2,
+          thermal_output_source: 'computed',
+          // Boiler η is always config-sourced per resolver contract.
+          performance: { value: 0.9, source: 'config' },
+          flow_temp: 60,
+          return_temp: 50,
+          delta_t: 10,
+          flow_rate: 0.4,
+        },
+        comfort_pct: 95,
+      },
+      hp: {
+        power_kw: 0,
+        cop: null,
+        flow_temp: 60,
+        return_temp: 50,
+        delta_t: 10,
+        flow_rate: 0.4,
+      },
+      rooms: {
+        lounge: {
+          temp: 20.5, target: 21, valve: 60, occupancy: 'occupied',
+          status: 'heating', facing: 'S', area_m2: 20, ceiling_m: 2.5,
+        },
+      },
+    }
+    mockUseLive.mockReturnValue({ data: cycleMsg, isConnected: true, lastUpdate: 1 })
+
+    render(<Building3DView engineRef={ref as unknown as React.RefObject<BuildingEngine | null>} />)
+
+    const arg = engine.setData.mock.calls[0][0]
+    expect(arg.system.cop).toBe(0)
   })
 
   it('calls engine.setLayout with (layout, layoutRooms) when layout resolves', () => {

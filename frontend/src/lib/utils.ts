@@ -26,6 +26,17 @@ export function formatKwh(value: number | null | undefined): string {
   return `${value.toFixed(1)} kWh`
 }
 
+/** Format a duration in seconds as a short human-readable string.
+ *  600 -> "10 min"; 900 -> "15 min"; 1200 -> "20 min"; 1800 -> "30 min".
+ *  Returns "--" for non-positive or non-finite input. */
+export function formatInterval(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '--'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = (minutes / 60).toFixed(1).replace(/\.0$/, '')
+  return `${hours} h`
+}
+
 export function statusColor(status: string): string {
   switch (status) {
     case 'ok': return 'text-[var(--green)]'

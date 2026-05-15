@@ -73,8 +73,14 @@ export function Historian() {
   })
   const [customTo, setCustomTo] = useState(() => toLocalDatetime(new Date()))
 
-  const { rooms } = useHistorianTags(measurement)
+  const { rooms, emitters } = useHistorianTags(measurement)
   const { fields: rawFields, loading: fieldsLoading } = useHistorianFields(measurement)
+  // INSTRUCTION-224E — emitter filter. Surfaces the emitter tag list for
+  // qsh_emitter so operators can narrow trends to a single physical TRV.
+  // Backend query API filters by `room` only today; emitter selection is
+  // currently informational (deferred full multi-trace rendering needs a
+  // backend GROUP BY emitter or per-emitter fan-out query helper).
+  const [emitter, setEmitter] = useState<string | undefined>(undefined)
 
   // INSTRUCTION-117E Task 5d: gate legacy HP-only metrics out of the
   // selector list on non-HP installs. On HP installs the legacy
@@ -109,6 +115,7 @@ export function Historian() {
     setMeasurement(m)
     setSelectedFields([])
     setRoom(undefined)
+    setEmitter(undefined)
   }, [])
 
   const handleFieldToggle = useCallback((label: string) => {
@@ -215,6 +222,24 @@ export function Historian() {
                 <option value="">All rooms</option>
                 {rooms.map((r) => (
                   <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* INSTRUCTION-224E — per-emitter filter, exposed when the selected
+              measurement carries an emitter tag (qsh_emitter today). */}
+          {emitters.length > 0 && (
+            <div>
+              <label className="block text-xs text-[var(--text-muted)] mb-1">Emitter</label>
+              <select
+                value={emitter ?? ''}
+                onChange={(e) => setEmitter(e.target.value || undefined)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              >
+                <option value="">All emitters</option>
+                {emitters.map((em) => (
+                  <option key={em} value={em}>{em}</option>
                 ))}
               </select>
             </div>

@@ -30,12 +30,30 @@ function setTopicString(prev: RoomMqttTopicValue | undefined, topic: string): Ro
   return topic
 }
 
+/** Multi-emitter test — true when trv_entity is a list of two or more entries.
+ *  Pure: no closures over component state. Module-scope per §Helper placement. */
+function isMultiEmitter(trv: RoomConfigYaml['trv_entity']): boolean {
+  return Array.isArray(trv) && trv.length >= 2
+}
+
 /** Drop keys whose value is an empty string or empty MqttTopicInput; drop the
- *  whole mqtt_topics object if nothing non-empty remains. Returns a new room. */
+ *  whole mqtt_topics object if nothing non-empty remains. Returns a new room.
+ *  INSTRUCTION-224E: also handles list-form valve_position — kept as-is when
+ *  at least one entry is non-empty, dropped entirely otherwise. Single-element
+ *  lists are not re-collapsed here; the in-component setters already normalise
+ *  shape (single → scalar) so a list reaching this helper is always length >= 2
+ *  or has an empty placeholder slot. */
 function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   if (!room.mqtt_topics) return room
-  const cleaned: Record<string, RoomMqttTopicValue> = {}
+  const cleaned: Record<string, RoomMqttTopicValue | string[]> = {}
   for (const [k, v] of Object.entries(room.mqtt_topics)) {
+    if (Array.isArray(v)) {
+      // Keep the list verbatim if any entry is non-empty.
+      if (v.some((t) => typeof t === 'string' && t.trim())) {
+        cleaned[k] = v as string[]
+      }
+      continue
+    }
     const s = getTopicString(v)
     if (s) cleaned[k] = v as RoomMqttTopicValue
   }
@@ -44,7 +62,7 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
     delete copy.mqtt_topics
     return copy
   }
-  return { ...room, mqtt_topics: cleaned }
+  return { ...room, mqtt_topics: cleaned as RoomConfigYaml['mqtt_topics'] }
 }
 
 export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
@@ -133,6 +151,198 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
       arr = [current, '']
     }
     updateRoom(roomName, { trv_entity: arr })
+  }, [editedRooms, updateRoom])
+
+  // INSTRUCTION-231D — heating_entity multi-emitter helpers. Mirror the
+  // 224A trv_entity helpers above but with the V2 MEDIUM-1 unified pad-
+  // and-set pattern in updateHeatingAt (eliminates the scalar+index>=2
+  // value-drop bug). Same normalisation: single-element array → scalar,
+  // empty → undefined.
+
+  /** Get the primary heating entity (first element if array). */
+  const getPrimaryHeating = useCallback((room: RoomConfigYaml): string => {
+    const he = room.heating_entity
+    if (!he) return ''
+    return Array.isArray(he) ? he[0] || '' : he
+  }, [])
+
+  /** Get additional heating entities (2nd+ elements). */
+  const getExtraHeatings = useCallback((room: RoomConfigYaml): string[] => {
+    const he = room.heating_entity
+    if (!he || !Array.isArray(he)) return []
+    return he.slice(1)
+  }, [])
+
+  /** Update one heating_entity slot at the given index.
+   *  V2 MEDIUM-1 fix: unified pad-and-set pattern handles scalar, array,
+   *  and undefined input shapes uniformly. Pre-V2 the scalar branch only
+   *  handled index 0/1, silently dropping typing at index >= 2. */
+  const updateHeatingAt = useCallback(
+    (roomName: string, index: number, value: string) => {
+      const room = editedRooms[roomName]
+      const current = room.heating_entity
+      // Normalise to array upfront — eliminates special-case branches.
+      let arr: string[]
+      if (!current) arr = []
+      else if (Array.isArray(current)) arr = [...current]
+      else arr = [current] // scalar → length-1 array
+      // Pad with empties up to the index, then set.
+      while (arr.length <= index) arr.push('')
+      arr[index] = value
+      // Trim trailing empty strings before normalising.
+      while (arr.length > 0 && arr[arr.length - 1] === '') arr.pop()
+      const normalised =
+        arr.length === 0 ? undefined : arr.length === 1 ? arr[0] : arr
+      updateRoom(roomName, { heating_entity: normalised })
+    },
+    [editedRooms, updateRoom],
+  )
+
+  /** Append a new heating_entity slot. */
+  const addHeatingSlot = useCallback(
+    (roomName: string) => {
+      const room = editedRooms[roomName]
+      const current = room.heating_entity
+      let arr: string[]
+      if (!current) arr = ['']
+      else if (Array.isArray(current)) arr = [...current, '']
+      else arr = [current, '']
+      updateRoom(roomName, { heating_entity: arr })
+    },
+    [editedRooms, updateRoom],
+  )
+
+  /** Remove the emitter row at the given index (paired removal of both
+   *  trv and heating slots simultaneously). The backend's independent-list
+   *  contract is preserved — if either list is shorter than the row
+   *  index, only the longer side is trimmed. */
+  const removeEmitterSlot = useCallback(
+    (roomName: string, index: number) => {
+      const room = editedRooms[roomName]
+      const trvCurrent = room.trv_entity
+      const heCurrent = room.heating_entity
+
+      const trvArr = !trvCurrent
+        ? []
+        : Array.isArray(trvCurrent)
+          ? [...trvCurrent]
+          : [trvCurrent]
+      const heArr = !heCurrent
+        ? []
+        : Array.isArray(heCurrent)
+          ? [...heCurrent]
+          : [heCurrent]
+
+      if (index < trvArr.length) trvArr.splice(index, 1)
+      if (index < heArr.length) heArr.splice(index, 1)
+
+      while (trvArr.length > 0 && trvArr[trvArr.length - 1] === '') trvArr.pop()
+      while (heArr.length > 0 && heArr[heArr.length - 1] === '') heArr.pop()
+
+      const trvNormalised =
+        trvArr.length === 0 ? undefined : trvArr.length === 1 ? trvArr[0] : trvArr
+      const heNormalised =
+        heArr.length === 0 ? undefined : heArr.length === 1 ? heArr[0] : heArr
+
+      updateRoom(roomName, {
+        trv_entity: trvNormalised,
+        heating_entity: heNormalised,
+      })
+    },
+    [editedRooms, updateRoom],
+  )
+
+  // INSTRUCTION-224E — MQTT valve_position list-form helpers. Mirror the
+  // HA-side getPrimaryTrv / getExtraTrvs / updateTrvAt / addTrvSlot cluster
+  // above; same normalisation rules (single-element list → scalar, empty
+  // list → undefined). The valve_position value may be a string, a
+  // RoomMqttTopicValue object (legacy with format/json_path), or a list
+  // of strings. List-form is the only multi-emitter shape; lists of
+  // MqttTopicInput objects are not supported (operator drops to scalar
+  // edit for JSON-payload single-topic case).
+
+  /** True when valve_position is a list of length >= 2 (multi-emitter MQTT). */
+  const isMultiPositionTopic = useCallback((room: RoomConfigYaml): boolean => {
+    const vp = room.mqtt_topics?.valve_position
+    return Array.isArray(vp) && vp.length >= 2
+  }, [])
+
+  /** Primary valve_position topic — first list element, or the scalar itself. */
+  const getPrimaryValvePositionTopic = useCallback((room: RoomConfigYaml): string => {
+    const vp = room.mqtt_topics?.valve_position
+    if (!vp) return ''
+    if (Array.isArray(vp)) return vp[0] ?? ''
+    if (typeof vp === 'string') return vp
+    return vp.topic ?? ''
+  }, [])
+
+  /** Additional valve_position topics (2nd+ list elements). */
+  const getExtraValvePositionTopics = useCallback((room: RoomConfigYaml): string[] => {
+    const vp = room.mqtt_topics?.valve_position
+    if (!Array.isArray(vp)) return []
+    return vp.slice(1)
+  }, [])
+
+  /** Update valve_position topic at a specific index. Normalises shape:
+   *  empty list → undefined, single-element list → scalar string. */
+  const updateValvePositionAt = useCallback((roomName: string, index: number, value: string) => {
+    const room = editedRooms[roomName]
+    const current = room.mqtt_topics?.valve_position
+    let arr: string[]
+    if (!current) {
+      arr = []
+    } else if (Array.isArray(current)) {
+      arr = [...current]
+    } else if (typeof current === 'string') {
+      arr = [current]
+    } else {
+      arr = [current.topic ?? '']
+    }
+
+    if (value) {
+      arr[index] = value
+    } else {
+      arr.splice(index, 1)
+    }
+
+    const normalised: string | string[] | undefined =
+      arr.length === 0 ? undefined : arr.length === 1 ? arr[0] : arr
+    updateRoom(roomName, {
+      mqtt_topics: { ...(room.mqtt_topics ?? {}), valve_position: normalised },
+    })
+  }, [editedRooms, updateRoom])
+
+  /** Add an additional valve_position topic slot. */
+  const addValvePositionSlot = useCallback((roomName: string) => {
+    const room = editedRooms[roomName]
+    const current = room.mqtt_topics?.valve_position
+    let arr: string[]
+    if (!current) {
+      arr = ['', '']
+    } else if (Array.isArray(current)) {
+      arr = [...current, '']
+    } else if (typeof current === 'string') {
+      arr = [current, '']
+    } else {
+      arr = [current.topic ?? '', '']
+    }
+    updateRoom(roomName, {
+      mqtt_topics: { ...(room.mqtt_topics ?? {}), valve_position: arr },
+    })
+  }, [editedRooms, updateRoom])
+
+  /** Remove the valve_position topic at the given index. Re-normalises shape. */
+  const removeValvePositionAt = useCallback((roomName: string, index: number) => {
+    const room = editedRooms[roomName]
+    const current = room.mqtt_topics?.valve_position
+    if (!Array.isArray(current)) return
+    const arr = [...current]
+    arr.splice(index, 1)
+    const normalised: string | string[] | undefined =
+      arr.length === 0 ? undefined : arr.length === 1 ? arr[0] : arr
+    updateRoom(roomName, {
+      mqtt_topics: { ...(room.mqtt_topics ?? {}), valve_position: normalised },
+    })
   }, [editedRooms, updateRoom])
 
   /** Clear legacy HA fields for a room (on MQTT driver). */
@@ -310,7 +520,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                       changes.trv_name = undefined
                     } else {
                       changes.valve_hardware = room.valve_hardware || 'generic'
-                      changes.trv_name = room.trv_name || `${name}_trv`
                     }
                     updateRoom(name, changes)
                   }}
@@ -342,17 +551,19 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                       <option value="generic">Generic</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs text-[var(--text-muted)] mb-1">
-                      TRV Name
-                    </label>
-                    <input
-                      type="text"
-                      value={room.trv_name || `${name}_trv`}
-                      onChange={(e) => updateRoom(name, { trv_name: e.target.value })}
-                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                    />
-                  </div>
+                  {!isMultiEmitter(room.trv_entity) && (
+                    <div>
+                      <label className="block text-xs text-[var(--text-muted)] mb-1">
+                        TRV Name
+                      </label>
+                      <input
+                        type="text"
+                        value={room.trv_name ?? ''}
+                        onChange={(e) => updateRoom(name, { trv_name: e.target.value })}
+                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                      />
+                    </div>
+                  )}
                   {room.valve_hardware === 'direct_type1' && (
                     <div>
                       <label className="block text-xs text-[var(--text-muted)] mb-1">
@@ -428,19 +639,53 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                   }
                   placeholder={`rooms/${name}/temp`}
                 />
-                <TopicField
-                  label="Valve Position Topic"
-                  value={getTopicString(room.mqtt_topics?.valve_position)}
-                  onChange={(v) =>
-                    updateRoom(name, {
-                      mqtt_topics: {
-                        ...room.mqtt_topics,
-                        valve_position: setTopicString(room.mqtt_topics?.valve_position, v),
-                      },
-                    })
-                  }
-                  placeholder={`rooms/${name}/valve`}
-                />
+                {/* INSTRUCTION-224E — list-form valve_position editor for MQTT
+                    multi-emitter zones. Mirrors the HA-side trv_entity editor.
+                    Primary input + `+` adds slots; extra inputs each have a
+                    remove button. Single-emitter operators see one input + `+`. */}
+                <div>
+                  <label className="block text-xs text-[var(--text-muted)] mb-1">
+                    {isMultiPositionTopic(room) ? 'Valve Position Topics' : 'Valve Position Topic'}
+                  </label>
+                  <div className="space-y-1.5">
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <TopicField
+                          label=""
+                          value={getPrimaryValvePositionTopic(room)}
+                          onChange={(v) => updateValvePositionAt(name, 0, v)}
+                          placeholder={`rooms/${name}/valve`}
+                        />
+                      </div>
+                      <button
+                        onClick={() => addValvePositionSlot(name)}
+                        className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                        title="Add additional valve position topic (multi-emitter)"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                    {getExtraValvePositionTopics(room).map((topic, i) => (
+                      <div key={`vp-${i + 1}`} className="flex items-end gap-2">
+                        <div className="flex-1">
+                          <TopicField
+                            label={`Valve Position Topic ${i + 2}`}
+                            value={topic}
+                            onChange={(v) => updateValvePositionAt(name, i + 1, v)}
+                            placeholder={`rooms/${name}/valve/emitter${i + 2}`}
+                          />
+                        </div>
+                        <button
+                          onClick={() => removeValvePositionAt(name, i + 1)}
+                          className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                          title="Remove this topic"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <TopicField
                   label="Valve Setpoint Topic"
                   value={room.mqtt_topics?.valve_setpoint || ''}
@@ -541,48 +786,76 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <EntityField
-                      label="TRV Entity"
-                      value={getPrimaryTrv(room)}
-                      friendlyName={resolved[getPrimaryTrv(room)]?.friendly_name}
-                      state={resolved[getPrimaryTrv(room)]?.state}
-                      unit={resolved[getPrimaryTrv(room)]?.unit}
-                      placeholder="climate.room_trv"
-                      onChange={(v) => updateTrvAt(name, 0, v)}
-                    />
-                  </div>
-                  <button
-                    onClick={() => addTrvSlot(name)}
-                    className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
-                    title="Add additional TRV"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                {getExtraTrvs(room).map((trv, i) => (
-                  <div key={`trv-${i + 1}`} className="flex items-end gap-2">
-                    <div className="flex-1">
-                      <EntityField
-                        label={`TRV Entity ${i + 2}`}
-                        value={trv}
-                        friendlyName={resolved[trv]?.friendly_name}
-                        state={resolved[trv]?.state}
-                        unit={resolved[trv]?.unit}
-                        placeholder="climate.room_trv"
-                        onChange={(v) => updateTrvAt(name, i + 1, v)}
-                      />
-                    </div>
-                    <button
-                      onClick={() => updateTrvAt(name, i + 1, '')}
-                      className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
-                      title="Remove this TRV"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
+                {/* INSTRUCTION-231D — paired per-emitter rows. rowCount =
+                    max(trvLen, heLen, 1); each row pairs a TRV input with a
+                    Heating input and a remove button (when rowCount > 1).
+                    The "Add emitter" button extends both lists simultaneously. */}
+                {(() => {
+                  const trv = room.trv_entity
+                  const he = room.heating_entity
+                  const trvLen = !trv ? 0 : Array.isArray(trv) ? trv.length : 1
+                  const heLen = !he ? 0 : Array.isArray(he) ? he.length : 1
+                  const rowCount = Math.max(trvLen, heLen, 1)
+                  return Array.from({ length: rowCount }, (_, i) => {
+                    const trvValue =
+                      i === 0 ? getPrimaryTrv(room) : getExtraTrvs(room)[i - 1] || ''
+                    const heValue =
+                      i === 0
+                        ? getPrimaryHeating(room)
+                        : getExtraHeatings(room)[i - 1] || ''
+                    const trvLabel = i === 0 ? 'TRV Entity' : `TRV Entity ${i + 1}`
+                    const heLabel =
+                      i === 0 ? 'Heating Entity' : `Heating Entity ${i + 1}`
+                    return (
+                      <div
+                        key={`emitter-row-${i}`}
+                        className="flex items-end gap-2"
+                      >
+                        <div className="flex-1 grid grid-cols-2 gap-3">
+                          <EntityField
+                            label={trvLabel}
+                            value={trvValue}
+                            friendlyName={resolved[trvValue]?.friendly_name}
+                            state={resolved[trvValue]?.state}
+                            unit={resolved[trvValue]?.unit}
+                            placeholder="climate.room_trv"
+                            onChange={(v) => updateTrvAt(name, i, v)}
+                          />
+                          <EntityField
+                            label={heLabel}
+                            value={heValue}
+                            friendlyName={resolved[heValue]?.friendly_name}
+                            state={resolved[heValue]?.state}
+                            unit={resolved[heValue]?.unit}
+                            placeholder="sensor.<room>_heating or number.<room>_valve_position"
+                            onChange={(v) => updateHeatingAt(name, i, v)}
+                          />
+                        </div>
+                        {rowCount > 1 && (
+                          <button
+                            onClick={() => removeEmitterSlot(name, i)}
+                            className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                            title={`Remove emitter ${i + 1}`}
+                            aria-label={`Remove emitter ${i + 1}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+                <button
+                  onClick={() => {
+                    addTrvSlot(name)
+                    addHeatingSlot(name)
+                  }}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                  title="Add emitter"
+                  aria-label="Add emitter"
+                >
+                  <Plus size={14} /> Add emitter
+                </button>
                 <div className="grid grid-cols-2 gap-3">
                   <EntityField
                     label="Temp Sensor"
@@ -592,15 +865,6 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                     unit={resolved[room.independent_sensor || '']?.unit}
                     placeholder="sensor.room_temp"
                     onChange={(v) => updateRoom(name, { independent_sensor: v || undefined })}
-                  />
-                  <EntityField
-                    label="Heating Entity"
-                    value={room.heating_entity || ''}
-                    friendlyName={resolved[room.heating_entity || '']?.friendly_name}
-                    state={resolved[room.heating_entity || '']?.state}
-                    unit={resolved[room.heating_entity || '']?.unit}
-                    placeholder="binary_sensor.heating"
-                    onChange={(v) => updateRoom(name, { heating_entity: v || undefined })}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">

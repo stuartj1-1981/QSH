@@ -5,7 +5,9 @@ import { useHistory } from '../hooks/useHistory'
 import { useRawConfig } from '../hooks/useConfig'
 import { TrendChart } from '../components/TrendChart'
 import { HardwareTelemetry } from '../components/HardwareTelemetry'
+import { HelpTip } from '../components/HelpTip'
 import { cn } from '../lib/utils'
+import { MIN_OBS_FOR_USE, CONFIDENCE_FULL_AT, PC_FIT_R_SQUARED_MIN } from '../lib/sysidConstants'
 import type { SysidRoom } from '../types/api'
 
 export function Engineering() {
@@ -102,17 +104,20 @@ function PipelineState({
   cascadeActive?: boolean
 }) {
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3">PIPELINE STATE</h2>
+    <div data-testid="pipeline-state" className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
+        PIPELINE STATE
+        <HelpTip text="Live snapshot of the controller pipeline. Updates each 30 s cycle." size={12} />
+      </h2>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
-        <Stat label="Cycle" value={`#${cycleNumber ?? 0}`} />
-        <Stat label="State" value={operatingState ?? '—'} />
-        <Stat label="Mode" value={appliedMode ?? '—'} />
-        <Stat label="Det Flow" value={detFlow != null ? `${detFlow.toFixed(1)}°C` : '—'} />
-        <Stat label="RL Flow" value={rlFlow != null ? `${rlFlow.toFixed(1)}°C` : 'n/a'} />
-        <Stat label="Applied Flow" value={appliedFlow != null ? `${appliedFlow.toFixed(1)}°C` : '—'} />
-        <Stat label="Blend" value={rlBlend != null ? rlBlend.toFixed(3) : '—'} />
-        <Stat label="Total Demand" value={totalDemand != null ? `${totalDemand.toFixed(1)} kW` : '—'} />
+        <Stat label="Cycle" value={`#${cycleNumber ?? 0}`} help="Pipeline cycle counter — increments every 30 s." />
+        <Stat label="State" value={operatingState ?? '—'} help="Current operating state machine value (e.g. heating, off, antifrost, shoulder_off, summer_off)." />
+        <Stat label="Mode" value={appliedMode ?? '—'} help="HP mode actually applied this cycle (heat / off). May differ from controller intent if a guard suppressed the command." />
+        <Stat label="Det Flow" value={detFlow != null ? `${detFlow.toFixed(1)}°C` : '—'} help="Flow temperature target from the deterministic controller chain — physics-only, no learning." />
+        <Stat label="RL Flow" value={rlFlow != null ? `${rlFlow.toFixed(1)}°C` : 'n/a'} help="Flow temperature target proposed by the RL agent. Shown as ‘n/a’ during shadow mode or before training maturity." />
+        <Stat label="Applied Flow" value={appliedFlow != null ? `${appliedFlow.toFixed(1)}°C` : '—'} help="Flow temperature actually commanded this cycle, after blend and any safety caps." />
+        <Stat label="Blend" value={rlBlend != null ? rlBlend.toFixed(3) : '—'} help="RL blend factor: 0 = pure deterministic, 1 = pure RL. Ramps up only with training samples and is clamped during shadow mode." />
+        <Stat label="Total Demand" value={totalDemand != null ? `${totalDemand.toFixed(1)} kW` : '—'} help="Sum of per-room thermal demand estimates this cycle." />
         <div className="flex items-center gap-2">
           {frostCapActive && <Badge label="Frost Cap" color="blue" />}
           {cascadeActive && <Badge label="Cascade" color="amber" />}
@@ -125,19 +130,94 @@ function PipelineState({
 function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 overflow-x-auto">
-      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3">SYSTEM ID</h2>
+      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
+        SYSTEM ID
+        <HelpTip
+          text={`Per-room thermal parameters learned from passive observation. U is heat loss, C is thermal mass. Both start at a config-derived prior and migrate toward the learned value as observations accumulate. Confidence reaches full at ${CONFIDENCE_FULL_AT} observations.`}
+          size={12}
+        />
+      </h2>
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-[var(--text-muted)] border-b border-[var(--border)]">
-            <th className="pb-2 pr-1 sm:pr-3">Room</th>
-            <th className="pb-2 pr-1 sm:pr-3">U (kW/°C)</th>
-            <th className="pb-2 pr-1 sm:pr-3">C (kWh/°C)</th>
-            <th className="pb-2 pr-1 sm:pr-3">U obs</th>
-            <th className="pb-2 pr-1 sm:pr-3">C obs</th>
-            <th className="pb-2 pr-1 sm:pr-3">C source</th>
-            <th className="pb-2 pr-1 sm:pr-3">PC fits</th>
-            <th className="pb-2 pr-1 sm:pr-3">Solar</th>
-            <th className="pb-2">Confidence</th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                Room
+                <HelpTip text="Room name as configured. Capitalisation is purely display." size={12} />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                U (kW/°C)
+                <HelpTip
+                  text="Effective heat-loss coefficient used by the controllers. A confidence-weighted blend of a static prior and the learned value. The prior is a top-down split of the whole-house design loss across rooms by area × facing — it is NOT a room-by-room heat-loss survey calculation, so do not expect it to match one."
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                C (kWh/°C)
+                <HelpTip
+                  text="Effective thermal mass. Confidence-weighted blend of prior and learned. Primary convergence path is the passive-cooling analyser (see PC fits), not per-cycle estimation, which rarely qualifies under multi-zone UK operation."
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                U obs
+                <HelpTip
+                  text={`Number of accepted U observations. Below ${MIN_OBS_FOR_USE} the value shown is essentially the prior. Confidence reaches 1.0 (fully learned) at ${CONFIDENCE_FULL_AT} observations.`}
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                C obs
+                <HelpTip
+                  text="Number of accepted C observations across both per-cycle estimation and passive-cooling fits. Same maturity scale as U obs."
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                C source
+                <HelpTip
+                  text="Where C currently comes from: ‘Prior’ = config-derived prior (no observations yet), ‘Cycle’ = per-cycle heat-balance estimation, ‘PC’ = passive-cooling tau fits (the dominant path in normal multi-zone UK operation)."
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                PC fits
+                <HelpTip
+                  text={`System-wide count of successful passive-cooling window fits — the same number is shown in every row. Each fit is an extended HP-off period where the cooling curve was clean enough (R² ≥ ${PC_FIT_R_SQUARED_MIN}) to extract a time constant. The primary mechanism by which C converges in real installations.`}
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2 pr-1 sm:pr-3">
+              <span className="inline-flex items-center gap-1">
+                Solar
+                <HelpTip
+                  text="Learned solar gain factor (kW thermal gain per kW solar irradiance). Zero until solar observations reach maturity. Stays zero on installs without a solar irradiance sensor — that is expected, not a fault."
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2">
+              <span className="inline-flex items-center gap-1">
+                Confidence
+                <HelpTip
+                  text="Overall maturity badge. Derived from U observations and the system-wide passive-cooling fit count only — ‘high’ requires substantial U history AND multiple PC fits, ‘medium’ requires moderate U history OR some PC fits, ‘low’ otherwise. C and Solar observations are NOT inputs to this badge; treat the badge as a coarse U/PC maturity indicator, not a holistic learning summary."
+                  size={12}
+                />
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -186,7 +266,13 @@ function SignalQuality({ signals }: { signals: Record<string, string> }) {
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3">SIGNAL QUALITY</h2>
+      <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
+        SIGNAL QUALITY
+        <HelpTip
+          text="Health of each input signal group. ‘good’ = fresh, in-range, low-jitter. ‘warn/ok’ = degraded but usable. ‘bad/stale’ = the signal has been stale or out-of-range long enough to be excluded from learning and may also affect control."
+          size={12}
+        />
+      </h2>
       <div className="flex flex-wrap gap-4">
         {Object.entries(signals).map(([group, quality]) => (
           <div key={group} className="flex items-center gap-2 text-sm">
@@ -215,11 +301,17 @@ function RlTrainingSection({
   return (
     <div className="space-y-2">
       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-        <h2 className="text-sm font-semibold text-[var(--accent)] mb-3">RL TRAINING</h2>
+        <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
+          RL TRAINING
+          <HelpTip
+            text="Reinforcement-learning policy training metrics. Reward and Loss are 48 h windows. Blend is 7 d. Blend = 0 means pure deterministic control; blend = 1 means pure RL. Blend ramps up only after sufficient training samples and is clamped during shadow mode."
+            size={12}
+          />
+        </h2>
         <div className="flex gap-6 text-sm mb-4">
-          <Stat label="Reward" value={reward?.toFixed(2) ?? '—'} />
-          <Stat label="Loss" value={loss?.toFixed(4) ?? '—'} />
-          <Stat label="Blend" value={blend?.toFixed(3) ?? '—'} />
+          <Stat label="Reward" value={reward?.toFixed(2) ?? '—'} help="Latest RL reward sample — combines comfort tracking, energy use, and overshoot." />
+          <Stat label="Loss" value={loss?.toFixed(4) ?? '—'} help="Latest RL training loss. Trends down as the policy converges." />
+          <Stat label="Blend" value={blend?.toFixed(3) ?? '—'} help="Same blend factor as in PIPELINE STATE — repeated here for convenience alongside reward and loss." />
         </div>
       </div>
 
@@ -257,10 +349,13 @@ function RlTrainingSection({
 }
 
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, help }: { label: string; value: string; help?: string }) {
   return (
     <div className="bg-[var(--bg)] rounded-lg px-3 py-2">
-      <div className="text-[var(--text-muted)] text-xs">{label}</div>
+      <div className="text-[var(--text-muted)] text-xs flex items-center gap-1">
+        {label}
+        {help && <HelpTip text={help} size={12} />}
+      </div>
       <div className="font-medium font-mono">{value}</div>
     </div>
   )

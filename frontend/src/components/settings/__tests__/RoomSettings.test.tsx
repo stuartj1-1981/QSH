@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { RoomSettings } from '../RoomSettings'
 import { stripFixedSetpointForControlMode } from '../../../lib/roomConfig'
 
@@ -304,5 +305,428 @@ describe('stripFixedSetpointForControlMode helper', () => {
     const room = { area_m2: 10, fixed_setpoint: 19 }
     const stripped = stripFixedSetpointForControlMode(room)
     expect(stripped).not.toHaveProperty('fixed_setpoint')
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-224A — RoomSettings TRV Name defect cleanup
+// =============================================================================
+
+
+describe('TRV Name field clearability (defect 1 regression)', () => {
+  it('allows clearing the TRV Name field to empty without auto-default snapback', async () => {
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        control_mode: 'direct' as const,
+        valve_hardware: 'direct_type2' as const,
+        trv_entity: 'climate.kitchen_trv',
+        trv_name: 'kitchen_trv',
+      },
+    }
+    const user = userEvent.setup()
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+
+    const trvNameInput = screen.getByDisplayValue('kitchen_trv') as HTMLInputElement
+    expect(trvNameInput.value).toBe('kitchen_trv')
+
+    await user.clear(trvNameInput)
+    expect(trvNameInput.value).toBe('')
+  })
+})
+
+
+describe('control_mode toggle (defect 2 regression)', () => {
+  it('does not populate trv_name when switching to direct mode', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        control_mode: 'indirect' as const,
+        trv_entity: 'climate.kitchen_trv',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+
+    const modeSelect = screen.getByDisplayValue('Indirect (TRV setpoint)') as HTMLSelectElement
+    fireEvent.change(modeSelect, { target: { value: 'direct' } })
+
+    fireEvent.click(screen.getByText('Save Changes'))
+    expect(patchMock).toHaveBeenCalledTimes(1)
+    const [, payload] = patchMock.mock.calls[0]
+    expect(payload.kitchen.control_mode).toBe('direct')
+    expect(payload.kitchen.valve_hardware).toBe('generic')
+    expect(payload.kitchen).not.toHaveProperty('trv_name')
+  })
+})
+
+
+describe('TRV Name field visibility for multi-emitter (defect 3 regression)', () => {
+  it('does not render TRV Name input when trv_entity is a list of length 2 or more', () => {
+    const rooms = {
+      open_plan: {
+        area_m2: 30,
+        facing: 'S',
+        ceiling_m: 2.4,
+        control_mode: 'direct' as const,
+        valve_hardware: 'direct_type2' as const,
+        trv_entity: ['climate.dining_trv', 'climate.sitting_room_trv'],
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+
+    expect(screen.queryByText('Valve Hardware')).not.toBeNull()
+    expect(screen.queryByText('TRV Name')).toBeNull()
+  })
+
+  it('does render TRV Name input when trv_entity is scalar (single-emitter)', () => {
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        control_mode: 'direct' as const,
+        valve_hardware: 'direct_type2' as const,
+        trv_entity: 'climate.kitchen_trv',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    expect(screen.queryByText('TRV Name')).not.toBeNull()
+  })
+
+  it('does render TRV Name input when trv_entity is a single-element list', () => {
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        control_mode: 'direct' as const,
+        valve_hardware: 'direct_type2' as const,
+        trv_entity: ['climate.kitchen_trv'],
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    expect(screen.queryByText('TRV Name')).not.toBeNull()
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-224E — MQTT valve_position list-form editor
+// =============================================================================
+
+
+describe('RoomSettings MQTT valve_position list-form editor', () => {
+  it('MQTT single-emitter zone shows scalar Valve Position Topic input', () => {
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: {
+          room_temp: 'rooms/kitchen/temp',
+          valve_position: 'rooms/kitchen/valve',
+        },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    expect(screen.queryByText('Valve Position Topic')).not.toBeNull()
+    expect(screen.queryByText('Valve Position Topics')).toBeNull()
+    expect(screen.getByDisplayValue('rooms/kitchen/valve')).toBeInTheDocument()
+  })
+
+  it('MQTT multi-emitter zone shows list of valve position inputs (plural label)', () => {
+    const rooms = {
+      open_plan: {
+        area_m2: 30,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: {
+          room_temp: 'rooms/open_plan/temp',
+          valve_position: ['rooms/open_plan/dining', 'rooms/open_plan/sitting_room'],
+        },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    expect(screen.queryByText('Valve Position Topics')).not.toBeNull()
+    expect(screen.getByDisplayValue('rooms/open_plan/dining')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('rooms/open_plan/sitting_room')).toBeInTheDocument()
+  })
+
+  it('+ button adds an empty slot to a scalar valve_position', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: { valve_position: 'rooms/kitchen/valve' },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    const addButton = screen.getByTitle(
+      'Add additional valve position topic (multi-emitter)'
+    )
+    fireEvent.click(addButton)
+    fireEvent.click(screen.getByText('Save Changes'))
+    await vi.waitFor(() => {
+      expect(patchMock).toHaveBeenCalled()
+    })
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    expect(payload.kitchen.mqtt_topics.valve_position).toEqual([
+      'rooms/kitchen/valve',
+      '',
+    ])
+  })
+
+  it('Remove button removes a slot from a list of three down to two', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      open_plan: {
+        area_m2: 30,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: {
+          valve_position: ['topic/a', 'topic/b', 'topic/c'],
+        },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    // Two extras visible (b, c). Remove buttons share title "Remove this topic".
+    const removeButtons = screen.getAllByTitle('Remove this topic')
+    expect(removeButtons.length).toBe(2)
+    fireEvent.click(removeButtons[0]) // remove 'topic/b' (first extra)
+    fireEvent.click(screen.getByText('Save Changes'))
+    await vi.waitFor(() => {
+      expect(patchMock).toHaveBeenCalled()
+    })
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    expect(payload.open_plan.mqtt_topics.valve_position).toEqual([
+      'topic/a',
+      'topic/c',
+    ])
+  })
+
+  it('Removing the last extra normalises back to scalar', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      open_plan: {
+        area_m2: 30,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: {
+          valve_position: ['topic/a', 'topic/b'],
+        },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    const removeButtons = screen.getAllByTitle('Remove this topic')
+    expect(removeButtons.length).toBe(1)
+    fireEvent.click(removeButtons[0])
+    fireEvent.click(screen.getByText('Save Changes'))
+    await vi.waitFor(() => {
+      expect(patchMock).toHaveBeenCalled()
+    })
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    // Normalised: single-element list → scalar string
+    expect(payload.open_plan.mqtt_topics.valve_position).toBe('topic/a')
+  })
+
+  it('Editing the primary topic in scalar mode preserves scalar shape', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      kitchen: {
+        area_m2: 12,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: { valve_position: 'rooms/kitchen/valve' },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    const input = screen.getByDisplayValue('rooms/kitchen/valve') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'rooms/kitchen/new_valve' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await vi.waitFor(() => {
+      expect(patchMock).toHaveBeenCalled()
+    })
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    // Stays scalar (single-element list collapses)
+    expect(payload.kitchen.mqtt_topics.valve_position).toBe('rooms/kitchen/new_valve')
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-231D — paired per-emitter heating_entity rows
+// =============================================================================
+
+
+describe('INSTRUCTION-231D: paired per-emitter heating_entity rows', () => {
+  beforeEach(() => {
+    patchMock.mockClear()
+  })
+
+  it('renders one paired emitter row when both lists are empty', () => {
+    const rooms = {
+      kitchen: { area_m2: 20, facing: 'N' as const, ceiling_m: 2.4 },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // One TRV Entity label and one Heating Entity label (no numeric suffix
+    // when there's only one row).
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity').length).toBe(1)
+    // No remove buttons when rowCount === 1.
+    expect(screen.queryAllByRole('button', { name: /remove emitter/i }).length).toBe(0)
+  })
+
+  it('renders N paired rows when trv and heating lists have equal length', () => {
+    const rooms = {
+      open_plan: {
+        area_m2: 40,
+        facing: 'S' as const,
+        ceiling_m: 2.4,
+        trv_entity: ['climate.dining_trv', 'climate.sitting_room_trv'],
+        heating_entity: [
+          'number.dining_trv_valve_closing_degree',
+          'number.sitting_room_trv_valve_closing_degree',
+        ],
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // Two paired rows: TRV Entity + TRV Entity 2, Heating Entity + Heating Entity 2.
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 2').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity 2').length).toBe(1)
+    expect(screen.queryAllByRole('button', { name: /remove emitter/i }).length).toBe(2)
+  })
+
+  it('renders max(trv, heating) rows when lengths differ', () => {
+    const rooms = {
+      open_plan: {
+        area_m2: 40,
+        facing: 'S' as const,
+        ceiling_m: 2.4,
+        trv_entity: ['climate.A', 'climate.B', 'climate.C'],
+        heating_entity: 'sensor.open_plan_heating',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // rowCount = max(3, 1, 1) = 3. Three TRV slots + three heating slots.
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 2').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 3').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity 2').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity 3').length).toBe(1)
+  })
+
+  it('add emitter appends slot to both trv and heating lists', async () => {
+    const user = userEvent.setup()
+    const rooms = {
+      kitchen: {
+        area_m2: 20,
+        facing: 'N' as const,
+        ceiling_m: 2.4,
+        trv_entity: 'climate.kitchen_trv',
+        heating_entity: 'sensor.kitchen_heating',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    const addBtn = screen.getByRole('button', { name: /add emitter/i })
+    await user.click(addBtn)
+    // After click: rowCount goes from 1 → 2; new labels appear for row 2.
+    expect(screen.getAllByText('TRV Entity 2').length).toBe(1)
+    expect(screen.getAllByText('Heating Entity 2').length).toBe(1)
+  })
+
+  it('remove emitter removes slot at same index from both lists and round-trips through save', async () => {
+    const user = userEvent.setup()
+    const rooms = {
+      open_plan: {
+        area_m2: 40,
+        facing: 'S' as const,
+        ceiling_m: 2.4,
+        trv_entity: ['climate.A', 'climate.B'],
+        heating_entity: ['sensor.A', 'sensor.B'],
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    const removeButtons = screen.getAllByRole('button', { name: /remove emitter/i })
+    expect(removeButtons.length).toBe(2)
+    // Click remove on the second row (index 1).
+    await user.click(removeButtons[1])
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
+    await user.click(saveBtn)
+    expect(patchMock).toHaveBeenCalled()
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    // After collapse-to-scalar normalisation: both fields become scalars.
+    expect(payload.open_plan.trv_entity).toBe('climate.A')
+    expect(payload.open_plan.heating_entity).toBe('sensor.A')
+  })
+
+  it('single-emitter scalar heating_entity contract preserved on edit', async () => {
+    const user = userEvent.setup()
+    const rooms = {
+      bathroom: {
+        area_m2: 6,
+        facing: 'N' as const,
+        ceiling_m: 2.4,
+        trv_entity: 'climate.bathroom_trv',
+        heating_entity: 'sensor.bathroom_heating',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // Find the heating input by placeholder. EntityField placeholder for
+    // 231D paired rows: "sensor.<room>_heating or number.<room>_valve_position".
+    const heInput = screen.getByPlaceholderText(
+      /sensor\.<room>_heating|number\.<room>_valve_position/i,
+    )
+    await user.clear(heInput)
+    await user.type(heInput, 'sensor.bathroom_heating_v2')
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
+    await user.click(saveBtn)
+    expect(patchMock).toHaveBeenCalled()
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    // V2 MEDIUM-1 contract: scalar input → scalar output (not array).
+    expect(payload.bathroom.heating_entity).toBe('sensor.bathroom_heating_v2')
+    expect(payload.bathroom.trv_entity).toBe('climate.bathroom_trv')
+  })
+
+  it('V2 MEDIUM-1 regression: updateHeatingAt with scalar current and index 2 preserves typed value', async () => {
+    const user = userEvent.setup()
+    const rooms = {
+      open_plan: {
+        area_m2: 40,
+        facing: 'S' as const,
+        ceiling_m: 2.4,
+        trv_entity: ['climate.A', 'climate.B', 'climate.C'],
+        heating_entity: 'sensor.shared_template', // scalar — heLen = 1, trvLen = 3
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // rowCount = max(3, 1, 1) = 3. Row index 2 has an empty heating input.
+    const heInputs = screen.getAllByPlaceholderText(
+      /sensor\.<room>_heating|number\.<room>_valve_position/i,
+    )
+    expect(heInputs.length).toBe(3)
+    // Type into row 2's heating input (the 3rd one).
+    await user.type(heInputs[2], 'number.C_valve_position')
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
+    await user.click(saveBtn)
+    expect(patchMock).toHaveBeenCalled()
+    const [, payload] = patchMock.mock.calls.at(-1)!
+    // V2 MEDIUM-1 contract: list-form heating with row-2 value preserved.
+    // Pre-V2 the value was silently dropped; heating_entity stayed scalar.
+    expect(payload.open_plan.heating_entity).toEqual([
+      'sensor.shared_template',
+      '',
+      'number.C_valve_position',
+    ])
   })
 })

@@ -52,10 +52,26 @@ _breaker = _CircuitBreaker()
 
 
 def fetch_ha_entity(entity_id, attr=None, default=None, suppress_log=False):
+    # INSTRUCTION-230 Task 2 (Layer 3 of three-layer defence) — Layer 1 is
+    # validate_yaml.py:validate_rooms string-type check; Layer 2 is
+    # config.py:969 belt-and-braces guard. This third layer catches caller-
+    # side defects anywhere in the codebase that construct a non-string
+    # entity_id (list, dict, etc.). Without this guard such values
+    # f-string-interpolate into /api/states/<repr(value)> URLs that HA 404s
+    # on, producing obscure log lines that conceal the caller-side defect.
+    if not isinstance(entity_id, str):
+        if entity_id is not None:
+            logging.error(
+                "fetch_ha_entity called with non-string entity_id: "
+                "type=%s value=%r — returning default. Caller defect; "
+                "check the call site.",
+                type(entity_id).__name__, entity_id,
+            )
+        return default
     # Empty/whitespace entity_id produces URL "/api/states/" — HA returns 404
     # and the circuit breaker counts it as a real failure. Short-circuit here
     # to keep the breaker honest regardless of caller hygiene.
-    if not entity_id or not str(entity_id).strip():
+    if not entity_id.strip():
         return default
     if not headers:
         logging.warning("No SUPERVISOR_TOKEN found - fetch_ha_entity will return default.")
@@ -97,7 +113,19 @@ def fetch_ha_entity_full(entity_id, default=None, suppress_log=False):
 
     Returns None on failure (caller should handle gracefully).
     """
-    if not entity_id or not str(entity_id).strip():
+    # INSTRUCTION-230 Task 2 (Layer 3 of three-layer defence) — symmetric
+    # guard with fetch_ha_entity above. Non-string entity_id produces a
+    # malformed /api/states/<repr(value)> URL when f-string-interpolated.
+    if not isinstance(entity_id, str):
+        if entity_id is not None:
+            logging.error(
+                "fetch_ha_entity_full called with non-string entity_id: "
+                "type=%s value=%r — returning None. Caller defect; "
+                "check the call site.",
+                type(entity_id).__name__, entity_id,
+            )
+        return None
+    if not entity_id.strip():
         return None
     if not headers:
         return None
@@ -149,7 +177,7 @@ def set_ha_service(domain, service, data):
             except Exception:
                 body = "(unreadable)"
             entity = data.get("entity_id", "?")
-            value = data.get("value", data.get("option", "?"))
+            value = data.get("value", data.get("option", data.get("temperature", "?")))
             logging.error(
                 f"HA rejected {domain}.{service}: {response.status_code} entity={entity} value={value!r} body={body}"
             )
@@ -164,115 +192,3 @@ def set_ha_service(domain, service, data):
         logging.error(f"HA service error {domain}.{service}: entity={entity} value={value!r} err={e}")
 
 
-def _call_forecast_service(entity_id, forecast_type="hourly"):
-    """
-    Call weather.get_forecasts service to retrieve forecast data.
-
-    HA 2024.3+ removed forecast from entity attributes. Forecast data
-    is now only available via the weather.get_forecasts service action.
-
-    Args:
-        entity_id: Weather entity ID (e.g. 'weather.home')
-        forecast_type: 'hourly', 'daily', or 'twice_daily'
-
-    Returns:
-        List of forecast dicts, or None on failure.
-        Each dict contains: datetime, temperature, condition, wind_speed, etc.
-    """
-    if not headers:
-        logging.debug("No SUPERVISOR_TOKEN found - forecast service skipped.")
-        return None
-
-    try:
-        response = requests.post(
-            f"{HA_URL}/api/services/weather/get_forecasts?return_response=true",
-            json={
-                "entity_id": entity_id,
-                "type": forecast_type,
-            },
-            headers=headers,
-            timeout=SERVICE_TIMEOUT,
-        )
-
-        # Explicit HTTP status check with body logging
-        if response.status_code >= 400:
-            try:
-                body = response.text[:500]
-            except Exception:
-                body = "(unreadable)"
-            if response.status_code == 404:
-                logging.debug(
-                    "Forecast service not available (404) for %s — weather entity may not support %s forecast",
-                    entity_id,
-                    forecast_type,
-                )
-            else:
-                logging.error(
-                    "Forecast service HTTP %d for %s (type=%s): %s",
-                    response.status_code,
-                    entity_id,
-                    forecast_type,
-                    body,
-                )
-            return None
-
-        result = response.json()
-
-        # Response structure: {"weather.home": {"forecast": [...]}}
-        # or for newer HA: direct service response
-        if isinstance(result, dict):
-            # Try entity_id key first (standard response format)
-            entity_data = result.get(entity_id, {})
-            if isinstance(entity_data, dict):
-                forecast = entity_data.get("forecast", [])
-                if forecast:
-                    return forecast
-
-            # Try nested under 'response' key
-            response_data = result.get("response", {})
-            if isinstance(response_data, dict):
-                entity_data = response_data.get(entity_id, {})
-                if isinstance(entity_data, dict):
-                    forecast = entity_data.get("forecast", [])
-                    if forecast:
-                        return forecast
-
-            # Try nested under 'service_response' key (HA 2024.12+)
-            svc_data = result.get("service_response", {})
-            if isinstance(svc_data, dict):
-                entity_data = svc_data.get(entity_id, {})
-                if isinstance(entity_data, dict):
-                    forecast = entity_data.get("forecast", [])
-                    if forecast:
-                        return forecast
-
-            # Try direct forecast key (some HA versions)
-            forecast = result.get("forecast", [])
-            if forecast:
-                return forecast
-
-        # If result is a list of context dicts (service call response),
-        # the forecast might be in a different location
-        if isinstance(result, list) and len(result) > 0:
-            logging.debug(
-                "Forecast service for %s returned list (%d items, "
-                "first keys: %s) — may need response_variable approach",
-                entity_id,
-                len(result),
-                list(result[0].keys()) if isinstance(result[0], dict) else "?",
-            )
-
-        logging.debug(
-            "Forecast service for %s returned unexpected structure (type=%s, keys=%s)",
-            entity_id,
-            type(result).__name__,
-            list(result.keys()) if isinstance(result, dict) else "?",
-        )
-        return None
-
-    except requests.exceptions.RequestException as e:
-        logging.error("Forecast service request error for %s: %s", entity_id, e)
-        return None
-    except (ValueError, TypeError, json.JSONDecodeError) as e:
-        logging.error("Forecast service parse error for %s: %s", entity_id, e)
-        return None

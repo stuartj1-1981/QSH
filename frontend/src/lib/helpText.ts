@@ -17,6 +17,9 @@ export const HOT_WATER = {
   hwSensor: 'The Home Assistant sensor that reads your hot water cylinder temperature.',
   preCharge: 'Warms the cylinder ahead of scheduled hot water times using cheap-rate electricity, saving money.',
   plumbingPlan: 'How your heating and hot water pipework is arranged. Affects when the system can heat water vs rooms.',
+  signalsGroup: 'How QSH detects that the heat pump has diverted to hot water. Either signal alone is enough; if both are set, ON from either marks DHW active (logical OR).',
+  signalsPrimary: 'The primary DHW active indicator. For HA, a water_heater entity whose state goes off/eco/electric/heat_pump/gas/performance/idle when not heating water and on/high_demand/heat when heating. For MQTT, a topic publishing the same payload set.',
+  signalsBoolean: "Optional second indicator OR'd with the primary. Accepts on, true, 1, heat, high_demand as ON. Use when your installation exposes a clean boolean alongside (or instead of) the water_heater entity.",
 } as const
 
 export const SOLAR = {

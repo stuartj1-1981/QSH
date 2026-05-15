@@ -3,6 +3,9 @@
 from fastapi import APIRouter, HTTPException
 
 from ..state import shared_state
+# Absolute import — avoids module-name shadowing between qsh.api.routes.sysid
+# and qsh.sysid (V2 LOW-3).
+from qsh.sysid import SOLAR_CAPACITY_MIN_OBS
 
 router = APIRouter()
 
@@ -12,7 +15,14 @@ def get_sysid():
     """Per-room learned thermal parameters and observation counts."""
     sysid = shared_state.get_sysid()
     if sysid is None:
-        return {"error": "SysID not yet initialised", "rooms": {}}
+        # INSTRUCTION-227B Task 7 — State 1: whole envelope key is None when
+        # sysid is not initialised. Frontend (227C) treats this as "no data
+        # yet" — different from State 2 (sysid present, zero observations).
+        return {
+            "error": "SysID not yet initialised",
+            "rooms": {},
+            "installation_solar_capacity_kw": None,
+        }
 
     config = shared_state.get_config()
     room_areas = config.get('rooms', {}) if config else {}
@@ -37,7 +47,25 @@ def get_sysid():
         except Exception:
             result[room_name] = {"error": "Failed to read SysID for this room"}
 
-    return {"rooms": result}
+    # INSTRUCTION-227B Task 7 — installation solar capacity envelope.
+    # States 2/3/4 from the four-state contract:
+    # - obs == 0 → value None, mature False (State 2)
+    # - 0 < obs < SOLAR_CAPACITY_MIN_OBS → value=observed max, mature False (State 3)
+    # - obs >= SOLAR_CAPACITY_MIN_OBS → value=observed max, mature True (State 4)
+    obs = int(getattr(sysid, "solar_capacity_observations", 0) or 0)
+    capacity = {
+        "value": float(sysid.solar_capacity_kw_observed) if obs > 0 else None,
+        "observations": obs,
+        "mature": obs >= SOLAR_CAPACITY_MIN_OBS,
+        "last_updated_ts": getattr(
+            sysid, "solar_capacity_last_updated_ts", None
+        ),
+    }
+
+    return {
+        "rooms": result,
+        "installation_solar_capacity_kw": capacity,
+    }
 
 
 @router.get("/sysid/{room}")

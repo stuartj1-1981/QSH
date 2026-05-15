@@ -30,6 +30,22 @@ CEILING_ALLOWED_LITERALS = {"roof", "unheated"}
 FLOOR_MIN = -1
 FLOOR_MAX = 5
 
+# INSTRUCTION-231C — accepted entity-id prefixes for heating_entity and
+# trv_entity field validators (RoomConfig). Module-scoped (not class-
+# scoped) because Pydantic v2 raises PydanticUserError on non-annotated
+# class attributes — module-level constants sidestep the issue entirely.
+# The HE prefix list mirrors validate_yaml.py:380 (Layer 1 canonical set).
+# The TRV prefix list reflects HA's domain convention (climate.*) for
+# thermostat-like entities; validate_yaml.py does not currently enforce
+# this prefix for trv_entity, and 231C does NOT introduce a new YAML-
+# layer rule — the API-write-path validator is the only place this
+# check fires today.
+_VALID_HE_PREFIXES = (
+    "sensor.", "number.", "binary_sensor.",
+    "input_boolean.", "switch.", "input_number.",
+)
+_VALID_TRV_PREFIXES = ("climate.",)
+
 
 class RoomBoundary(BaseModel):
     """A boundary face connecting to another room."""
@@ -142,9 +158,13 @@ class RoomConfig(BaseModel):
     envelope: Optional[RoomEnvelope] = None
     emitter_kw: Optional[float] = None
     emitter_type: Optional[str] = None
-    trv_entity: Optional[str] = None
+    # INSTRUCTION-231C — heating_entity and trv_entity accept str | list[str]
+    # for multi-emitter rooms. Per-element validation enforced via
+    # field_validator methods below. Mirrors validate_yaml.py:359-387
+    # (Layer 1) at the API write-path boundary — defence-in-depth.
+    trv_entity: Optional[Union[str, List[str]]] = None
     independent_sensor: Optional[str] = None
-    heating_entity: Optional[str] = None
+    heating_entity: Optional[Union[str, List[str]]] = None
     control_mode: Optional[str] = None
     valve_hardware: Optional[str] = None
     valve_scale: Optional[int] = None
@@ -174,6 +194,61 @@ class RoomConfig(BaseModel):
             raise ValueError(
                 f"fixed_setpoint must be in range [10.0, 25.0] °C, got {v}"
             )
+        return v
+
+    # INSTRUCTION-231C — per-element validation for list-form heating_entity
+    # and trv_entity. Mirrors validate_yaml.py:_check_one_he (Layer 1 at
+    # YAML-load). API-write-path version is the Pydantic-validator
+    # equivalent — defence-in-depth: a config-injection path that bypasses
+    # validate_yaml.py (e.g. PATCH /api/rooms/{name}) still gets the same
+    # per-element shape enforcement. Validators reference module-level
+    # constants _VALID_HE_PREFIXES and _VALID_TRV_PREFIXES (V2 MEDIUM-1
+    # fix — module scope not class scope to avoid Pydantic v2 non-
+    # annotated-class-attribute error at module import).
+
+    @field_validator("heating_entity")
+    @classmethod
+    def heating_entity_per_element_validation(
+        cls, v: Optional[Union[str, List[str]]]
+    ) -> Optional[Union[str, List[str]]]:
+        if v is None:
+            return v
+        # Normalise to list for iteration; preserve original shape on return.
+        elements = [v] if isinstance(v, str) else v
+        if not isinstance(elements, list):
+            raise ValueError(
+                f"heating_entity must be a string or list of strings; got "
+                f"{type(v).__name__}"
+            )
+        for i, element in enumerate(elements):
+            idx_label = "" if isinstance(v, str) else f"[{i}]"
+            if not isinstance(element, str):
+                raise ValueError(
+                    f"heating_entity{idx_label} must be a string entity name; "
+                    f"got {type(element).__name__} (value={element!r})"
+                )
+        return v
+
+    @field_validator("trv_entity")
+    @classmethod
+    def trv_entity_per_element_validation(
+        cls, v: Optional[Union[str, List[str]]]
+    ) -> Optional[Union[str, List[str]]]:
+        if v is None:
+            return v
+        elements = [v] if isinstance(v, str) else v
+        if not isinstance(elements, list):
+            raise ValueError(
+                f"trv_entity must be a string or list of strings; got "
+                f"{type(v).__name__}"
+            )
+        for i, element in enumerate(elements):
+            idx_label = "" if isinstance(v, str) else f"[{i}]"
+            if not isinstance(element, str):
+                raise ValueError(
+                    f"trv_entity{idx_label} must be a string entity name; "
+                    f"got {type(element).__name__} (value={element!r})"
+                )
         return v
 
     @model_validator(mode="after")

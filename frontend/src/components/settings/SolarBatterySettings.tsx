@@ -2,10 +2,15 @@ import { useState, useEffect, useMemo } from 'react'
 import { Save, Loader2 } from 'lucide-react'
 import { patchOrDelete } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
+import { useSysid } from '../../hooks/useSysid'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
+import { HelpTip } from '../HelpTip'
 import { SOLAR } from '../../lib/helpText'
 import type { SolarYaml, BatteryYaml, GridYaml, InverterYaml, Driver } from '../../types/config'
+
+// INSTRUCTION-227C — keep aligned with SOLAR_CAPACITY_MIN_OBS in qsh/sysid.py.
+const SOLAR_CAPACITY_MIN_OBS = 50
 
 interface SolarBatterySettingsProps {
   solar?: SolarYaml
@@ -71,6 +76,11 @@ export function SolarBatterySettings({
   )
   const { resolved } = useEntityResolve(entityIds)
 
+  // INSTRUCTION-227C Task 6 — installation kWp from sysid observer (227B).
+  // Surfaced read-only with maturity suffix when learning is in flight.
+  const { data: sysidData } = useSysid()
+  const capacity = sysidData?.installation_solar_capacity_kw ?? null
+
   const save = async () => {
     setSaving(true)
     setError(null)
@@ -128,6 +138,34 @@ export function SolarBatterySettings({
 
         {hasSolar && (
           <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
+            {/* INSTRUCTION-227C Task 6 — observed installation kWp from sysid. */}
+            <div
+              className="flex items-center justify-between py-2 border-b border-[var(--border)]"
+              data-testid="solar-observed-capacity-row"
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">Solar production capacity (observed)</span>
+                <HelpTip
+                  size={12}
+                  text="The system tracks the highest solar production it has observed and uses that as the installation's effective peak capacity (kWp) when projecting future heating effects of solar gain. This value updates as more sunny periods accumulate. No manual override is offered — to reset, edit sysid_state.json."
+                />
+              </div>
+              <div className="text-right">
+                {capacity?.value == null ? (
+                  <span className="text-[var(--text-muted)]">—</span>
+                ) : (
+                  <>
+                    <span className="font-medium">{capacity.value.toFixed(1)} kW</span>
+                    {!capacity.mature && (
+                      <span className="text-xs text-[var(--text-muted)] ml-2">
+                        (learning — {capacity.observations}/{SOLAR_CAPACITY_MIN_OBS})
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
             {driver === 'ha' ? (
               <EntityField
                 label="Solar Production Entity"

@@ -1,13 +1,36 @@
-"""Topic ↔ InputBlock/OutputBlock field mapping for the MQTT driver.
+"""Topic <-> InputBlock/OutputBlock field mapping for the MQTT driver.
 
 Builds subscription lists and field mappings from QSH config.
 Handles plain and JSON payload parsing for both numeric and string fields.
+
+INSTRUCTION-220C scope clarification (12 May 2026): topic_map services
+**InputBlock-bound topics only** — topics whose payloads populate fields
+on the per-cycle InputBlock dataclass (room temps, valve positions,
+outdoor temp, hot-water state, etc.). Subscribe-only topics — topics
+that QSH subscribes to but does NOT route into InputBlock — are NOT
+registered through topic_map. They are added inline to MQTTDriver.setup()'s
+subscription set via direct extension of all_topics before
+self._mqtt.subscribe() is called.
+
+The forecast topic (`mqtt.inputs.forecast.topic`) is the first such
+subscribe-only topic and the canonical example of the pattern. Forecast
+data flows through ctx.forecast_state (set by ForecastController via
+the ForecastProvider Protocol introduced by INSTRUCTION-220A), not
+through InputBlock — hence the topic_map exclusion.
+
+Future subscribe-only topics follow the same pattern: extend setup()'s
+all_topics inline; document the field in this docstring; do not register
+in topic_map. If a third subscribe-only topic surfaces, consider whether
+to extend topic_map for subscribe-only entries as a structural cleanup
+(option (a) of S-4 disposition; cheaper to defer until justified by
+multiple cases).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -86,6 +109,9 @@ class TopicMapping:
     category: str = "default"       # Staleness category (see BUILTIN_STALENESS_DEFAULTS)
     availability: Optional[AvailabilitySpec] = None
     last_seen: Optional[LastSeenSpec] = None
+    # INSTRUCTION-224C: emitter stem for per-emitter fields (valve_position).
+    # None for non-per-emitter fields (room_temp, occupancy_sensor, system).
+    emitter: Optional[str] = None
 
 
 @dataclass
@@ -140,6 +166,54 @@ def _prefixed(prefix: str, topic: str) -> str:
     if prefix:
         return f"{prefix}/{topic}"
     return topic
+
+
+def _normalise_topic_field(value: Any) -> List[str]:
+    """Normalise a per-room topic-field value (str or list[str]) to list[str].
+
+    INSTRUCTION-222B contract: empty / whitespace-only entries RAISE
+    ValueError at the parser (single rule with the validator at
+    validate_yaml.py; whichever runs first catches it). Non-string
+    elements raise. Empty literal list raises (no derivation fallback
+    on the MQTT side — operator must declare a topic explicitly).
+    """
+    if isinstance(value, str):
+        v = value.strip()
+        if not v:
+            raise ValueError("topic string is empty or whitespace-only")
+        return [v]
+    if isinstance(value, list):
+        if not value:
+            raise ValueError("topic list is empty — omit field or provide at least one topic")
+        out: List[str] = []
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"topic list entry [{i}] must be a string, got {type(item).__name__}: {item!r}"
+                )
+            s = item.strip()
+            if not s:
+                raise ValueError(
+                    f"topic list entry [{i}] is empty or whitespace-only"
+                )
+            out.append(s)
+        return out
+    raise ValueError(
+        f"topic field must be a string or list of strings, got {type(value).__name__}"
+    )
+
+
+def _mqtt_emitter_stem(topic: str) -> str:
+    """Derive emitter stem from an MQTT topic — terminal path component, sanitised.
+
+    INSTRUCTION-224C: the stem is the last path component of the topic with all
+    non-alphanumeric characters replaced by underscores and the result lowercased.
+    The operator controls the outcome via topic structure. Duplicate stems within
+    a room are rejected at config-load by the validator (validate_yaml.py); the
+    helper itself does no special-case suffix handling.
+    """
+    terminal = topic.rstrip("/").split("/")[-1]
+    return "".join(c if c.isalnum() else "_" for c in terminal).lower()
 
 
 def parse_payload(payload_str: str, fmt: str = "plain", json_path: Optional[str] = None) -> Optional[float]:
@@ -448,6 +522,33 @@ _SYSTEM_CONTROL_TOPICS = [
 ]
 
 
+def _slug(name: str) -> str:
+    """228A Task 8 — slugify a heat-source name for MQTT topic placement.
+
+    Lowercase; runs of non-alphanumeric characters collapsed to one underscore;
+    strip leading/trailing underscores. Returns 'source' for an input that
+    slugifies to empty (e.g. '---').
+    """
+    s = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return s or "source"
+
+
+def command_topic_for_source(
+    source_config: Dict[str, Any],
+    default_prefix: str = "qsh/heat_source",
+) -> str:
+    """228A Task 8 — resolve the MQTT command topic for one heat source.
+
+    Override: ``source_config['mqtt']['command_topic']`` used verbatim if
+    present.
+    Default: ``f"{default_prefix}/{_slug(source_config['name'])}/command"``.
+    """
+    override = (source_config.get("mqtt") or {}).get("command_topic")
+    if override:
+        return override
+    return f"{default_prefix}/{_slug(source_config.get('name', ''))}/command"
+
+
 def get_control_topics(config: Dict[str, Any]) -> list:
     """Build full control topic list including per-room topics.
 
@@ -569,20 +670,56 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                     last_seen=ls,
                 ))
 
-        # valve_position → valve_positions[room]
+        # valve_position → valve_positions[room] AND valve_positions_per_emitter
+        # INSTRUCTION-224C: accept str OR list of str (mirrors 222B output-side
+        # precedent). Each entry produces its own TopicMapping carrying an
+        # emitter stem derived from the topic terminal component. Duplicate
+        # stems within a room are rejected by validate_yaml.py at config-load.
         if "valve_position" in topics:
-            raw, fmt, jp, cat, avail, ls = _mapping_fields(topics["valve_position"])
-            if raw:
-                tm.input_mappings.append(TopicMapping(
-                    topic=_prefixed(prefix, raw),
-                    field="valve_position",
-                    room=room,
-                    payload_format=fmt,
-                    json_path=jp,
-                    category=cat or infer_category("valve_position", "valve_position"),
-                    availability=avail,
-                    last_seen=ls,
-                ))
+            raw_cfg = topics["valve_position"]
+            if isinstance(raw_cfg, list):
+                try:
+                    normalised = _normalise_topic_field(raw_cfg)
+                except ValueError as e:
+                    raise ValueError(
+                        f"room_mqtt_topics.{room}.valve_position: {e}"
+                    ) from e
+                seen_stems: Dict[str, str] = {}
+                for entry in normalised:
+                    stem = _mqtt_emitter_stem(entry)
+                    if stem in seen_stems:
+                        raise ValueError(
+                            f"room_mqtt_topics.{room}.valve_position: duplicate "
+                            f"emitter stem '{stem}' from topics "
+                            f"['{seen_stems[stem]}', '{entry}'] — distinguish topic "
+                            f"structure to produce unique terminal components"
+                        )
+                    seen_stems[stem] = entry
+                    tm.input_mappings.append(TopicMapping(
+                        topic=_prefixed(prefix, entry),
+                        field="valve_position",
+                        room=room,
+                        payload_format="plain",
+                        json_path=None,
+                        category=infer_category("valve_position", "valve_position"),
+                        availability=None,
+                        last_seen=None,
+                        emitter=stem,
+                    ))
+            else:
+                raw, fmt, jp, cat, avail, ls = _mapping_fields(raw_cfg)
+                if raw:
+                    tm.input_mappings.append(TopicMapping(
+                        topic=_prefixed(prefix, raw),
+                        field="valve_position",
+                        room=room,
+                        payload_format=fmt,
+                        json_path=jp,
+                        category=cat or infer_category("valve_position", "valve_position"),
+                        availability=avail,
+                        last_seen=ls,
+                        emitter=_mqtt_emitter_stem(raw),
+                    ))
 
     # ── Away mode topic (always subscribe) ──
     tm.away_topic = _prefixed(prefix, "control/away")
@@ -606,22 +743,30 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
         ))
 
     # Per-room output topics
+    # INSTRUCTION-222B — accept either string or list for valve_setpoint /
+    # trv_setpoint. List form emits N OutputMappings, one per topic; the
+    # publish loops in driver.py iterate output_mappings and fan out
+    # naturally. _normalise_topic_field enforces shape (raises on empty
+    # list, whitespace-only entries, non-string elements).
     for room, topics in room_mqtt.items():
         if not isinstance(topics, dict):
             continue
-        if "valve_setpoint" in topics:
-            raw = topics["valve_setpoint"] if isinstance(topics["valve_setpoint"], str) else str(topics["valve_setpoint"])
-            tm.output_mappings.append(OutputMapping(
-                topic=_prefixed(prefix, raw),
-                field="valve_setpoint",
-                room=room,
-            ))
-        if "trv_setpoint" in topics:
-            raw = topics["trv_setpoint"] if isinstance(topics["trv_setpoint"], str) else str(topics["trv_setpoint"])
-            tm.output_mappings.append(OutputMapping(
-                topic=_prefixed(prefix, raw),
-                field="trv_setpoint",
-                room=room,
-            ))
+        for output_field in ("valve_setpoint", "trv_setpoint"):
+            if output_field not in topics:
+                continue
+            try:
+                normalised = _normalise_topic_field(topics[output_field])
+            except ValueError as e:
+                # Re-raise with room/field context. Top-level builder
+                # invocation converts to SystemExit at config load.
+                raise ValueError(
+                    f"room_mqtt_topics.{room}.{output_field}: {e}"
+                ) from e
+            for topic in normalised:
+                tm.output_mappings.append(OutputMapping(
+                    topic=_prefixed(prefix, topic),
+                    field=output_field,
+                    room=room,
+                ))
 
     return tm

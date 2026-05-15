@@ -86,9 +86,9 @@ function findFreeCell(
 /** Solve the layout for the given rooms.
  *
  *  Deterministic: identical inputs produce identical outputs.
- *  Throws when more than 2 distinct floor indices are present — the solver
- *  targets UK residential scope (ground + first) and would silently misplace
- *  rooms on additional storeys.
+ *  Supports any number of distinct floor indices. Upper floors are anchored
+ *  to the floor immediately below them via ceiling/floor envelope pairs; the
+ *  offset is computed for each consecutive pair and applied cumulatively.
  */
 export function solveLayout(rooms: Record<string, LayoutRoom>): SolvedLayout {
   const log: SolverLogEntry[] = []
@@ -107,11 +107,6 @@ export function solveLayout(rooms: Record<string, LayoutRoom>): SolvedLayout {
   const floorIndices = [...new Set(roomNames.map((n) => rooms[n].floor))].sort(
     (a, b) => a - b,
   )
-  if (floorIndices.length > 2) {
-    throw new Error(
-      `BuildingLayout solver supports max 2 floors, got ${floorIndices.length}: [${floorIndices.join(', ')}]`,
-    )
-  }
 
   const floorArea: Record<number, number> = {}
   for (const name of roomNames) {
@@ -259,8 +254,9 @@ export function solveLayout(rooms: Record<string, LayoutRoom>): SolvedLayout {
     }
   }
 
-  if (floorIndices.length === 2) {
-    const [lowerFloor, upperFloor] = floorIndices
+  for (let i = 0; i < floorIndices.length - 1; i++) {
+    const lowerFloor = floorIndices[i]
+    const upperFloor = floorIndices[i + 1]
     const pairs: Array<{ lower: string; upper: string; weight: number }> = []
     const seen = new Set<string>()
 
@@ -280,49 +276,43 @@ export function solveLayout(rooms: Record<string, LayoutRoom>): SolvedLayout {
     for (const name of roomNames) {
       const r = rooms[name]
       if (r.floor === lowerFloor) {
-        const ceilingRefs = normaliseFaceRefs(r.envelope.ceiling)
-        for (const ref of ceilingRefs) {
-          addPair(name, ref.room)
-        }
+        for (const ref of normaliseFaceRefs(r.envelope.ceiling)) addPair(name, ref.room)
       }
       if (r.floor === upperFloor) {
-        const floorRefs = normaliseFaceRefs(r.envelope.floor)
-        for (const ref of floorRefs) {
-          addPair(ref.room, name)
-        }
+        for (const ref of normaliseFaceRefs(r.envelope.floor)) addPair(ref.room, name)
       }
     }
 
-    if (pairs.length > 0) {
-      let totalWeight = 0
-      let sumDx = 0
-      let sumDz = 0
-      for (const p of pairs) {
-        const lower = solvedRooms[p.lower]
-        const upper = solvedRooms[p.upper]
-        const lowerCx = lower.x + lower.w / 2
-        const lowerCz = lower.z + lower.d / 2
-        const upperCx = upper.x + upper.w / 2
-        const upperCz = upper.z + upper.d / 2
-        sumDx += (lowerCx - upperCx) * p.weight
-        sumDz += (lowerCz - upperCz) * p.weight
-        totalWeight += p.weight
-      }
-      if (totalWeight > 0) {
-        const offsetX = sumDx / totalWeight
-        const offsetZ = sumDz / totalWeight
-        for (const name of roomNames) {
-          if (rooms[name].floor === upperFloor) {
-            solvedRooms[name].x += offsetX
-            solvedRooms[name].z += offsetZ
-          }
-        }
-        log.push({
-          msg: `Upper floor anchored via ${pairs.length} ceiling/floor pair(s); shift (${offsetX.toFixed(2)}, ${offsetZ.toFixed(2)})`,
-          level: 'ok',
-        })
+    if (pairs.length === 0) continue
+
+    let totalWeight = 0
+    let sumDx = 0
+    let sumDz = 0
+    for (const p of pairs) {
+      const lower = solvedRooms[p.lower]
+      const upper = solvedRooms[p.upper]
+      const lowerCx = lower.x + lower.w / 2
+      const lowerCz = lower.z + lower.d / 2
+      const upperCx = upper.x + upper.w / 2
+      const upperCz = upper.z + upper.d / 2
+      sumDx += (lowerCx - upperCx) * p.weight
+      sumDz += (lowerCz - upperCz) * p.weight
+      totalWeight += p.weight
+    }
+    if (totalWeight === 0) continue
+
+    const offsetX = sumDx / totalWeight
+    const offsetZ = sumDz / totalWeight
+    for (const name of roomNames) {
+      if (rooms[name].floor === upperFloor) {
+        solvedRooms[name].x += offsetX
+        solvedRooms[name].z += offsetZ
       }
     }
+    log.push({
+      msg: `Floor ${upperFloor} anchored to ${lowerFloor} via ${pairs.length} ceiling/floor pair(s); shift (${offsetX.toFixed(2)}, ${offsetZ.toFixed(2)})`,
+      level: 'ok',
+    })
   }
 
   let sumX = 0

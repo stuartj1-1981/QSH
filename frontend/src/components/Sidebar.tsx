@@ -1,9 +1,9 @@
-import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge } from 'lucide-react'
+import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface SidebarProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean
@@ -91,10 +91,22 @@ export function Sidebar({
               onClick={() => onNavigate('balancing')}
             />
             <NavItem
+              icon={<SlidersHorizontal size={18} />}
+              label="Valves"
+              active={page === 'valves'}
+              onClick={() => onNavigate('valves')}
+            />
+            <NavItem
               icon={<BarChart3 size={18} />}
               label="Historian"
               active={page === 'historian'}
               onClick={() => onNavigate('historian')}
+            />
+            <NavItem
+              icon={<CloudSun size={18} />}
+              label="Forecast"
+              active={page === 'forecast'}
+              onClick={() => onNavigate('forecast')}
             />
             <NavItem
               icon={<Settings size={18} />}

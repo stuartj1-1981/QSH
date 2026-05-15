@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Flame, Eye, Clock, EyeOff } from 'lucide-react'
 import { cn, formatTemp, statusColor, statusBg } from '../lib/utils'
-import type { RoomState, BoostRoom } from '../types/api'
+import type { RoomState, BoostRoom, ManualEntry } from '../types/api'
 import { EntityValue } from './EntityValue'
 
 const COMFORT_DISPLAY_DECIMALS = 1
@@ -42,9 +42,19 @@ interface RoomCardProps {
    * `hpActive={false}`.
    */
   hpActive?: boolean
+  /**
+   * INSTRUCTION-225D — manual-state entry for this room. Pass the entry
+   * pulled from `live.manual_state?.[room]` (the room key is added at
+   * the consumer site since the WS map omits the `room` field). Pass a
+   * value with `room: name` for type-symmetry with the standalone
+   * `ManualEntry` interface. The badge renders only when
+   * `mode === 'MANUAL'`. Not engineering-gated — non-engineering users
+   * must see the override indicator.
+   */
+  manualEntry?: ManualEntry
 }
 
-export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive, hpActive = true }: RoomCardProps) {
+export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive, hpActive = true, manualEntry }: RoomCardProps) {
   const displayName = name
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
@@ -82,6 +92,16 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <h3 className="font-medium text-sm">{displayName}</h3>
+          {manualEntry?.mode === 'MANUAL' && manualEntry.position_pct !== null && (
+            <span
+              className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/40 rounded-full px-2 py-0.5 text-xs font-medium"
+              aria-label={`Manual override active. ${manualEntry.set_by} commanded ${manualEntry.position_pct} percent.`}
+              title={`Manual override active. ${manualEntry.set_by} commanded ${manualEntry.position_pct} percent.`}
+              data-testid={`manual-badge-${name}`}
+            >
+              MAN {manualEntry.position_pct}%
+            </span>
+          )}
           {boost && <Flame size={14} className="text-orange-500" />}
           {room.temperature_source === 'none_configured' && (
             <span

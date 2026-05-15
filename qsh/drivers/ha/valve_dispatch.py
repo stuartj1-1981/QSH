@@ -5,7 +5,7 @@ Moved from valve_control.py during the HA purge so that valve_control.py
 remains pure (no HA imports).  Every function here calls set_ha_service
 or fetch_ha_entity.
 
-Pure helpers (get_type2_entity_names, get_type1_entity_name, etc.) remain
+Pure helpers (get_type2_entity_names, get_type1_entity_names, etc.) remain
 in valve_control.py and are imported here.
 """
 
@@ -20,17 +20,40 @@ from ...utils import safe_float
 _warned_type2_no_position: Set[str] = set()
 _warned_type1_unavailable: Set[str] = set()
 _warned_generic_unavailable: Set[str] = set()
+# INSTRUCTION-222A — direct-control hardware missing for a declared direct
+# room: warn-once at WARNING so silent-demotion to indirect fan-out is
+# operator-visible. Distinguishes the "declared direct but HW missing"
+# case from the "indirect zone" case (the latter is DEBUG-level by design).
+_warned_direct_unavailable: Set[str] = set()
 
 from ...valve_control import (
     RoomControlState,
     get_type2_entity_names,
-    get_type1_entity_name,
+    get_type1_entity_names,
     get_all_type2_rooms,
     get_all_type1_rooms,
     VALVE_HARDWARE_DIRECT_TYPE1,
     VALVE_HARDWARE_DIRECT_TYPE2,
     VALVE_HARDWARE_GENERIC,
 )
+
+
+def _warn_direct_unavailable(room: str, hardware_type: str, missing: List[str]) -> None:
+    """Warn-once on first miss for a direct-declared room."""
+    if room in _warned_direct_unavailable:
+        return
+    _warned_direct_unavailable.add(room)
+    logging.warning(
+        "Room '%s' declared as %s but %d expected entit%s missing — "
+        "%s. Direct valve dispatch disabled for this room; zone will be "
+        "controlled via climate.set_temperature setpoint fan-out only. "
+        "Either correct trv_name in YAML or accept indirect-mode behaviour.",
+        room,
+        hardware_type,
+        len(missing),
+        "y is" if len(missing) == 1 else "ies are",
+        ", ".join(missing[:3]) + (f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""),
+    )
 
 
 # =============================================================================
@@ -42,36 +65,48 @@ def check_direct_valve_available(room: str, config: Dict) -> Tuple[bool, str]:
     """
     Check if direct valve control is available for a room.
 
-    Queries HA to verify the expected entities exist.
+    For Type1 / Type2 hardware: ALL derived TRV entities must resolve.
+    Partial resolution (e.g. rad1 exists, rad2 missing) is treated as
+    unavailable — the constraint-hack design assumes every member is
+    controllable, and partial control produces asymmetric zone behaviour.
+
+    First failure for a room declared as direct_type{1,2} logs WARNING
+    (warn-once) so operators see the silent-demotion case rather than
+    discovering it through symptom diagnosis.
 
     Returns:
-        Tuple of (available, hardware_type)
+        Tuple of (available, hardware_type).
     """
     hardware_type = config.get("room_valve_hardware", {}).get(room, VALVE_HARDWARE_GENERIC)
 
     if hardware_type == VALVE_HARDWARE_DIRECT_TYPE2:
-        closing_entity, opening_entity = get_type2_entity_names(room, config)
-        if fetch_ha_entity(closing_entity, default=None, suppress_log=True) is not None:
-            return True, VALVE_HARDWARE_DIRECT_TYPE2
-        else:
-            logging.debug(f"Type2 entities not found for {room}: {closing_entity}")
+        pairs = get_type2_entity_names(room, config)
+        missing = [
+            closing for (closing, _) in pairs
+            if fetch_ha_entity(closing, default=None, suppress_log=True) is None
+        ]
+        if missing:
+            _warn_direct_unavailable(room, hardware_type, missing)
             return False, hardware_type
+        return True, VALVE_HARDWARE_DIRECT_TYPE2
 
     elif hardware_type == VALVE_HARDWARE_DIRECT_TYPE1:
-        type1_entity = get_type1_entity_name(room, config)
-        if fetch_ha_entity(type1_entity, default=None, suppress_log=True) is not None:
-            return True, VALVE_HARDWARE_DIRECT_TYPE1
-        else:
-            logging.debug(f"Type1 entity not found for {room}: {type1_entity}")
+        entities = get_type1_entity_names(room, config)
+        missing = [
+            e for e in entities
+            if fetch_ha_entity(e, default=None, suppress_log=True) is None
+        ]
+        if missing:
+            _warn_direct_unavailable(room, hardware_type, missing)
             return False, hardware_type
+        return True, VALVE_HARDWARE_DIRECT_TYPE1
 
     elif hardware_type == VALVE_HARDWARE_GENERIC:
         valve_entity = f"number.qsh_{room}_valve_target"
         if fetch_ha_entity(valve_entity, default=None, suppress_log=True) is not None:
             return True, VALVE_HARDWARE_GENERIC
-        else:
-            logging.debug(f"Generic valve entity not found for {room}: {valve_entity}")
-            return False, hardware_type
+        logging.debug(f"Generic valve entity not found for {room}: {valve_entity}")
+        return False, hardware_type
 
     else:
         logging.warning(f"Unknown valve hardware type '{hardware_type}' for {room}")
@@ -121,7 +156,10 @@ def get_room_valve_fraction(
             return valve_frac
 
         # Priority 3: Read from entity (echoes last command)
-        _, opening_entity = get_type2_entity_names(room, config)
+        # Multi-emitter zones: read first declared TRV; all members are
+        # commanded to the same target so single-member read is sufficient.
+        pairs = get_type2_entity_names(room, config)
+        _, opening_entity = pairs[0]
         position = fetch_ha_entity(opening_entity, default=None, suppress_log=True)
         if position is not None:
             valve_frac = safe_float(position, 75.0) / 100.0
@@ -136,7 +174,10 @@ def get_room_valve_fraction(
 
     elif hardware_type == VALVE_HARDWARE_DIRECT_TYPE1:
         # TYPE1: HAS POSITION FEEDBACK
-        type1_entity = get_type1_entity_name(room, config)
+        # Multi-emitter zones: read first declared TRV; all members are
+        # commanded to the same target so single-member read is sufficient.
+        type1_ids = get_type1_entity_names(room, config)
+        type1_entity = type1_ids[0]
         position = fetch_ha_entity(type1_entity, default=None, suppress_log=True)
         if position is not None:
             scale = config.get("room_valve_scale", {}).get(room, 255)
@@ -175,17 +216,43 @@ def get_room_valve_fraction(
 def apply_direct_valve_control_type2(
     room: str, target_position: int, config: Dict, dfan_control: bool, control_state: Optional[RoomControlState] = None
 ) -> bool:
-    """Apply direct valve position control via Type2 constraint hack."""
-    closing_entity, opening_entity = get_type2_entity_names(room, config)
+    """Apply direct valve position control via Type2 constraint hack.
 
-    if fetch_ha_entity(closing_entity, default=None, suppress_log=True) is None:
-        logging.warning(f"Type2 closing entity not found for {room}: {closing_entity}")
-        return False
+    Multi-emitter support: fans out across every TRV declared in
+    room_trv_names[room] via HA list-form entity_id. One service call per
+    write (closing-degree, opening-degree) regardless of TRV count.
+    """
+    # INSTRUCTION-225A — manual override intercept. Local import avoids the
+    # module-level cycle (manual_state -> valve_control -> valve_dispatch).
+    from ... import manual_state
+    _entry = manual_state.get(room)
+    if _entry.mode == "MANUAL":
+        # PCS7-style block-level MANUAL override (INSTRUCTION-225 §2.2).
+        # Operator-explicit action overrides supervisory output AND shadow mode.
+        # Dissipation floor is bypassed below — it's a control-policy artefact
+        # (owned by the dissipation controller), not a hardware-protection limit;
+        # operator overrides policy. Slew and debounce are NOT bypassed — those
+        # protect the actuator and apply regardless of who is commanding.
+        target_position = _entry.position_pct
+        dfan_control = True  # MANUAL bypasses shadow mode per INSTRUCTION-225 §2.4
+        _mode_tag = "MANUAL"
+    else:
+        _mode_tag = "AUTO"
+
+    pairs = get_type2_entity_names(room, config)
+    closing_ids = [c for c, _ in pairs]
+    opening_ids = [o for _, o in pairs]
+
+    # Availability is gated upstream by check_direct_valve_available;
+    # no redundant in-function check (single caller-level gate).
 
     target_position = int(max(0, min(100, target_position)))
 
-    # Dissipation floor enforcement
-    if control_state is not None:
+    # AUTO-only: dissipation floor is a control-policy artefact owned by the
+    # dissipation controller, not a hardware-protection limit. MANUAL operator
+    # action overrides policy. Slew + debounce below are NOT gated on _mode_tag
+    # because they protect the actuator and apply to operator commands too.
+    if control_state is not None and _mode_tag == "AUTO":
         DISSIPATION_FLOOR_HOLD_S = 300
         diss_floor = control_state.dissipation_floor.get(room)
         if diss_floor is not None:
@@ -227,16 +294,22 @@ def apply_direct_valve_control_type2(
                 logging.debug(f"Type2 {room} slew limited to {target_position}% (from {last_pos}%)")
 
     if dfan_control:
-        set_ha_service("number", "set_value", {"entity_id": closing_entity, "value": target_position})
-        set_ha_service("number", "set_value", {"entity_id": opening_entity, "value": target_position})
+        set_ha_service("number", "set_value", {"entity_id": closing_ids, "value": target_position})
+        set_ha_service("number", "set_value", {"entity_id": opening_ids, "value": target_position})
 
         if control_state is not None:
             control_state.last_valve_position[room] = target_position
             control_state.last_valve_write_time[room] = time.time()
 
-        logging.info(f"ACTIVE: Set {room} Type2 valve to {target_position}%")
+        n = len(closing_ids)
+        logging.info(
+            f"{_mode_tag} ACTIVE: Set {room} Type2 valve to {target_position}% ({n} TRV{'s' if n > 1 else ''})"
+        )
     else:
-        logging.info(f"SHADOW: Would set {room} Type2 valve to {target_position}%")
+        n = len(closing_ids)
+        logging.info(
+            f"{_mode_tag} SHADOW: Would set {room} Type2 valve to {target_position}% ({n} TRV{'s' if n > 1 else ''})"
+        )
 
     return True
 
@@ -244,18 +317,42 @@ def apply_direct_valve_control_type2(
 def apply_direct_valve_control_type1(
     room: str, target_position: int, config: Dict, dfan_control: bool, control_state: Optional[RoomControlState] = None
 ) -> bool:
-    """Apply direct valve position control via Type1 single valve_position entity."""
-    type1_entity = get_type1_entity_name(room, config)
+    """Apply direct valve position control via Type1 single valve_position entity.
 
-    if fetch_ha_entity(type1_entity, default=None, suppress_log=True) is None:
-        logging.warning(f"Type1 entity not found for {room}: {type1_entity}")
-        return False
+    Multi-emitter support: fans out across every TRV declared in
+    room_trv_names[room] via HA list-form entity_id. One service call per
+    write regardless of TRV count.
+    """
+    # INSTRUCTION-225A — manual override intercept. Local import avoids the
+    # module-level cycle (manual_state -> valve_control -> valve_dispatch).
+    from ... import manual_state
+    _entry = manual_state.get(room)
+    if _entry.mode == "MANUAL":
+        # PCS7-style block-level MANUAL override (INSTRUCTION-225 §2.2).
+        # Operator-explicit action overrides supervisory output AND shadow mode.
+        # Dissipation floor is bypassed below — it's a control-policy artefact
+        # (owned by the dissipation controller), not a hardware-protection limit;
+        # operator overrides policy. Slew and debounce are NOT bypassed — those
+        # protect the actuator and apply regardless of who is commanding.
+        target_position = _entry.position_pct
+        dfan_control = True  # MANUAL bypasses shadow mode per INSTRUCTION-225 §2.4
+        _mode_tag = "MANUAL"
+    else:
+        _mode_tag = "AUTO"
+
+    type1_ids = get_type1_entity_names(room, config)
+
+    # Availability is gated upstream by check_direct_valve_available;
+    # no redundant in-function check (single caller-level gate).
 
     scale = config.get("room_valve_scale", {}).get(room, 255)
     target_position = int(max(0, min(100, target_position)))
 
-    # Dissipation floor enforcement
-    if control_state is not None:
+    # AUTO-only: dissipation floor is a control-policy artefact owned by the
+    # dissipation controller, not a hardware-protection limit. MANUAL operator
+    # action overrides policy. Slew + debounce below are NOT gated on _mode_tag
+    # because they protect the actuator and apply to operator commands too.
+    if control_state is not None and _mode_tag == "AUTO":
         DISSIPATION_FLOOR_HOLD_S = 300
         diss_floor = control_state.dissipation_floor.get(room)
         if diss_floor is not None:
@@ -301,15 +398,23 @@ def apply_direct_valve_control_type1(
                 logging.debug(f"Type1 {room} slew limited to {target_position}% ({target_hw}/{scale})")
 
     if dfan_control:
-        set_ha_service("number", "set_value", {"entity_id": type1_entity, "value": target_hw})
+        set_ha_service("number", "set_value", {"entity_id": type1_ids, "value": target_hw})
 
         if control_state is not None:
             control_state.last_valve_position[room] = target_position
             control_state.last_valve_write_time[room] = time.time()
 
-        logging.info(f"ACTIVE: Set {room} Type1 valve to {target_position}% ({target_hw}/{scale})")
+        n = len(type1_ids)
+        logging.info(
+            f"{_mode_tag} ACTIVE: Set {room} Type1 valve to {target_position}% ({target_hw}/{scale}) "
+            f"({n} TRV{'s' if n > 1 else ''})"
+        )
     else:
-        logging.info(f"SHADOW: Would set {room} Type1 valve to {target_position}% ({target_hw}/{scale})")
+        n = len(type1_ids)
+        logging.info(
+            f"{_mode_tag} SHADOW: Would set {room} Type1 valve to {target_position}% ({target_hw}/{scale}) "
+            f"({n} TRV{'s' if n > 1 else ''})"
+        )
 
     return True
 
@@ -318,6 +423,21 @@ def apply_direct_valve_control_generic(
     room: str, target_position: int, config: Dict, dfan_control: bool, control_state: Optional[RoomControlState] = None
 ) -> bool:
     """Apply direct valve position control via generic number entity."""
+    # INSTRUCTION-225A — manual override intercept. Local import avoids the
+    # module-level cycle (manual_state -> valve_control -> valve_dispatch).
+    from ... import manual_state
+    _entry = manual_state.get(room)
+    if _entry.mode == "MANUAL":
+        # PCS7-style block-level MANUAL override (INSTRUCTION-225 §2.2).
+        # Operator-explicit action overrides supervisory output AND shadow mode.
+        # Generic dispatcher has no dissipation-floor block; debounce below
+        # still applies (hardware-protection equivalence at this dispatcher).
+        target_position = _entry.position_pct
+        dfan_control = True  # MANUAL bypasses shadow mode per INSTRUCTION-225 §2.4
+        _mode_tag = "MANUAL"
+    else:
+        _mode_tag = "AUTO"
+
     valve_entity = f"number.qsh_{room}_valve_target"
 
     if fetch_ha_entity(valve_entity, default=None, suppress_log=True) is None:
@@ -337,9 +457,9 @@ def apply_direct_valve_control_generic(
         if control_state is not None:
             control_state.last_valve_position[room] = target_position
 
-        logging.info(f"ACTIVE: Set {room} generic valve to {target_position}%")
+        logging.info(f"{_mode_tag} ACTIVE: Set {room} generic valve to {target_position}%")
     else:
-        logging.info(f"SHADOW: Would set {room} generic valve to {target_position}%")
+        logging.info(f"{_mode_tag} SHADOW: Would set {room} generic valve to {target_position}%")
 
     return True
 
@@ -462,7 +582,11 @@ def apply_valve_position(
 
 
 def update_type2_external_temperatures(config: Dict, independent_sensors: Dict[str, float], dfan_control: bool) -> None:
-    """Push independent sensor readings to Type2 (Sonoff TRVZB) external temperature input."""
+    """Push independent sensor readings to Type2 (Sonoff TRVZB) external temperature input.
+
+    Multi-emitter support: fans out across every TRV declared in
+    room_trv_names[room]. One service call per room regardless of TRV count.
+    """
     zone_sensor_map = config.get("zone_sensor_map", {})
     type2_rooms = [r for r, hw in config.get("room_valve_hardware", {}).items() if hw == VALVE_HARDWARE_DIRECT_TYPE2]
 
@@ -479,42 +603,54 @@ def update_type2_external_temperatures(config: Dict, independent_sensors: Dict[s
         if temp < 5.0 or temp > 40.0:
             continue
 
-        trv_name = config.get("room_trv_names", {}).get(room, f"{room}_trv")
-        ext_temp_entity = f"number.{trv_name}_external_temperature_input"
+        trv_names = config.get("room_trv_names", {}).get(room) or [f"{room}_trv"]
+        ext_temp_ids = [f"number.{name}_external_temperature_input" for name in trv_names]
 
         if dfan_control:
-            set_ha_service("number", "set_value", {"entity_id": ext_temp_entity, "value": round(temp, 1)})
-            logging.debug(f"Type2 {room}: external temp set to {temp:.1f}C")
+            set_ha_service("number", "set_value", {"entity_id": ext_temp_ids, "value": round(temp, 1)})
+            logging.debug(f"Type2 {room}: external temp set to {temp:.1f}C ({len(ext_temp_ids)} TRV)")
         else:
-            logging.debug(f"SHADOW: Type2 {room}: would set external temp to {temp:.1f}C")
+            logging.debug(f"SHADOW: Type2 {room}: would set external temp to {temp:.1f}C ({len(ext_temp_ids)} TRV)")
 
 
 def reset_type2_to_normal(room: str, config: Dict) -> bool:
-    """Reset Type2 to normal thermostat operation."""
-    closing_entity, opening_entity = get_type2_entity_names(room, config)
+    """Reset Type2 to normal thermostat operation.
 
-    if fetch_ha_entity(closing_entity, default=None, suppress_log=True) is None:
+    Multi-emitter support: resets every TRV in the room. Best-effort —
+    if the first member's entity doesn't resolve, the room is treated as
+    unavailable and reset is skipped.
+    """
+    pairs = get_type2_entity_names(room, config)
+    closing_ids = [c for c, _ in pairs]
+    opening_ids = [o for _, o in pairs]
+
+    if fetch_ha_entity(closing_ids[0], default=None, suppress_log=True) is None:
         logging.warning(f"Type2 entities not found for {room}")
         return False
 
-    set_ha_service("number", "set_value", {"entity_id": closing_entity, "value": 0})
-    set_ha_service("number", "set_value", {"entity_id": opening_entity, "value": 100})
+    set_ha_service("number", "set_value", {"entity_id": closing_ids, "value": 0})
+    set_ha_service("number", "set_value", {"entity_id": opening_ids, "value": 100})
 
-    logging.info(f"Reset {room} Type2 to normal thermostat operation")
+    logging.info(f"Reset {room} Type2 to normal thermostat operation ({len(closing_ids)} TRV)")
     return True
 
 
 def reset_type1_to_normal(room: str, config: Dict) -> bool:
-    """Reset Type1 valve to normal thermostat operation."""
-    type1_entity = get_type1_entity_name(room, config)
+    """Reset Type1 valve to normal thermostat operation.
 
-    if fetch_ha_entity(type1_entity, default=None, suppress_log=True) is None:
+    Multi-emitter support: resets every TRV in the room. Best-effort —
+    if the first member's entity doesn't resolve, the room is treated as
+    unavailable and reset is skipped.
+    """
+    type1_ids = get_type1_entity_names(room, config)
+
+    if fetch_ha_entity(type1_ids[0], default=None, suppress_log=True) is None:
         logging.warning(f"Type1 entity not found for {room}")
         return False
 
-    set_ha_service("number", "set_value", {"entity_id": type1_entity, "value": 100})
+    set_ha_service("number", "set_value", {"entity_id": type1_ids, "value": 100})
 
-    logging.info(f"Reset {room} Type1 to normal operation (100%)")
+    logging.info(f"Reset {room} Type1 to normal operation (100%) ({len(type1_ids)} TRV)")
     return True
 
 

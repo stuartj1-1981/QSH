@@ -12,6 +12,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...signal_bus import InputBlock, OutputBlock
+from ...events import EventKind, EventSpec, get_annunciator
 from .client import MQTTClient, MQTTClientConfig
 from ..resolve import ResolvedValue, deep_get, _validate_range
 from ..hot_water_payloads import classify_hot_water_payload
@@ -22,6 +23,7 @@ from .topic_map import (
     TopicMap,
     TopicMapping,
     build_topic_map,
+    command_topic_for_source,
     evaluate_availability_match,
     extract_json_value,
     get_control_topics,
@@ -33,6 +35,26 @@ from .topic_map import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# INSTRUCTION-221C — register MQTT events. Idempotent for identical specs;
+# singleton lookup at use site so test fixtures resetting the annunciator
+# do not strand the references.
+def _register_mqtt_events() -> None:
+    ann = get_annunciator()
+    ann.register(EventSpec(
+        name="MQTT.control_topic_invalid_payload",
+        kind=EventKind.LATCHED,
+        payload_fields=("topic", "payload_excerpt"),
+        latch_key=("topic",),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="MQTT.control_enabled_missing",
+        kind=EventKind.LATCHED,
+        payload_fields=(),
+        default_level=logging.WARNING,
+    ))
 
 
 # Tracks availability topics whose payloads have been warned about, to avoid
@@ -202,6 +224,16 @@ class MQTTDriver:
         # fallback (pid_target_internal).
         self._comfort_startup_logged: bool = False
 
+        # INSTRUCTION-231B V2 — tracks the emitter stem of the most-recent
+        # fresh-winning candidate per room for multi-emitter valve_position
+        # resolution. Used in read_inputs' all-stale recovery branch to
+        # mirror HA driver 231A's _last_winning_entity_per_room semantic.
+        # Without this, the all-stale branch could walk backward in time
+        # when the winning emitter changed between fresh cycles (V1 HIGH-1).
+        # Instance-scoped because MQTTDriver is an instantiated class;
+        # natural per-test isolation via fresh MQTTDriver(cfg) construction.
+        self._last_winning_emitter_per_room: Dict[str, str] = {}
+
         rooms = config.get("rooms", {})
         if not rooms:
             raise ValueError("MQTTDriver: config['rooms'] is empty — need at least one room")
@@ -237,6 +269,27 @@ class MQTTDriver:
             _prefixed(self._prefix, t) for t in get_control_topics(config)
         ]
         all_topics = list(dict.fromkeys(self._topic_map.subscribe_topics + control_topics))
+
+        # INSTRUCTION-220C — include forecast topic in subscription set.
+        # Inline extension of all_topics rather than topic_map registration:
+        # topic_map services InputBlock-bound topics only (per topic_map module
+        # docstring scope clarification); forecast is subscribe-only (not
+        # InputBlock-bound — consumed via ctx.forecast_state by
+        # ForecastController after 220D wires the Protocol).
+        forecast_topic = (
+            config.get("entities", {}).get("forecast_mqtt_topic", "").strip()
+        )
+        if forecast_topic:
+            full_forecast_topic = (
+                _prefixed(self._prefix, forecast_topic) if self._prefix else forecast_topic
+            )
+            if full_forecast_topic not in all_topics:
+                all_topics.append(full_forecast_topic)
+            logger.info(
+                "MQTT forecast: subscribing to %s (configured via mqtt.inputs.forecast.topic)",
+                full_forecast_topic,
+            )
+
         self._mqtt.subscribe(all_topics)
 
         logger.info(
@@ -252,6 +305,17 @@ class MQTTDriver:
                 "and clean (total_demand) formats. Set mqtt_legacy_shadow_topics: false in "
                 "qsh.yaml to disable legacy topics. Legacy topics will be removed in the "
                 "next major version."
+            )
+
+        # INSTRUCTION-225B — boot-time AUTO-on-restart contract log.
+        from qsh import manual_state
+        manual_state.init(config)
+        _direct_count = len(manual_state.configured_direct_rooms(config))
+        if _direct_count > 0:
+            logger.info(
+                "manual_state (mqtt): %d direct TRVs configured; all start in AUTO on restart "
+                "(transient state, INSTRUCTION-225 V2)",
+                _direct_count,
             )
 
         return {"prev_mode": "heat"}
@@ -297,12 +361,19 @@ class MQTTDriver:
             ResolvedValue with source="external" when MQTT cache hit+valid,
             source="internal" otherwise.
         """
+        _register_mqtt_events()
+        ann = get_annunciator()
         full_topic = _prefixed(self._prefix, topic_suffix)
         entry = cache.get(full_topic)
         if entry is not None:
             raw_str = entry[0]  # (payload_str, timestamp)
             typed = validate(raw_str) if validate is not None else raw_str
             if typed is not None:
+                # Validator returned non-None — bad payload (if any) is
+                # resolved. Clear the latch for this topic. Per H5: only a
+                # positive validator-success exits the latch; cache-absent
+                # (handled below by the `entry is not None` gate) does NOT.
+                ann.exited("MQTT.control_topic_invalid_payload", topic=full_topic)
                 return ResolvedValue(
                     value=typed,
                     source="external",
@@ -310,12 +381,15 @@ class MQTTDriver:
                     external_raw=raw_str,
                 )
             else:
-                logger.warning(
-                    "MQTT control topic %s: invalid payload '%s', using internal",
-                    full_topic,
-                    raw_str,
+                payload_excerpt = raw_str[:64] if raw_str else ""
+                ann.entered(
+                    "MQTT.control_topic_invalid_payload",
+                    topic=full_topic,
+                    payload_excerpt=payload_excerpt,
                 )
-        # Cache empty or invalid — use internal value via deep_get
+        # Cache empty or invalid — use internal value via deep_get.
+        # NB: cache-absent intentionally does NOT exit any latch (H5):
+        # "no information available" is not "known resolved".
         internal = deep_get(self._config, internal_key, default)
         return ResolvedValue(
             value=internal,
@@ -402,6 +476,10 @@ class MQTTDriver:
         room_temps: Dict[str, float] = {}
         independent_sensors: Dict[str, float] = {}
         valve_positions: Dict[str, float] = {}
+        # INSTRUCTION-224C — per-emitter valve readings. Outer key: room.
+        # Inner key: emitter stem from _mqtt_emitter_stem(topic). Aggregate
+        # in valve_positions is recomputed as mean after the message loop.
+        valve_positions_per_emitter: Dict[str, Dict[str, float]] = {}
         occupancy_sensor_states: Dict[str, str] = {}
         signal_quality: Dict[str, str] = {}
         capabilities: Dict[str, bool] = {}
@@ -432,6 +510,15 @@ class MQTTDriver:
                 str, List[Tuple[float, str, TopicMapping]]
             ] = {}
             _system_value_candidates: Dict[
+                str, List[Tuple[float, str, TopicMapping]]
+            ] = {}
+            # INSTRUCTION-231B — valve_position candidates per room, in
+            # declaration order, with quality so the post-loop resolution
+            # step can apply the first-fresh-in-declaration-order rule
+            # (parent INSTRUCTION-231 §"Driver-Parity Principle" — mirrors
+            # the HA driver's 231A heating_entity list-form semantic).
+            # Replaces 224C's mean-aggregation rule.
+            _valve_position_candidates: Dict[
                 str, List[Tuple[float, str, TopicMapping]]
             ] = {}
 
@@ -466,8 +553,32 @@ class MQTTDriver:
                         _room_temp_candidates.setdefault(mapping.room, []).append(
                             (value, quality, mapping)
                         )
-                    elif mapping.field == "valve_position" and value is not None:
-                        valve_positions[mapping.room] = value
+                    elif (
+                        mapping.field == "valve_position"
+                        and value is not None
+                        and quality != "unavailable"
+                    ):
+                        # INSTRUCTION-231B — accumulate per-room candidates
+                        # in declaration order (input_mappings preserves the
+                        # topic_map list ordering from YAML). V2 LOW-2 fix:
+                        # quality=="unavailable" candidates are presumed-
+                        # untrustworthy (LWT offline / never-published /
+                        # past the 7200s valve-unavailable threshold) and
+                        # excluded at the routing site, NOT silently
+                        # accumulated and skipped at resolution time. Post-
+                        # loop resolution step picks first quality=="good"
+                        # (first-fresh-in-declaration-order); supersedes
+                        # 224C's mean-aggregation rule per parent §"Driver-
+                        # Parity Principle". 224C's invariant (every
+                        # valve_position mapping carries a non-None emitter)
+                        # is preserved.
+                        assert mapping.emitter is not None, (
+                            f"valve_position mapping missing emitter for room "
+                            f"{mapping.room}; topic_map.py Task 3 invariant violated"
+                        )
+                        _valve_position_candidates.setdefault(mapping.room, []).append(
+                            (value, quality, mapping)
+                        )
                     elif mapping.field == "occupancy_sensor":
                         extracted = parse_payload_string(
                             payload_str, mapping.payload_format, mapping.json_path
@@ -593,6 +704,89 @@ class MQTTDriver:
         has_live_return = capabilities.get("has_live_return_temp", False)
         has_live_flow_rate = capabilities.get("has_live_flow_rate", False)
         has_live_hot_water = capabilities.get("has_live_hot_water", False)
+
+        # INSTRUCTION-231B V2 — replace 224C's mean aggregation with first-
+        # fresh-in-declaration-order resolution with last-winner recovery.
+        # Parent INSTRUCTION-231 §"Driver-Parity Principle" — same rule the
+        # HA driver uses for operator-declared heating_entity list-form
+        # (231A V2). Three-tier resolution:
+        #
+        #   Tier 1 (first-fresh):  iterate candidates in declaration order;
+        #                          first quality=="good" wins. Update
+        #                          self._last_winning_emitter_per_room.
+        #
+        #   Tier 2 (last-winner):  if no candidate is "good", look up the
+        #                          most recent winning emitter for this
+        #                          room and use its cached value if its
+        #                          mapping is in this cycle's candidate list.
+        #                          Mirrors HA V2's _last_winning_entity_per_room
+        #                          recovery — prevents walking backward in
+        #                          time when the winning emitter changed
+        #                          between fresh cycles (V1 reviewer HIGH-1).
+        #
+        #   Tier 3 (cold-start):   if no winner has ever been recorded for
+        #                          this room (genuinely fresh install,
+        #                          first cycle), fall back to first
+        #                          quality=="stale" in declaration order.
+        #                          Defensive default for the never-fresh
+        #                          edge case.
+        #
+        # Tier 1 candidates are guaranteed to have quality "good"; Tier 2
+        # and 3 candidates have quality "stale" (V2 LOW-2 gate at Task 1c
+        # excludes "unavailable" at the routing site).
+        for _room, _candidates in _valve_position_candidates.items():
+            # Tier 1 — first fresh wins.
+            fresh = next(
+                ((v, q, m) for (v, q, m) in _candidates if q == "good"),
+                None,
+            )
+            if fresh is not None:
+                v, _q, m = fresh
+                valve_positions[_room] = round(float(v), 1)
+                valve_positions_per_emitter[_room] = {m.emitter: float(v)}
+                self._last_winning_emitter_per_room[_room] = m.emitter
+                continue
+
+            # Tier 2 — last-winner recovery.
+            last_winner = self._last_winning_emitter_per_room.get(_room)
+            if last_winner is not None:
+                last_winner_entry = next(
+                    (
+                        (v, q, m)
+                        for (v, q, m) in _candidates
+                        if m.emitter == last_winner
+                    ),
+                    None,
+                )
+                if last_winner_entry is not None:
+                    v, _q, m = last_winner_entry
+                    valve_positions[_room] = round(float(v), 1)
+                    valve_positions_per_emitter[_room] = {m.emitter: float(v)}
+                    continue
+
+            # Tier 3 — cold-start defensive: first stale-with-value.
+            # Only reached when no winner has ever been recorded for this
+            # room (fresh install, first-cycle-all-stale) OR when the
+            # recorded winner's mapping is no longer present (operator
+            # removed the topic from YAML between cycles).
+            stale = next(
+                ((v, q, m) for (v, q, m) in _candidates if q == "stale"),
+                None,
+            )
+            if stale is not None:
+                v, _q, m = stale
+                valve_positions[_room] = round(float(v), 1)
+                valve_positions_per_emitter[_room] = {m.emitter: float(v)}
+                # Cold-start path: record this cycle's winner so the next
+                # all-stale cycle has a Tier 2 anchor.
+                self._last_winning_emitter_per_room[_room] = m.emitter
+                continue
+
+            # No candidates at all (all were "unavailable" and filtered at
+            # the Pass 1 routing site, or the room has no valve_position
+            # topics declared). Omit room entirely — matches the pre-224C
+            # behaviour for rooms with no valve_position publisher.
+            # per_emitter stays absent / empty for this room.
 
         # Derive avg_open_frac from valve_positions if any zones are configured.
         # Valve positions are stored 0–100 by convention (matches heating_percs);
@@ -740,6 +934,9 @@ class MQTTDriver:
             room_temps=room_temps,
             independent_sensors=independent_sensors,
             valve_positions=valve_positions,
+            valve_positions_per_emitter={
+                _r: dict(_em) for _r, _em in valve_positions_per_emitter.items()
+            },
             avg_open_frac=avg_open_frac,
             outdoor_temp=system_values.get("outdoor_temp", 5.0),
             target_temp=comfort_temp_rv.value,
@@ -785,12 +982,14 @@ class MQTTDriver:
         # path is config.py YAML load which defaults missing control_enabled
         # to True on load; this fallback only activates on in-memory
         # corruption.
+        _register_mqtt_events()
+        ann = get_annunciator()
         control_enabled = config.get("control_enabled")
         if control_enabled is None:
-            logger.warning(
-                "control_enabled missing from config — defaulting to shadow (defence-in-depth)"
-            )
+            ann.entered("MQTT.control_enabled_missing")
             control_enabled = False
+        else:
+            ann.exited("MQTT.control_enabled_missing")
 
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
 
@@ -808,25 +1007,88 @@ class MQTTDriver:
                     outputs.applied_flow, outputs.applied_mode,
                 )
 
-        # ── Heat source command ──
-        if outputs.heat_source_changed and outputs.heat_source_command is not None:
-            if control_enabled:
-                for om in self._topic_map.output_mappings:
-                    if om.field == "heat_source_command":
-                        self._mqtt.publish(om.topic, outputs.heat_source_command)
-            else:
-                logger.debug(
-                    "SHADOW MODE: suppressed heat_source_command → %s",
-                    outputs.heat_source_command,
-                )
+        # ── 228A: per-source heat source commands ────────────────────────
+        # No legacy fallback to heat_source_command. Single-source installs
+        # receive a single-key dict synthesised by HardwareController.
+        if outputs.source_changed and outputs.source_command:
+            sources_by_name = {
+                s.get("name", ""): s for s in config.get("heat_sources", [])
+            }
+            for source_name, cmd in outputs.source_command.items():
+                src_cfg = sources_by_name.get(source_name)
+                if src_cfg is None:
+                    logger.warning(
+                        "MQTT dispatch: unknown source '%s' — skipping",
+                        source_name,
+                    )
+                    continue
+                topic = command_topic_for_source(src_cfg)
+                if control_enabled:
+                    self._mqtt.publish(topic, cmd, qos=1, retain=False)
+                else:
+                    logger.debug(
+                        "SHADOW MODE: would publish %s -> %s", topic, cmd,
+                    )
 
-        # ── Valve commands ──
-        if outputs.valves_changed:
-            if control_enabled:
+        # ── Valve commands (MANUAL-aware per INSTRUCTION-225B) ──
+        from qsh import manual_state
+
+        # Build effective setpoints: pipeline output as base, MANUAL substitutions on top.
+        # Also inject MANUAL rooms that the pipeline omitted from this cycle's dict, so
+        # the override is re-asserted every cycle regardless of pipeline coverage.
+        effective_setpoints: Dict[str, float] = dict(outputs.valve_setpoints)
+        manual_rooms_active: set = set()
+        for room in manual_state.configured_direct_rooms(config):
+            entry = manual_state.get(room)
+            if entry.mode == "MANUAL":
+                # Defensive: position_pct cannot be None for a MANUAL entry per
+                # set_manual's validation (225A Task 1), but the type is Optional[int]
+                # at the dataclass level, so guard explicitly. Skip the room and log
+                # rather than crash the publish loop on contract violation.
+                if entry.position_pct is None:
+                    logger.warning(
+                        "manual_state contract violation: room %r MANUAL with position_pct=None; skipping publish",
+                        room,
+                    )
+                    continue
+                effective_setpoints[room] = float(entry.position_pct)
+                manual_rooms_active.add(room)
+
+        # Decide whether the publish loop runs at all.
+        # Any MANUAL active forces the loop on (MANUAL bypasses shadow mode per parent §2.4).
+        if outputs.valves_changed or manual_rooms_active:
+            if control_enabled or manual_rooms_active:
+                published_auto = 0
+                published_manual = 0
                 for om in self._topic_map.output_mappings:
-                    if om.field == "valve_setpoint" and om.room and om.room in outputs.valve_setpoints:
-                        self._mqtt.publish(om.topic, str(outputs.valve_setpoints[om.room]))
+                    if om.field != "valve_setpoint" or not om.room:
+                        continue
+                    if om.room not in effective_setpoints:
+                        continue
+                    room_in_manual = om.room in manual_rooms_active
+                    if not control_enabled and not room_in_manual:
+                        # Shadow mode active AND this room is AUTO — suppress this publish only.
+                        continue
+                    self._mqtt.publish(om.topic, str(effective_setpoints[om.room]))
+                    if room_in_manual:
+                        published_manual += 1
+                    else:
+                        published_auto += 1
+                if published_manual:
+                    logger.info(
+                        "MANUAL override: published %d valve_setpoint(s) for %d room(s)",
+                        published_manual, len(manual_rooms_active),
+                    )
+                if published_auto and not control_enabled:
+                    # Defence-in-depth: this branch should be unreachable because
+                    # control_enabled=False AND room not in manual_rooms_active is
+                    # suppressed above. If it fires, log loud and continue.
+                    logger.warning(
+                        "MANUAL-aware gate inconsistency: %d AUTO publishes occurred under shadow mode",
+                        published_auto,
+                    )
             else:
+                # Pure AUTO + shadow mode — original V1 behaviour.
                 logger.debug(
                     "SHADOW MODE: suppressed %d valve setpoint(s)",
                     len(outputs.valve_setpoints),
@@ -952,6 +1214,97 @@ class MQTTDriver:
             max_retries,
         )
 
+    def get_forecast_provider(self):
+        """Return MQTTForecastProvider when mqtt.inputs.forecast.topic is
+        configured (surfaced via config_entities["forecast_mqtt_topic"] by
+        config.py per INSTRUCTION-220C Task 2); else NullForecastProvider.
+
+        INSTRUCTION-220C activation of 220A's stub. Provider instance cached
+        on self._forecast_provider after first construction. Per parent §2.6:
+        this method is not invoked by main.py in production until 220D
+        clearance — during the 220C->220D window the method exists and is
+        callable from test code only.
+
+        Loud-guard on pre-setup invocation (parent §2.6 + 220B V2 H-1
+        disposition pattern): if get_forecast_provider() is called before
+        self._mqtt is set (i.e., before setup()), raise RuntimeError —
+        Protocol contract violation. Returning a stale NullForecastProvider
+        would poison the cache permanently.
+        """
+        if hasattr(self, "_forecast_provider"):
+            return self._forecast_provider
+        # V2 M-1 fold: defensive hasattr pattern aligned with 220B V2's loud-guard.
+        # MQTTDriver.__init__ does initialise self._mqtt = None (driver.py:203),
+        # so `is None` check would work — but hasattr is robust to any future
+        # __init__ refactor that defers initialisation.
+        if not hasattr(self, "_mqtt") or self._mqtt is None:
+            raise RuntimeError(
+                "MQTTDriver.get_forecast_provider() called before setup() — "
+                "Protocol contract violation. setup() must complete (establishing "
+                "self._mqtt as a connected MQTTClient) before forecast provider "
+                "construction."
+            )
+        forecast_topic = (
+            self._config.get("entities", {}).get("forecast_mqtt_topic", "").strip()
+        )
+        if not forecast_topic:
+            from ...forecast.providers.null import NullForecastProvider
+            self._forecast_provider = NullForecastProvider()
+        else:
+            from ...forecast.providers.mqtt import MQTTForecastProvider
+            self._forecast_provider = MQTTForecastProvider(
+                mqtt_client=self._mqtt,
+                topic=forecast_topic,
+                topic_prefix=self._prefix,
+            )
+        return self._forecast_provider
+
     def wait(self) -> None:
         """Block for one cycle interval."""
         time.sleep(self._cycle_interval)
+
+    # ── Manual override (INSTRUCTION-225B) ─────────────────────────────
+
+    def apply_manual_position(self, room: str, position_pct: int, config: Dict) -> bool:
+        """Publish an immediate MANUAL valve_setpoint for one room to MQTT.
+
+        Fan-out over multi-topic rooms matches the AUTO write loop — every
+        topic mapped to this room with field == 'valve_setpoint' receives the
+        published value. Returns True if at least one topic was published,
+        False on disconnected MQTT / indirect room / no matching mapping.
+        Does not raise.
+        """
+        if not self._mqtt or not self._topic_map:
+            logger.debug("MQTT not connected — MANUAL publish dropped for %s", room)
+            return False
+
+        try:
+            from qsh import manual_state
+            direct_rooms = set(manual_state.configured_direct_rooms(config))
+        except Exception as e:  # noqa: BLE001 — defensive; never crash the hot path
+            logger.warning("manual_state.configured_direct_rooms() failed: %s", e)
+            return False
+
+        if room not in direct_rooms:
+            logger.info("Room %r is not a configured direct TRV; MANUAL publish skipped", room)
+            return False
+
+        pct = max(0, min(100, int(position_pct)))
+        published = 0
+        for om in self._topic_map.output_mappings:
+            if om.field == "valve_setpoint" and om.room == room:
+                try:
+                    self._mqtt.publish(om.topic, str(float(pct)))
+                    published += 1
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("MQTT publish failed for %s -> %s: %s", room, om.topic, e)
+
+        if published:
+            logger.info("MANUAL: published %d topic(s) for %s at %d%%", published, room, pct)
+        return published > 0
+
+    def manual_state_snapshot(self, config: Dict) -> Dict[str, Any]:
+        """Return MANUAL/AUTO state for every configured direct TRV."""
+        from qsh import manual_state
+        rooms = manual_state.configured_direct_rooms(config)
+        return {r: manual_state.get(r) for r in rooms}

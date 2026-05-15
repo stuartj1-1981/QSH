@@ -280,3 +280,77 @@ describe('RoomCard temperature_source badge', () => {
     expect(screen.queryByLabelText('no temperature sensor')).not.toBeInTheDocument()
   })
 })
+
+describe('RoomCard MANUAL override badge (INSTRUCTION-225D)', () => {
+  const baseRoom: RoomState = {
+    temp: 20.0, target: 21.0, valve: 50, occupancy: 'occupied',
+    status: 'ok', facing: 0.5, area_m2: 20, ceiling_m: 2.4,
+  }
+
+  it('renders no badge when room is in AUTO', () => {
+    render(
+      <RoomCard
+        name="lounge"
+        room={baseRoom}
+        manualEntry={{
+          room: 'lounge', mode: 'AUTO', position_pct: null,
+          set_by: 'startup_default', set_at: 0, hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    expect(screen.queryByTestId('manual-badge-lounge')).toBeNull()
+  })
+
+  it('renders MAN N% badge when room is in MANUAL', () => {
+    render(
+      <RoomCard
+        name="lounge"
+        room={baseRoom}
+        manualEntry={{
+          room: 'lounge', mode: 'MANUAL', position_pct: 65,
+          set_by: 'engineering_ui', set_at: 1715600000, hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    const badge = screen.getByTestId('manual-badge-lounge')
+    expect(badge.textContent).toBe('MAN 65%')
+  })
+
+  it('aria-label reads set_by from the entry (V3 D3 — data-driven, not hardcoded)', () => {
+    render(
+      <RoomCard
+        name="lounge"
+        room={baseRoom}
+        manualEntry={{
+          room: 'lounge', mode: 'MANUAL', position_pct: 30,
+          set_by: 'external_script', set_at: 0, hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    const badge = screen.getByTestId('manual-badge-lounge')
+    const aria = badge.getAttribute('aria-label') ?? ''
+    expect(aria).toMatch(/Manual override active/i)
+    expect(aria).toContain('external_script')
+    expect(aria).toContain('30')
+    // Crucially, the aria-label must NOT bake in "Engineering UI" or any
+    // other constant string — the value is sourced from entry.set_by.
+    expect(aria).not.toContain('Engineering UI')
+  })
+
+  it('dark-mode contrast class present', () => {
+    render(
+      <div className="dark">
+        <RoomCard
+          name="lounge"
+          room={baseRoom}
+          manualEntry={{
+            room: 'lounge', mode: 'MANUAL', position_pct: 65,
+            set_by: 'engineering_ui', set_at: 0, hardware_type: 'direct_type1',
+          }}
+        />
+      </div>
+    )
+    const badge = screen.getByTestId('manual-badge-lounge')
+    expect(badge.className).toMatch(/dark:text-amber-300/)
+  })
+})

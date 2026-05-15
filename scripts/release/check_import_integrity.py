@@ -78,6 +78,8 @@ INIT_ONLY_SHIP_PATHS: Set[str] = {
     "qsh.pipeline.controllers",
     "qsh.projection",
     "qsh.tariff",
+    "qsh.forecast",
+    "qsh.forecast.providers",
 }
 
 # Extra directories to exclude beyond what the rsync manifest covers.

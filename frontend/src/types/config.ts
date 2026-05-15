@@ -30,7 +30,11 @@ export type RoomMqttTopicValue = string | MqttTopicInput
 
 export interface RoomMqttTopics {
   room_temp?: RoomMqttTopicValue
-  valve_position?: RoomMqttTopicValue
+  // INSTRUCTION-224C/E — valve_position accepts a list of topic strings for
+  // multi-emitter zones (mirrors the 222B valve_setpoint/trv_setpoint
+  // backend precedent). Each list entry maps to one emitter stem at the
+  // driver layer.
+  valve_position?: RoomMqttTopicValue | string[]
   valve_setpoint?: string
   trv_setpoint?: string
   occupancy_sensor?: string
@@ -102,7 +106,10 @@ export interface RoomConfigYaml {
   emitter_type?: 'radiator' | 'ufh' | 'fan_coil'
   trv_entity?: string | string[]
   independent_sensor?: string
-  heating_entity?: string
+  // INSTRUCTION-231C — list-form for multi-emitter rooms (open_plan
+  // pattern). Parallels trv_entity which was widened to string | string[]
+  // in a pre-231 instruction; 231C closes the schema-asymmetry gap.
+  heating_entity?: string | string[]
   control_mode?: 'indirect' | 'direct' | 'none'
   valve_hardware?: 'direct_type1' | 'direct_type2' | 'generic'
   valve_scale?: number
@@ -212,6 +219,23 @@ export interface SourceSelectionYaml {
   min_dwell_minutes: number
   score_deadband_pct: number
   max_switches_per_day: number
+}
+
+// 228B Task 1: frontend-internal representation of source-selection
+// settings. The `lock:<name>` mode form is the component-state shape;
+// it is stripped to the bare `<name>` at the save boundary because the
+// backend's _find_source_by_mode at source_selection.py expects raw
+// names (no prefix). Unit conventions stay in line with the existing
+// YAML wire shape: dwell is stored in minutes, deadband as percentage,
+// cap as an integer count. 228B-internal `SourceSelectionConfig` is a
+// thin alias that adds the lock-form mode type for clarity at the call
+// sites; the persisted format remains `SourceSelectionYaml`.
+export interface SourceSelectionConfig {
+  mode: 'auto' | `lock:${string}`
+  preference: number               // 0.0..1.0 (0=pure cost, 1=pure carbon)
+  min_dwell_minutes: number        // backend YAML key; integer minutes
+  score_deadband_pct: number       // backend YAML key; percentage 0..100
+  max_switches_per_day: number     // 1..12 (UI clamp; backend has no upper bound)
 }
 
 export interface OutdoorYaml {
@@ -435,6 +459,10 @@ export interface QshConfigYaml {
   flow_max_internal?: number
   pid_target_internal?: number
   publish_mqtt_shadow?: boolean
+
+  // Vendor write-budget knobs (216A/B). Integers in [3, 6]; default 6.
+  flow_writes_per_hour?: number
+  mode_writes_per_hour?: number
 }
 
 /** Entity candidate returned by the wizard scan endpoint. */

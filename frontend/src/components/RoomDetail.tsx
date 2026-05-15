@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { X, Calendar, Plane, Flame, Eye, EyeOff } from 'lucide-react'
 import { formatTemp, statusColor, cn } from '../lib/utils'
-import type { RoomState, SysidRoom, BoostRoom } from '../types/api'
+import type { RoomState, SysidRoom, BoostRoom, ManualEntry } from '../types/api'
 import { useRoomHistory } from '../hooks/useHistory'
 import { TrendChart } from './TrendChart'
 import { apiUrl } from '../lib/api'
@@ -21,9 +21,15 @@ interface RoomDetailProps {
   }
   /** See RoomCard.hpActive — same semantics. Defaults to `true`. */
   hpActive?: boolean
+  /**
+   * INSTRUCTION-225D — manual-state entry for this room. Read-only context
+   * (no toggle here; AUTO/MAN toggle lives on the engineering Valves page
+   * per parent §2.8). Strip renders only when `mode === 'MANUAL'`.
+   */
+  manualEntry?: ManualEntry
 }
 
-export function RoomDetail({ name, room, sysid, boost, engineering, onClose, entityIds, hpActive = true }: RoomDetailProps) {
+export function RoomDetail({ name, room, sysid, boost, engineering, onClose, entityIds, hpActive = true, manualEntry }: RoomDetailProps) {
   const { data: roomHistory } = useRoomHistory(['temp', 'valve'], 24)
   const thisRoomHistory = roomHistory[name] ?? []
 
@@ -49,6 +55,27 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
 
         {/* Scrollable content */}
         <div className="overflow-y-auto px-4 sm:px-6 pb-2 min-h-0">
+
+        {/* INSTRUCTION-225D — MANUAL OVERRIDE context strip (read-only) */}
+        {manualEntry?.mode === 'MANUAL' && manualEntry.position_pct !== null && (
+          <div
+            className="mb-4 rounded-lg bg-amber-500/15 border border-amber-500/40 px-3 py-2 text-amber-900 dark:text-amber-100"
+            data-testid="manual-strip"
+          >
+            <div className="text-xs font-bold uppercase tracking-wider">Manual Override</div>
+            <div className="text-sm mt-0.5">
+              Position {manualEntry.position_pct} %
+              <span className="px-2">·</span>
+              Set by {manualEntry.set_by}
+              {manualEntry.set_at > 0 && (
+                <>
+                  <span className="px-2">·</span>
+                  Set at {new Date(manualEntry.set_at * 1000).toLocaleTimeString()}
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Temperature */}
         <div className="text-center mb-6">
@@ -119,6 +146,31 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
           <DetailItem label="Area" value={`${room.area_m2}m²`} />
           <DetailItem label="Ceiling" value={`${room.ceiling_m}m`} />
         </div>
+
+        {/* INSTRUCTION-224E — per-emitter valve breakdown for multi-emitter zones.
+            Hidden for single-emitter rooms (length <= 1) since the aggregate Valve
+            line above is the only useful number in that case. */}
+        {room.valve_positions_per_emitter &&
+          Object.keys(room.valve_positions_per_emitter).length >= 2 && (
+            <div
+              className="mt-3 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2"
+              data-testid="per-emitter-valve-block"
+            >
+              <div className="text-xs text-[var(--text-muted)] mb-1.5">
+                Per-Emitter Valve Position
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {Object.entries(room.valve_positions_per_emitter).map(([emitter, pct]) => (
+                  <div key={emitter} className="flex justify-between">
+                    <span className="text-[var(--text-muted)] truncate">{emitter}</span>
+                    <span className="text-[var(--text)] tabular-nums">
+                      {pct === null || pct === undefined ? '--' : `${Math.round(pct)}%`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
         {/* Temperature history */}
         {tempData.length > 0 && (

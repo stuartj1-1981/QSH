@@ -225,7 +225,11 @@ describe('useLiveViewData', () => {
           switch_count_today: 0,
           max_switches_per_day: 4,
           failover_active: false,
-          last_switch_reason: '',
+          last_switch_reason: 'cost',
+          // 228B Task 1: new required fields on SourceSelectionPayload base.
+          reason: 'cost',
+          detail: '',
+          blocked_switches: [],
         },
       }),
       isConnected: true,
@@ -248,5 +252,137 @@ describe('useLiveViewData', () => {
 
     expect(result.current.data!.source.isMultiSource).toBe(false)
     expect(result.current.data!.source.type).toBe('heat_pump')
+  })
+
+  // INSTRUCTION-232: performance provenance gate.
+  // The four tests below cover every branch of the new gate
+  // (`isHp && hs.performance.source === 'live'`). Together they pin
+  // the contract that the canvas COP is only surfaced when the
+  // resolver marks the performance value `'live'`, and that the
+  // gate's two conditions (`isHp` AND `source === 'live'`) are both
+  // load-bearing.
+
+  it('surfaces hp.cop when heat-pump performance.source is "live"', () => {
+    mockUseLive.mockReturnValue({
+      data: makeCycleMessage({
+        status: {
+          operating_state: 'Winter (Heating)',
+          control_enabled: true, comfort_temp: 20, optimal_flow: 35, applied_flow: 35,
+          optimal_mode: 'normal', applied_mode: 'normal', total_demand: 5, outdoor_temp: 5,
+          recovery_time_hours: 0, capacity_pct: 50, hp_capacity_kw: 8, min_load_pct: 10,
+          heat_source: {
+            type: 'heat_pump',
+            input_power_kw: 4,
+            thermal_output_kw: 14,
+            thermal_output_source: 'measured',
+            performance: { value: 3.5, source: 'live' },
+            flow_temp: 35, return_temp: 30, delta_t: 5, flow_rate: 0.2,
+          },
+          comfort_pct: 95,
+        },
+      }),
+      isConnected: true,
+      lastUpdate: Date.now(),
+    })
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+
+    const { result } = renderHook(() => useLiveViewData())
+
+    expect(result.current.data!.hp.cop).toBe(3.5)
+  })
+
+  it('suppresses hp.cop (= 0) when heat-pump performance.source is "config"', () => {
+    // Regression: HP off → resolver emits the caps baseline (2.5) tagged
+    // `'config'`. Without the gate this leaks onto the canvas as a fake
+    // measured COP. The gate forces cop=0; the renderer suppresses on
+    // `cop > 0`.
+    mockUseLive.mockReturnValue({
+      data: makeCycleMessage({
+        status: {
+          operating_state: 'Winter (Heating)',
+          control_enabled: true, comfort_temp: 20, optimal_flow: 35, applied_flow: 35,
+          optimal_mode: 'normal', applied_mode: 'normal', total_demand: 5, outdoor_temp: 5,
+          recovery_time_hours: 0, capacity_pct: 50, hp_capacity_kw: 8, min_load_pct: 10,
+          heat_source: {
+            type: 'heat_pump',
+            input_power_kw: 0,
+            thermal_output_kw: 0,
+            thermal_output_source: 'measured',
+            performance: { value: 2.5, source: 'config' },
+            flow_temp: 25, return_temp: 25, delta_t: 0, flow_rate: 0,
+          },
+          comfort_pct: 95,
+        },
+      }),
+      isConnected: true,
+      lastUpdate: Date.now(),
+    })
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+
+    const { result } = renderHook(() => useLiveViewData())
+
+    expect(result.current.data!.hp.cop).toBe(0)
+  })
+
+  it('suppresses hp.cop (= 0) for boiler with performance.source "config"', () => {
+    mockUseLive.mockReturnValue({
+      data: makeCycleMessage({
+        status: {
+          operating_state: 'Winter (Heating)',
+          control_enabled: true, comfort_temp: 20, optimal_flow: 60, applied_flow: 60,
+          optimal_mode: 'normal', applied_mode: 'normal', total_demand: 5, outdoor_temp: 5,
+          recovery_time_hours: 0, capacity_pct: 50, hp_capacity_kw: 8, min_load_pct: 10,
+          heat_source: {
+            type: 'gas_boiler',
+            input_power_kw: 18,
+            thermal_output_kw: 16.2,
+            thermal_output_source: 'computed',
+            performance: { value: 0.9, source: 'config' },
+            flow_temp: 60, return_temp: 50, delta_t: 10, flow_rate: 0.4,
+          },
+          comfort_pct: 95,
+        },
+      }),
+      isConnected: true,
+      lastUpdate: Date.now(),
+    })
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+
+    const { result } = renderHook(() => useLiveViewData())
+
+    expect(result.current.data!.hp.cop).toBe(0)
+  })
+
+  it('suppresses hp.cop (= 0) for boiler even when performance.source is "live"', () => {
+    // V2 belt-and-braces: pins the gate's two-condition logic
+    // (`isHp && source === 'live'`). Pre-empts a future refactor that
+    // drops the `isHp` check — η must never propagate into the
+    // HP-shaped `hp.cop` slot regardless of provenance.
+    mockUseLive.mockReturnValue({
+      data: makeCycleMessage({
+        status: {
+          operating_state: 'Winter (Heating)',
+          control_enabled: true, comfort_temp: 20, optimal_flow: 60, applied_flow: 60,
+          optimal_mode: 'normal', applied_mode: 'normal', total_demand: 5, outdoor_temp: 5,
+          recovery_time_hours: 0, capacity_pct: 50, hp_capacity_kw: 8, min_load_pct: 10,
+          heat_source: {
+            type: 'gas_boiler',
+            input_power_kw: 18,
+            thermal_output_kw: 17.1,
+            thermal_output_source: 'computed',
+            performance: { value: 0.95, source: 'live' },
+            flow_temp: 60, return_temp: 50, delta_t: 10, flow_rate: 0.4,
+          },
+          comfort_pct: 95,
+        },
+      }),
+      isConnected: true,
+      lastUpdate: Date.now(),
+    })
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+
+    const { result } = renderHook(() => useLiveViewData())
+
+    expect(result.current.data!.hp.cop).toBe(0)
   })
 })

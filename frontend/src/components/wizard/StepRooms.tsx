@@ -96,28 +96,121 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
     updateRoom(roomName, changes)
   }
 
-  /** Add an additional TRV slot. */
-  const addTrvSlot = (roomName: string) => {
-    const room = rooms[roomName]
-    const current = room.trv_entity
-    let arr: string[]
-    if (!current) {
-      arr = ['', '']
-    } else if (Array.isArray(current)) {
-      arr = [...current, '']
-    } else {
-      arr = [current, '']
-    }
-    updateRoom(roomName, { trv_entity: arr })
+  // INSTRUCTION-231D — heating_entity multi-emitter helpers. Mirror the
+  // trv_entity helpers above with the V2 MEDIUM-1 unified pad-and-set
+  // pattern. The wizard's updateTrvAt sets control_mode = 'indirect' on
+  // first TRV addition; the heating helpers do NOT replicate this — a
+  // heating entity declaration is informational and does not imply a
+  // control-mode change.
+
+  /** Get the primary heating entity (first element if array). */
+  const getPrimaryHeating = (room: RoomConfigYaml): string => {
+    const he = room.heating_entity
+    if (!he) return ''
+    return Array.isArray(he) ? he[0] || '' : he
   }
 
-  /** Extract the topic string from a RoomMqttTopicValue (string or object). */
-  const getRoomTopicStr = (val: RoomMqttTopicValue | undefined): string =>
-    !val ? '' : typeof val === 'string' ? val : val.topic || ''
-  const getRoomTopicFormat = (val: RoomMqttTopicValue | undefined): 'plain' | 'json' | undefined =>
-    val && typeof val === 'object' ? val.format : undefined
-  const getRoomTopicJsonPath = (val: RoomMqttTopicValue | undefined): string | undefined =>
-    val && typeof val === 'object' ? val.json_path : undefined
+  /** Get additional heating entities (2nd+ elements). */
+  const getExtraHeatings = (room: RoomConfigYaml): string[] => {
+    const he = room.heating_entity
+    if (!he || !Array.isArray(he)) return []
+    return he.slice(1)
+  }
+
+  /** Update one heating_entity slot at the given index.
+   *  V2 MEDIUM-1 fix: unified pad-and-set pattern handles scalar, array,
+   *  and undefined input shapes uniformly. */
+  const updateHeatingAt = (roomName: string, index: number, value: string) => {
+    const room = rooms[roomName]
+    const current = room.heating_entity
+    let arr: string[]
+    if (!current) arr = []
+    else if (Array.isArray(current)) arr = [...current]
+    else arr = [current]
+    while (arr.length <= index) arr.push('')
+    arr[index] = value
+    while (arr.length > 0 && arr[arr.length - 1] === '') arr.pop()
+    const normalised =
+      arr.length === 0 ? undefined : arr.length === 1 ? arr[0] : arr
+    updateRoom(roomName, { heating_entity: normalised })
+  }
+
+  /** Atomic paired add — single updateRoom call that extends both
+   *  trv_entity and heating_entity lists. The wizard reads `rooms` from
+   *  the parent prop; calling separate trv-add + heating-add back-to-back
+   *  would each see the stale parent-prop state (parent component
+   *  doesn't re-render synchronously between calls). Combining into a
+   *  single updateRoom avoids the race entirely. */
+  const addEmitterSlot = (roomName: string) => {
+    const room = rooms[roomName]
+    const trvCurrent = room.trv_entity
+    const heCurrent = room.heating_entity
+    const trvArr = !trvCurrent
+      ? ['', '']
+      : Array.isArray(trvCurrent)
+        ? [...trvCurrent, '']
+        : [trvCurrent, '']
+    const heArr = !heCurrent
+      ? ['', '']
+      : Array.isArray(heCurrent)
+        ? [...heCurrent, '']
+        : [heCurrent, '']
+    updateRoom(roomName, { trv_entity: trvArr, heating_entity: heArr })
+  }
+
+  /** Remove the emitter row at the given index (paired removal of both
+   *  trv and heating slots simultaneously). */
+  const removeEmitterSlot = (roomName: string, index: number) => {
+    const room = rooms[roomName]
+    const trvCurrent = room.trv_entity
+    const heCurrent = room.heating_entity
+
+    const trvArr = !trvCurrent
+      ? []
+      : Array.isArray(trvCurrent)
+        ? [...trvCurrent]
+        : [trvCurrent]
+    const heArr = !heCurrent
+      ? []
+      : Array.isArray(heCurrent)
+        ? [...heCurrent]
+        : [heCurrent]
+
+    if (index < trvArr.length) trvArr.splice(index, 1)
+    if (index < heArr.length) heArr.splice(index, 1)
+
+    while (trvArr.length > 0 && trvArr[trvArr.length - 1] === '') trvArr.pop()
+    while (heArr.length > 0 && heArr[heArr.length - 1] === '') heArr.pop()
+
+    const trvNormalised =
+      trvArr.length === 0 ? undefined : trvArr.length === 1 ? trvArr[0] : trvArr
+    const heNormalised =
+      heArr.length === 0 ? undefined : heArr.length === 1 ? heArr[0] : heArr
+
+    updateRoom(roomName, {
+      trv_entity: trvNormalised,
+      heating_entity: heNormalised,
+    })
+  }
+
+  /** Extract the topic string from a RoomMqttTopicValue (string or object).
+   *  INSTRUCTION-224E: also handle list-form valve_position (post-224C). The
+   *  wizard surface is single-topic only; for list-form configs (declared via
+   *  Settings or YAML) the wizard displays the first topic and lets the operator
+   *  edit it. Multi-emitter editing flows through Settings. */
+  const getRoomTopicStr = (val: RoomMqttTopicValue | string[] | undefined): string => {
+    if (!val) return ''
+    if (Array.isArray(val)) return val[0] ?? ''
+    return typeof val === 'string' ? val : val.topic || ''
+  }
+  const getRoomTopicFormat = (val: RoomMqttTopicValue | string[] | undefined): 'plain' | 'json' | undefined => {
+    if (!val || Array.isArray(val)) return undefined
+    return typeof val === 'object' ? val.format : undefined
+  }
+  const getRoomTopicJsonPath = (val: RoomMqttTopicValue | string[] | undefined): string | undefined => {
+    if (!val || Array.isArray(val)) return undefined
+    return typeof val === 'object' ? val.json_path : undefined
+  }
 
   const updateRoomMqttTopic = (roomName: string, key: string, value: string, format?: string, jsonPath?: string) => {
     const room = rooms[roomName]
@@ -174,7 +267,6 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
           const isEditing = editingRoom === name
           const candidates = roomCandidates[name] || {}
           const hasTrv = !!room.trv_entity
-          const extraTrvs = getExtraTrvs(room)
 
           return (
             <div
@@ -470,41 +562,84 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         )
                       })()}
 
-                      {/* Entity pickers */}
+                      {/* INSTRUCTION-231D — paired per-emitter rows
+                          (TRV + Heating) in declaration order. rowCount =
+                          max(trvLen, heLen, 1); each row pairs a TRV
+                          EntityPicker with a Heating EntityPicker plus a
+                          remove button (only when rowCount > 1). */}
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1">
-                            <EntityPicker
-                              slot="trv_entity"
-                              room={name}
-                              label={room.control_mode === 'direct' ? 'Valve Position Entity' : 'TRV Entity'}
-                              value={getPrimaryTrv(room)}
-                              onChange={(v) => updateTrvAt(name, 0, v)}
-                              candidates={candidates.trv_entity || []}
-                              required
-                            />
-                          </div>
-                          <button
-                            onClick={() => addTrvSlot(name)}
-                            className="mt-5 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
-                            title="Add additional TRV"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
-
-                        {/* Extra TRV slots */}
-                        {extraTrvs.map((trv, i) => (
-                          <EntityPicker
-                            key={`trv-${i + 1}`}
-                            slot="trv_entity"
-                            room={name}
-                            label={`TRV Entity ${i + 2}`}
-                            value={trv}
-                            onChange={(v) => updateTrvAt(name, i + 1, v)}
-                            candidates={candidates.trv_entity || []}
-                          />
-                        ))}
+                        {(() => {
+                          const trv = room.trv_entity
+                          const he = room.heating_entity
+                          const trvLen = !trv ? 0 : Array.isArray(trv) ? trv.length : 1
+                          const heLen = !he ? 0 : Array.isArray(he) ? he.length : 1
+                          const rowCount = Math.max(trvLen, heLen, 1)
+                          return Array.from({ length: rowCount }, (_, i) => {
+                            const trvValue =
+                              i === 0
+                                ? getPrimaryTrv(room)
+                                : getExtraTrvs(room)[i - 1] || ''
+                            const heValue =
+                              i === 0
+                                ? getPrimaryHeating(room)
+                                : getExtraHeatings(room)[i - 1] || ''
+                            const trvLabel =
+                              i === 0
+                                ? room.control_mode === 'direct'
+                                  ? 'Valve Position Entity'
+                                  : 'TRV Entity'
+                                : `TRV Entity ${i + 1}`
+                            const heLabel =
+                              i === 0
+                                ? 'Heating Feedback Entity'
+                                : `Heating Feedback Entity ${i + 1}`
+                            return (
+                              <div
+                                key={`emitter-row-${i}`}
+                                className="flex items-end gap-2"
+                              >
+                                <div className="flex-1 grid grid-cols-2 gap-3">
+                                  <EntityPicker
+                                    slot="trv_entity"
+                                    room={name}
+                                    label={trvLabel}
+                                    value={trvValue}
+                                    onChange={(v) => updateTrvAt(name, i, v)}
+                                    candidates={candidates.trv_entity || []}
+                                    required={i === 0}
+                                  />
+                                  <EntityPicker
+                                    slot="heating_entity"
+                                    room={name}
+                                    label={heLabel}
+                                    value={heValue}
+                                    onChange={(v) => updateHeatingAt(name, i, v)}
+                                    candidates={candidates.heating_entity || []}
+                                    required={i === 0}
+                                  />
+                                </div>
+                                {rowCount > 1 && (
+                                  <button
+                                    onClick={() => removeEmitterSlot(name, i)}
+                                    className="mt-5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                                    title={`Remove emitter ${i + 1}`}
+                                    aria-label={`Remove emitter ${i + 1}`}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })
+                        })()}
+                        <button
+                          onClick={() => addEmitterSlot(name)}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded border border-[var(--border)] text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                          title="Add emitter"
+                          aria-label="Add emitter"
+                        >
+                          <Plus size={14} /> Add emitter
+                        </button>
                       </div>
 
                       <EntityPicker
@@ -516,17 +651,6 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           updateRoom(name, { independent_sensor: v || undefined })
                         }
                         candidates={candidates.independent_sensor || []}
-                        required
-                      />
-                      <EntityPicker
-                        slot="heating_entity"
-                        room={name}
-                        label="Heating Feedback Entity"
-                        value={room.heating_entity || ''}
-                        onChange={(v) =>
-                          updateRoom(name, { heating_entity: v || undefined })
-                        }
-                        candidates={candidates.heating_entity || []}
                         required
                       />
                       <EntityPicker

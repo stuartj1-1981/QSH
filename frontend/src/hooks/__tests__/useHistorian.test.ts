@@ -133,4 +133,38 @@ describe('useHistorianQuery', () => {
     expect(calledUrl).toContain('room=lounge')
     expect(calledUrl).toContain('measurement=qsh_room')
   })
+
+  it('includes hw_active query param when hwActive option is set', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ points: [] }),
+    } as Response)
+
+    renderHook(() =>
+      useHistorianQuery('qsh_system', ['cop'], { hwActive: 'false' }),
+    )
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled()
+    })
+
+    const calledUrl = fetchSpy.mock.calls[0][0] as string
+    expect(calledUrl).toContain('hw_active=false')
+  })
+
+  it('omits hw_active query param when hwActive option is not set', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ points: [] }),
+    } as Response)
+
+    renderHook(() => useHistorianQuery('qsh_system', ['cop']))
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled()
+    })
+
+    const calledUrl = fetchSpy.mock.calls[0][0] as string
+    expect(calledUrl).not.toContain('hw_active')
+  })
 })

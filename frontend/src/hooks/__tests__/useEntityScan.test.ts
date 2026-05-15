@@ -144,3 +144,72 @@ describe('useRoomEntityScan', () => {
     )
   })
 })
+
+
+// =============================================================================
+// INSTRUCTION-231D — heating_entity scored-list shape (post-231C scanner fix)
+// =============================================================================
+
+
+describe('INSTRUCTION-231D: heating_entity candidate list shape (post-231C scanner fix)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns sorted scored candidate list for heating_entity slot', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: {
+          heating_entity: [
+            {
+              entity_id: 'sensor.bathroom_heating',
+              friendly_name: 'Bathroom Heating',
+              score: 40,
+              confidence: 'high' as const,
+              state: '29.0',
+              device_class: '',
+              unit: '',
+            },
+            {
+              entity_id: 'number.bathroom_valve_position',
+              friendly_name: 'Bathroom Valve',
+              score: 32,
+              confidence: 'medium' as const,
+              state: '50',
+              device_class: '',
+              unit: '',
+            },
+          ],
+        },
+        total_entities: 50,
+      }),
+    } as Response)
+    const { result } = renderHook(() => useEntityScan())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.candidates.heating_entity).toHaveLength(2)
+    // Highest score first per the API contract.
+    expect(result.current.candidates.heating_entity?.[0].entity_id).toBe(
+      'sensor.bathroom_heating',
+    )
+    expect(result.current.candidates.heating_entity?.[0].score).toBeGreaterThan(
+      result.current.candidates.heating_entity?.[1].score ?? 0,
+    )
+    fetchSpy.mockRestore()
+  })
+
+  it('returns empty array when scanner has no heating_entity candidates', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: {}, total_entities: 0 }),
+    } as Response)
+    const { result } = renderHook(() => useEntityScan())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    // The hook's contract: an absent slot key yields undefined or [].
+    // Consumers can safely iterate via `?? []`.
+    const heCands = result.current.candidates.heating_entity ?? []
+    expect(Array.isArray(heCands)).toBe(true)
+    expect(heCands.length).toBe(0)
+    fetchSpy.mockRestore()
+  })
+})
