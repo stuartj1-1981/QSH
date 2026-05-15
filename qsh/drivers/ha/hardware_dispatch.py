@@ -480,40 +480,102 @@ def apply_hardware_control(
     return applied_mode, new_mismatch_count
 
 
-def set_heat_source_mode(config, mode, dfan_control=True):
-    """
-    Set heat source mode directly (bypassing debouncer).
+def apply_source_command(config, commands, dfan_control=True):
+    """Dispatch per-source on/off commands (228A).
 
-    Used for shoulder season shutdown/recovery where we need
-    immediate mode changes regardless of debounce timing.
+    For each source in `commands`, look up its `control_method` from
+    `config['heat_sources'][]` by name. Route to the existing per-method
+    apply functions (_apply_mode_octopus_api, _apply_mode_ha_service,
+    _apply_flow_mqtt, _apply_mode_entity) on a per-source basis, passing
+    each that source's config slice (the heat_source dict) as the dispatch
+    context.
+
+    Sources whose `control_method` is `trvs_only` are silently skipped —
+    there is no heat-source actuator to command, only TRVs.
+
+    Sources whose name appears in `commands` but is absent from
+    `config['heat_sources']` are logged as a warning and skipped.
+
+    Shadow mode (`dfan_control=False`) suppresses every dispatch and logs
+    SHADOW MODE for each suppressed source.
 
     Args:
         config: HOUSE_CONFIG dict
-        mode: 'heat' or 'off'
-        dfan_control: If False (shadow mode), logs but doesn't act
+        commands: {source_name: 'heat'|'off'}
+        dfan_control: If False (shadow mode), logs but doesn't act.
+
+    Returns:
+        {source_name: applied_mode} for telemetry/state tracking.
     """
-    if not dfan_control:
-        logging.info(f"SHADOW MODE: Would set heat source mode to '{mode}'")
-        return
+    applied: dict = {}
+    sources_by_name = {s.get("name", ""): s for s in config.get("heat_sources", [])}
 
-    control_method = config.get("control_method", "trvs_only")
+    for source_name, mode in commands.items():
+        if source_name not in sources_by_name:
+            logging.warning(
+                "apply_source_command: unknown source '%s' — skipping", source_name,
+            )
+            continue
+        src_cfg = sources_by_name[source_name]
+        control_method = src_cfg.get("control_method", "trvs_only")
 
-    if control_method == "octopus_api":
-        _apply_mode_octopus_api(mode)
-    elif control_method == "ha_service":
-        _apply_mode_ha_service(config, mode)
-    elif control_method == "mqtt":
-        # For MQTT, send both flow (safe default) and mode
-        safe_flow = config.get("mqtt_safe_flow", 35.0) if mode == "heat" else config.get("flow_min", 25.0)
-        _apply_flow_mqtt(config, safe_flow, mode)
-    elif control_method == "entity":
-        mode_entity = config.get("entity_mode_target", "input_text.qsh_target_mode")
-        set_ha_service("input_text", "set_value", {"entity_id": mode_entity, "value": mode})
-        logging.info(f"Entity output: mode={mode}")
-    elif control_method == "trvs_only":
-        logging.debug("TRVs-only mode: cannot control heat source mode")
-    else:
-        logging.error(f"Unknown control_method: {control_method}")
+        if not dfan_control:
+            logging.debug(
+                "SHADOW MODE: suppressed source command %s -> %s (method=%s)",
+                source_name, mode, control_method,
+            )
+            continue
+
+        if control_method == "octopus_api":
+            _apply_mode_octopus_api(mode)
+        elif control_method == "ha_service":
+            # ha_service: read hvac_service slice from this source's config.
+            # The per-source slice may carry its own hp_hvac_service shape
+            # (preferred) or fall back to top-level config for back-compat.
+            slice_cfg = dict(config)
+            if "hp_hvac_service" in src_cfg:
+                slice_cfg["hp_hvac_service"] = src_cfg["hp_hvac_service"]
+            _apply_mode_ha_service(slice_cfg, mode)
+        elif control_method == "mqtt":
+            # MQTT mode dispatch through the existing flow_mqtt path with a
+            # safe flow default. Per-source MQTT topic templating belongs to
+            # the MQTT driver (see qsh/drivers/mqtt/driver.write_outputs).
+            safe_flow = (
+                src_cfg.get("mqtt_safe_flow", config.get("mqtt_safe_flow", 35.0))
+                if mode == "heat"
+                else src_cfg.get("flow_min", config.get("flow_min", 25.0))
+            )
+            slice_cfg = dict(config)
+            if "mqtt_flow_topic" in src_cfg:
+                slice_cfg["mqtt_flow_topic"] = src_cfg["mqtt_flow_topic"]
+            if "mqtt_mode_topic" in src_cfg:
+                slice_cfg["mqtt_mode_topic"] = src_cfg["mqtt_mode_topic"]
+            _apply_flow_mqtt(slice_cfg, safe_flow, mode)
+        elif control_method == "entity":
+            mode_entity = src_cfg.get(
+                "entity_mode_target",
+                config.get("entity_mode_target", "input_text.qsh_target_mode"),
+            )
+            set_ha_service(
+                "input_text", "set_value",
+                {"entity_id": mode_entity, "value": mode},
+            )
+            logging.info("Entity output (%s): mode=%s", source_name, mode)
+        elif control_method == "trvs_only":
+            logging.debug(
+                "trvs_only source '%s': no heat source actuator to command",
+                source_name,
+            )
+        else:
+            logging.error(
+                "apply_source_command: unknown control_method '%s' for source '%s'",
+                control_method, source_name,
+            )
+            continue
+
+        applied[source_name] = mode
+
+    return applied
 
 
 def set_auxiliary_output(config, entity: str, state: bool) -> bool:

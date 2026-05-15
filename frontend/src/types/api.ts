@@ -18,6 +18,11 @@ export interface RoomState {
   aux_min_on_s?: number | null
   aux_min_off_s?: number | null
   aux_max_cycles_per_hour?: number | null
+  // INSTRUCTION-224E — per-emitter valve positions flattened onto the room
+  // view-model at the page-level call site (Rooms.tsx) from the top-level
+  // CycleMessage.valve_positions_per_emitter[name] field. Undefined or
+  // empty for single-emitter rooms.
+  valve_positions_per_emitter?: Record<string, number>
 }
 
 export interface HpState {
@@ -143,14 +148,51 @@ export interface SourceState {
   signal_quality: string
 }
 
-export interface SourceSelectionState {
+// 228B Task 1: Literal-constrained reason vocabulary mirroring the
+// backend SourceSelectionReason at qsh/pipeline/controllers/source_selection.py.
+// Adding a new branch in the backend requires extending this Literal AND
+// the chip-text map in StatusBanner.tsx.
+export type SourceSelectionReasonKind =
+  | 'cost'
+  | 'carbon'
+  | 'manual_lock'
+  | 'failover'
+  | 'dwell_hold'
+  | 'deadband_hold'
+  | 'daily_cap_hold'
+  | 'single_source'
+
+// 228B Task 1: per-cycle blocked-switch entry. `failover` is NOT a
+// member here per parent Decision 4 — failover displaces, it does not
+// block. The displaced source's name flows through
+// SourceSelectionPayload.detail.
+export interface BlockedSwitch {
+  to: string                                  // candidate source name
+  reason: 'dwell' | 'deadband' | 'daily_cap'
+}
+
+// 228B Task 1: narrow runtime payload surfaced on /ws/live and
+// /api/status under `source_selection`. Strict subset of
+// SourceSelectionState; consumed by StatusBanner for the badge.
+export interface SourceSelectionPayload {
   active_source: string
+  reason: SourceSelectionReasonKind
+  detail: string                  // free-form, displayed in tooltip
+  blocked_switches: BlockedSwitch[]
+  failover_active: boolean
+}
+
+// SourceSelectionState extends SourceSelectionPayload so existing
+// consumers (SourceSelector, useSourceSelection) keep working while
+// new consumers can read the narrow SourceSelectionPayload shape.
+// `last_switch_reason` is the back-compat alias for `reason` retained
+// during the frontend rollout (228A backend writes both keys).
+export interface SourceSelectionState extends SourceSelectionPayload {
   mode: string
   preference: number
   sources: SourceState[]
   switch_count_today: number
   max_switches_per_day: number
-  failover_active: boolean
   last_switch_reason: string
 }
 
@@ -228,6 +270,14 @@ export interface StatusResponse {
   available_provider_kinds?: ProviderKind[]
   // INSTRUCTION-186: active control routing path — display-only.
   control_method?: ControlMethod
+  // INSTRUCTION-208B V5 — DFAN forecast extension. Optional because
+  // mid-rollout pre-208A backends may emit pre-extension payloads; frontend
+  // null-coalesces gracefully.
+  forecast_state_snapshot?: ForecastStateSnapshot
+  passive_recovery?: Record<string, PassiveRecoveryState>
+  forecast_predicted_decisions?: Record<string, Record<string, PredictionRecord>>
+  twin_calibration_drift?: Record<string, boolean>
+  active_alarms?: AlarmEvent[]
 }
 
 export interface RoomsResponse {
@@ -308,6 +358,40 @@ export interface CycleMessage {
   // of QSH able to construct? Frontend gates radio options on this, NOT
   // on whether a given provider is currently configured.
   available_provider_kinds?: ProviderKind[]
+  // INSTRUCTION-208B V5 — DFAN forecast extension. Optional because
+  // mid-rollout pre-208A backends may emit pre-extension payloads; frontend
+  // null-coalesces gracefully.
+  forecast_state_snapshot?: ForecastStateSnapshot
+  passive_recovery?: Record<string, PassiveRecoveryState>
+  forecast_predicted_decisions?: Record<string, Record<string, PredictionRecord>>
+  twin_calibration_drift?: Record<string, boolean>
+  active_alarms?: AlarmEvent[]
+  // INSTRUCTION-224D — per-emitter valve readings. Outer key: room.
+  // Inner key: emitter stem. Empty dict for rooms without declared
+  // per-emitter actuators. 224E renders this on RoomDetail's per-emitter
+  // section. Optional because pre-224D backends do not emit the field;
+  // frontend null-coalesces gracefully.
+  valve_positions_per_emitter?: Record<string, Record<string, number>>
+  // INSTRUCTION-225D — operator MANUAL/AUTO override map for direct TRVs.
+  // Outer key: room. Inner: per-room ManualEntry minus the redundant `room`
+  // field. Optional because backends predating the 225 family do not emit
+  // the key; consumers (RoomCard badge, RoomDetail strip, Valves page)
+  // must null-coalesce.
+  manual_state?: Record<string, Omit<ManualEntry, 'room'>>
+}
+
+// INSTRUCTION-225D — operator MANUAL/AUTO override for direct-TRV positions.
+export type ManualMode = 'AUTO' | 'MANUAL'
+
+export interface ManualEntry {
+  room: string
+  mode: ManualMode
+  position_pct: number | null
+  set_by: string
+  set_at: number
+  // hardware_type kept as plain string for forward-compat (new direct-control
+  // hardware types added without lock-step type updates).
+  hardware_type: string
 }
 
 export interface SysidRoom {
@@ -325,8 +409,24 @@ export interface SysidRoom {
   fixed_setpoint?: number | null
 }
 
+// INSTRUCTION-227C Task 8 — observed solar production envelope from
+// `/api/sysid`. Four-state contract from 227B (sole source of truth):
+//   1. sysid is None              → top-level `installation_solar_capacity_kw` is null
+//   2. sysid present, obs == 0    → value: null, observations: 0, mature: false
+//   3. sysid present, immature    → value: <max>, observations: N, mature: false
+//   4. sysid present, mature      → value: <max>, observations: N, mature: true
+// Consumers MUST handle the top-level-null state.
+export interface InstallationSolarCapacity {
+  value: number | null
+  observations: number
+  mature: boolean
+  last_updated_ts: number | null
+}
+
 export interface SysidResponse {
   rooms: Record<string, SysidRoom>
+  // Optional because backends pre-dating 227B do not emit the key.
+  installation_solar_capacity_kw?: InstallationSolarCapacity | null
 }
 
 // Trend persistence types
@@ -453,4 +553,102 @@ export interface RevertResponse {
   pre_revert_snapshot: Snapshot
   restart_required: boolean
   message: string
+}
+
+// =====================================================================
+// INSTRUCTION-208B V5 — DFAN Forecast Extension types.
+// Consumed by frontend/src/hooks/use{FeatureFlags,CutoverGates,
+// FallbackCounts,Alarms,Reconciliation}.ts and by CycleMessage /
+// StatusResponse extensions below.
+// =====================================================================
+
+export interface ForecastStateSnapshot {
+  oat_rise_next_6h_c: number | null
+  solar_kwh_12h: number | null
+  forecast_load_kwh_4h: number | null
+  forecast_load_kwh_12h: number | null
+  forecast_load_kwh_24h: number | null
+  forecast_load_per_room_kwh: Record<string, number>
+  forecast_solar_per_room_kwh: Record<string, number>
+  hourly_temps_first_6: number[]
+  hourly_solar_first_6: number[]
+  cold_snap_active: boolean
+  wind_active: boolean
+}
+
+/**
+ * V208B V5 — upstream-provenance citation.
+ *
+ * Schema source: `qsh.forecast_confidence.PassiveRecoveryState` — a frozen
+ * dataclass declared in INSTRUCTION-200 V3 Task 3 (predicted_t_indoor,
+ * composite_confidence, weather_class, bias_correction_c,
+ * prediction_target_ts).
+ *
+ * Population: `qsh.api.state.SharedState.update()` unpacks the 5 fields
+ * into a JSON-serialisable dict per INSTRUCTION-208A V2 Task 2.
+ *
+ * Live-payload field-presence is established by the 208A V2 pytest gate
+ * (exercises `dataclasses.asdict` population), NOT by the curl-based
+ * reachability check (which only covers feature-flags / cutover-gates /
+ * fallback-counts endpoints). Do not collapse the two chains.
+ */
+export interface PassiveRecoveryState {
+  predicted_t_indoor: number
+  composite_confidence: number
+  weather_class: [string, string, string] | null
+  bias_correction_c: number
+  prediction_target_ts: number | null
+}
+
+export interface PredictionRecord {
+  predicted_value: number
+  predicted_metric: string
+  prediction_target_ts: number
+  decision_basis: Record<string, unknown>
+  decision_taken: string
+}
+
+export interface AlarmEvent {
+  alarm_id: 'A' | 'B'
+  timestamp: number
+  room: string | null
+  payload: Record<string, unknown>
+  severity: 'notification'
+}
+
+export interface FeatureFlagsResponse {
+  master_enable: boolean
+  flags: Record<string, Record<string, boolean>>
+  rooms: string[]
+  deferred_enforcement_note: string
+}
+
+export interface CutoverGateResult {
+  prediction_error_p95_c: number | null
+  prediction_error_p95_threshold_c: number
+  prediction_error_gate_pass: boolean
+  comfort_excursions_attributable: number
+  comfort_gate_pass: boolean
+  c_maturity: number | null
+  c_maturity_threshold: number
+  c_historical_min_observed: number | null
+  c_historical_threshold: number
+  composite_confidence_gate_pass: boolean
+  twin_drift_flagged: boolean
+  twin_gate_pass: boolean
+  all_gates_pass: boolean
+  cycles_holding: number
+  cycles_required: number
+  cutover_eligible: boolean
+  rationale: string
+}
+
+export interface CutoverGatesResponse {
+  window_cycles: number
+  cycles_required: number
+  gates: Record<string, Record<string, CutoverGateResult>>
+}
+
+export interface FallbackCountsResponse {
+  fallback_counts: Record<string, number>
 }

@@ -13,11 +13,13 @@ import { Balancing } from './pages/Balancing'
 import { Statistics } from './pages/Statistics'
 import { LiveView } from './pages/LiveView'
 import { Scop } from './pages/Scop'
+import { Forecast } from './pages/Forecast'
+import { Valves } from './pages/Valves'
 import { useLive } from './hooks/useLive'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
-export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop'
+export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves'
 
 export default function App() {
   const [page, setPage] = useState<Page>('home')
@@ -119,6 +121,8 @@ export default function App() {
         {activePage === 'balancing' && <Balancing />}
         {activePage === 'statistics' && <Statistics />}
         {activePage === 'scop' && <Scop />}
+        {activePage === 'forecast' && <Forecast />}
+        {activePage === 'valves' && <Valves />}
         {activePage === 'settings' && (
           <Settings onRunWizard={() => { setWizardCanExit(true); setPage('wizard') }} />
         )}

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
 vi.mock('../../../hooks/useConfig', () => ({
@@ -7,6 +7,17 @@ vi.mock('../../../hooks/useConfig', () => ({
 
 vi.mock('../../../hooks/useEntityResolve', () => ({
   useEntityResolve: () => ({ resolved: {}, loading: false }),
+}))
+
+// INSTRUCTION-227C Task 6 — mock useSysid so the new observed-kWp row
+// has predictable data. Set the return value per-test to exercise each
+// of the four states from the 227B envelope contract.
+const mockUseSysid = vi.fn((): { data: unknown; error: string | null } => ({
+  data: null,
+  error: null,
+}))
+vi.mock('../../../hooks/useSysid', () => ({
+  useSysid: () => mockUseSysid(),
 }))
 
 import { SolarBatterySettings } from '../SolarBatterySettings'
@@ -100,5 +111,91 @@ describe('SolarBatterySettings driver branching', () => {
       expect(screen.getByPlaceholderText('grid/import_w')).toBeInTheDocument()
       expect(screen.queryByText('Grid Power Entity')).toBeNull()
     })
+  })
+})
+
+
+// ── INSTRUCTION-227C Task 6 — observed solar capacity row ────────────
+
+
+describe('SolarBatterySettings observed solar capacity (INSTRUCTION-227C)', () => {
+  beforeEach(() => {
+    mockUseSysid.mockReset()
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+  })
+
+  it('shows "—" placeholder when value is null (sysid state 1 or 2)', () => {
+    mockUseSysid.mockReturnValue({
+      data: { rooms: {}, installation_solar_capacity_kw: null },
+      error: null,
+    })
+    render(
+      <SolarBatterySettings
+        solar={{ production_entity: 'sensor.solar_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    const row = screen.getByTestId('solar-observed-capacity-row')
+    expect(row.textContent).toContain('Solar production capacity (observed)')
+    expect(row.textContent).toContain('—')
+  })
+
+  it('shows value with "(learning — N/50)" suffix when immature (state 3)', () => {
+    mockUseSysid.mockReturnValue({
+      data: {
+        rooms: {},
+        installation_solar_capacity_kw: {
+          value: 3.2,
+          observations: 12,
+          mature: false,
+          last_updated_ts: 1700000000.0,
+        },
+      },
+      error: null,
+    })
+    render(
+      <SolarBatterySettings
+        solar={{ production_entity: 'sensor.solar_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    const row = screen.getByTestId('solar-observed-capacity-row')
+    expect(row.textContent).toContain('3.2 kW')
+    expect(row.textContent).toContain('learning')
+    expect(row.textContent).toContain('12/50')
+  })
+
+  it('shows value without learning suffix when mature (state 4)', () => {
+    mockUseSysid.mockReturnValue({
+      data: {
+        rooms: {},
+        installation_solar_capacity_kw: {
+          value: 4.5,
+          observations: 50,
+          mature: true,
+          last_updated_ts: 1700000000.0,
+        },
+      },
+      error: null,
+    })
+    render(
+      <SolarBatterySettings
+        solar={{ production_entity: 'sensor.solar_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    const row = screen.getByTestId('solar-observed-capacity-row')
+    expect(row.textContent).toContain('4.5 kW')
+    expect(row.textContent).not.toContain('learning')
+    expect(row.textContent).not.toContain('/50')
+  })
+
+  it('row is hidden when "I have solar panels" is unchecked', () => {
+    // No solar config → checkbox unchecked → solar inner block hidden.
+    render(<SolarBatterySettings driver="ha" onRefetch={noop} />)
+    expect(screen.queryByTestId('solar-observed-capacity-row')).toBeNull()
   })
 })

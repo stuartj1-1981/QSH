@@ -51,6 +51,7 @@ export function useHistorianQuery(
   fields: string[],
   options: {
     room?: string
+    hwActive?: 'true' | 'false'
     timeFrom?: string
     timeTo?: string
     interval?: string
@@ -63,7 +64,7 @@ export function useHistorianQuery(
   const [trigger, setTrigger] = useState(0)
 
   const fieldsKey = fields.join(',')
-  const { room, timeFrom = '-24h', timeTo = 'now()', interval = '5m', aggregation = 'mean' } = options
+  const { room, hwActive, timeFrom = '-24h', timeTo = 'now()', interval = '5m', aggregation = 'mean' } = options
 
   const refetch = useCallback(() => setTrigger((n) => n + 1), [])
 
@@ -71,6 +72,7 @@ export function useHistorianQuery(
     m: string,
     fk: string,
     r: string | undefined,
+    hw: 'true' | 'false' | undefined,
     tf: string,
     tt: string,
     iv: string,
@@ -86,6 +88,7 @@ export function useHistorianQuery(
       aggregation: ag,
     })
     if (r) params.set('room', r)
+    if (hw) params.set('hw_active', hw)
 
     return fetch(apiUrl(`api/historian/query?${params}`), { signal })
       .then((resp) => resp.json())
@@ -107,21 +110,26 @@ export function useHistorianQuery(
     const controller = new AbortController()
     // Use ref trick: schedule loading via microtask to avoid synchronous setState in effect
     queueMicrotask(() => setLoading(true))
-    doFetch(measurement, fieldsKey, room, timeFrom, timeTo, interval, aggregation, controller.signal)
+    doFetch(measurement, fieldsKey, room, hwActive, timeFrom, timeTo, interval, aggregation, controller.signal)
 
     return () => controller.abort()
-  }, [measurement, fieldsKey, room, timeFrom, timeTo, interval, aggregation, trigger, doFetch])
+  }, [measurement, fieldsKey, room, hwActive, timeFrom, timeTo, interval, aggregation, trigger, doFetch])
 
   return { data, loading, error, refetch }
 }
 
 interface UseHistorianTagsResult {
   rooms: string[]
+  // INSTRUCTION-224E — emitter tag values surfaced from /api/historian/tags
+  // for the qsh_emitter measurement (and any future measurement carrying the
+  // emitter tag). Empty for measurements without an emitter tag.
+  emitters: string[]
   loading: boolean
 }
 
 export function useHistorianTags(measurement: string): UseHistorianTagsResult {
   const [rooms, setRooms] = useState<string[]>([])
+  const [emitters, setEmitters] = useState<string[]>([])
   const [loading, setLoading] = useState(() => Boolean(measurement))
 
   useEffect(() => {
@@ -133,6 +141,7 @@ export function useHistorianTags(measurement: string): UseHistorianTagsResult {
       .then((r) => r.json())
       .then((json: HistorianTagsResponse) => {
         setRooms(json.tags?.room ?? [])
+        setEmitters(json.tags?.emitter ?? [])
         setLoading(false)
       })
       .catch((e) => {
@@ -143,7 +152,7 @@ export function useHistorianTags(measurement: string): UseHistorianTagsResult {
     return () => controller.abort()
   }, [measurement])
 
-  return { rooms, loading }
+  return { rooms, emitters, loading }
 }
 
 interface UseHistorianFieldsResult {

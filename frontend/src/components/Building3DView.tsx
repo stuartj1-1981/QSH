@@ -36,8 +36,28 @@ function cycleToBuildingLive(msg: CycleMessage): BuildingLiveData {
   // INSTRUCTION-117E: read source-aware power + performance from the
   // heat_source block. The 3D view's `cop` slot is HP-only semantics —
   // leave it at 0 on boilers so nothing renders a misleading COP figure.
+  //
+  // INSTRUCTION-232 — performance provenance gate. Mirrors the
+  // `showPerfLabel` HP branch in StatusBanner (consumer #1, gated by
+  // INSTRUCTION-128B) and the `copLive` gate in
+  // `useLiveViewData::useMemo` (consumer #2, gated by this
+  // instruction). Only surface the COP when the resolver marks it
+  // `'live'`. When the resolver emits `'config'` (HP off, sensor
+  // loss fallback, etc.) the value is the caps baseline (e.g. 2.5),
+  // NOT a real COP. `BuildingLiveData.system.cop` is currently
+  // unread by `buildingEngine.ts`, but the field is on the type
+  // contract — populating it with an unguarded value would seed any
+  // future consumer (debug overlay, future dashboard tile) with the
+  // same defect this instruction closes elsewhere. Gate at the
+  // producer; 0 is the off-sentinel by convention with the sibling
+  // consumers. Symbolic references (function names, branches) chosen
+  // over line numbers because Task 1's edit moves the sibling site
+  // in the same instruction.
   const hs = status?.heat_source
   const isHp = hs?.type === 'heat_pump'
+  const copLive = isHp && hs?.performance.source === 'live'
+    ? hs.performance.value
+    : 0
   return {
     rooms,
     system: {
@@ -46,7 +66,7 @@ function cycleToBuildingLive(msg: CycleMessage): BuildingLiveData {
       return_temp: hs?.return_temp ?? 0,
       delta_t: hs?.delta_t ?? 0,
       power_kw: hs?.input_power_kw ?? 0,
-      cop: isHp ? hs?.performance.value ?? 0 : 0,
+      cop: copLive,
       mode: status?.applied_mode ?? '',
     },
     cycle_number: msg.cycle_number ?? 0,

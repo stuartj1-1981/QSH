@@ -8,9 +8,10 @@ import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { HelpTip } from '../HelpTip'
 import { HEAT_SOURCE } from '../../lib/helpText'
-import type { HeatSourceYaml, SourceSelectionYaml, QshConfigYaml, MqttConfig, MqttTopicInput, Driver } from '../../types/config'
+import type { HeatSourceYaml, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
+import { WriteBudgetField } from './WriteBudgetField'
 
 interface HeatSourceSettingsProps {
   heatSource: HeatSourceYaml
@@ -23,16 +24,17 @@ interface HeatSourceSettingsProps {
 }
 
 export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, rootConfig, mqtt, driver, onRefetch }: HeatSourceSettingsProps) {
+  // INSTRUCTION-236: `mqtt` prop is retained on the interface so the parent's
+  // contract is unchanged, but HeatSourceSettings no longer reads or writes
+  // any mqtt.inputs.* DHW field. HotWaterSettings is the sole edit surface
+  // and the sole PATCH-write surface for hot_water_active / hot_water_boolean.
+  void mqtt
   const [hs, setHs] = useState<HeatSourceYaml>(heatSource)
-  const [mqttInputs, setMqttInputs] = useState<Record<string, MqttTopicInput>>(
-    mqtt?.inputs ?? {}
-  )
   const { patch, saving } = usePatchConfig()
   const [showSensors, setShowSensors] = useState(false)
   const [showFlowControl, setShowFlowControl] = useState(false)
 
   useEffect(() => { setHs(heatSource) }, [heatSource])
-  useEffect(() => { setMqttInputs(mqtt?.inputs ?? {}) }, [mqtt])
 
   const entityIds = useMemo(
     () => {
@@ -62,7 +64,6 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
         hs.sensors?.return_temp,
         hs.sensors?.flow_rate,
         hs.sensors?.delta_t,
-        hs.sensors?.water_heater,
       ].filter(Boolean) as string[]
     },
     [hs, driver]
@@ -77,31 +78,29 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
     setHs(prev => ({ ...prev, sensors: { ...prev.sensors, [key]: value || undefined } }))
   }
 
-  const updateMqttInput = (key: string, topic: string) => {
-    setMqttInputs(prev => {
-      const next = { ...prev }
-      if (topic) {
-        next[key] = { topic, format: 'plain' }
-      } else {
-        delete next[key]
-      }
-      return next
-    })
-  }
-
   const save = async () => {
-    const r1 = await patch('heat_source', hs)
-    if (!r1) return
+    // INSTRUCTION-236: HeatSourceSettings is positively non-authoritative for
+    // DHW signal keys. Destructure-and-omit prevents a stale prop from
+    // clobbering a concurrent HotWaterSettings write in the multi-tab editing
+    // pattern. The keys removed here:
+    //   - sensors.water_heater       (HA primary DHW signal)
+    //   - sensors.hot_water_boolean  (HA OR partner — not editable here, but
+    //     omit defensively in case a prop carries it through from a legacy save)
+    // Both keys are owned by HotWaterSettings.tsx per INSTRUCTION-236. The
+    // MQTT save branch (previously writing mqtt.inputs.hot_water_*) is also
+    // deleted; HotWaterSettings handles those writes too.
+    const sensors = hs.sensors ?? {}
+    const {
+      water_heater: _omit_wh,
+      hot_water_boolean: _omit_hwb,
+      ...sensorsWithoutDhw
+    } = sensors
+    void _omit_wh
+    void _omit_hwb
+    const hsForPatch = { ...hs, sensors: sensorsWithoutDhw }
 
-    if (driver === 'mqtt') {
-      // Full-section PATCH: _restore_redacted iterates incoming keys only,
-      // so the body MUST be the complete mqtt object. Redacted fields
-      // (password, etc.) arrive from the `mqtt` prop as ***REDACTED***
-      // and are restored server-side by _restore_redacted.
-      const mqttBody = { ...mqtt, inputs: mqttInputs }
-      const r2 = await patch('mqtt', mqttBody)
-      if (!r2) return
-    }
+    const r1 = await patch('heat_source', hsForPatch)
+    if (!r1) return
 
     onRefetch()
   }
@@ -333,6 +332,30 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
         </div>
       </div>
 
+      {/* Heat source write budget (216A/B) */}
+      <div className="space-y-3 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
+        <div className="text-sm font-medium text-[var(--text)]">Heat source write budget</div>
+        <div className="text-xs text-[var(--text-muted)]">
+          Cap the rate at which QSH writes to the heat pump controller. Default 6/hour matches
+          the existing 10-minute debounce. Lower this if your heat pump vendor enforces a
+          flash-write budget (e.g. Daikin EDLA082 family).
+        </div>
+        <WriteBudgetField
+          label="Flow writes per hour"
+          fieldKey="flow_writes_per_hour"
+          apiPath="api/control/flow-writes-per-hour"
+          rootConfig={rootConfig}
+          onSuccess={onRefetch}
+        />
+        <WriteBudgetField
+          label="Mode writes per hour"
+          fieldKey="mode_writes_per_hour"
+          apiPath="api/control/mode-writes-per-hour"
+          rootConfig={rootConfig}
+          onSuccess={onRefetch}
+        />
+      </div>
+
       {/* Flow Control Details */}
       <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-4">
         <button
@@ -513,32 +536,6 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
                     placeholder={placeholder}
                   />
                 ))}
-                {/* Hot Water Signals — MQTT (INSTRUCTION-127A) */}
-                <div className="pt-2 mt-2 border-t border-[var(--border)]">
-                  <p className="text-xs font-medium text-[var(--text-muted)] mb-2">
-                    Hot Water Signals
-                  </p>
-                  <TopicField
-                    label="DHW Active (primary)"
-                    value={mqttInputs.hot_water_active?.topic || ''}
-                    onChange={(v) => updateMqttInput('hot_water_active', v)}
-                    placeholder="heat_pump/dhw/active"
-                  />
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">
-                    Writes to <code>mqtt.inputs.hot_water_active</code>. Accepts on / true / 1 /
-                    heat / high_demand as ON.
-                  </p>
-                  <TopicField
-                    label="DHW Active Boolean (optional OR)"
-                    value={mqttInputs.hot_water_boolean?.topic || ''}
-                    onChange={(v) => updateMqttInput('hot_water_boolean', v)}
-                    placeholder="heat_pump/dhw/demand_bool"
-                  />
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">
-                    Writes to <code>mqtt.inputs.hot_water_boolean</code>. OR&apos;d with primary.
-                    Same payload semantics.
-                  </p>
-                </div>
               </>
             ) : (
               <>
@@ -614,15 +611,6 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
                   onChange={(v) => updateSensor('delta_t', v)}
                   placeholder="sensor.hp_delta_t"
                 />
-                <EntityField
-                  label="Water Heater"
-                  value={hs.sensors?.water_heater || ''}
-                  friendlyName={resolved[hs.sensors?.water_heater || '']?.friendly_name}
-                  state={resolved[hs.sensors?.water_heater || '']?.state}
-                  unit={resolved[hs.sensors?.water_heater || '']?.unit}
-                  onChange={(v) => updateSensor('water_heater', v)}
-                  placeholder="water_heater.heat_pump"
-                />
               </>
             )}
           </div>
@@ -633,14 +621,13 @@ export function HeatSourceSettings({ heatSource, heatSources, sourceSelection, r
         Changing heat source type will trigger a pipeline restart.
       </p>
 
-      {/* Source Selection Settings (multi-source only) */}
-      {heatSources && heatSources.length > 1 && sourceSelection && (
-        <SourceSelectionSettings
-          config={sourceSelection}
-          sourceNames={heatSources.map(s => s.name ?? s.type)}
-          onRefetch={onRefetch}
-        />
-      )}
+      {/* Source Selection Settings (228B Task 2: component itself renders
+          an explainer note when fewer than two sources are configured). */}
+      <SourceSelectionSettings
+        config={sourceSelection}
+        sourceNames={(heatSources ?? []).map(s => s.name ?? s.type)}
+        onRefetch={onRefetch}
+      />
     </div>
   )
 }

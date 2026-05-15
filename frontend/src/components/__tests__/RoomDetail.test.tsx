@@ -150,3 +150,159 @@ describe('RoomDetail fixed_setpoint annotation', () => {
     expect(screen.queryByTestId('fixed-target-annotation')).toBeNull()
   })
 })
+
+
+// =============================================================================
+// INSTRUCTION-224E — per-emitter valve block
+// =============================================================================
+
+
+describe('RoomDetail per-emitter valve block (INSTRUCTION-224E)', () => {
+  it('renders the per-emitter block for multi-emitter rooms', () => {
+    render(
+      <RoomDetail
+        name="open_plan"
+        room={{
+          ...baseRoom,
+          valve: 55,
+          valve_positions_per_emitter: {
+            dining_trv: 90,
+            sitting_room_trv: 20,
+          },
+        }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.getByTestId('per-emitter-valve-block')).toBeDefined()
+    expect(screen.getByText('Per-Emitter Valve Position')).toBeDefined()
+    expect(screen.getByText('dining_trv')).toBeDefined()
+    expect(screen.getByText('sitting_room_trv')).toBeDefined()
+    expect(screen.getByText('90%')).toBeDefined()
+    expect(screen.getByText('20%')).toBeDefined()
+  })
+
+  it('does NOT render the per-emitter block for single-emitter rooms', () => {
+    render(
+      <RoomDetail
+        name="kitchen"
+        room={{
+          ...baseRoom,
+          valve: 60,
+          valve_positions_per_emitter: { kitchen_trv: 60 },
+        }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('per-emitter-valve-block')).toBeNull()
+    expect(screen.queryByText('Per-Emitter Valve Position')).toBeNull()
+  })
+
+  it('does NOT render the per-emitter block when per-emitter is undefined or empty', () => {
+    const { rerender } = render(
+      <RoomDetail
+        name="kitchen"
+        room={baseRoom}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('per-emitter-valve-block')).toBeNull()
+    rerender(
+      <RoomDetail
+        name="kitchen"
+        room={{ ...baseRoom, valve_positions_per_emitter: {} }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    expect(screen.queryByTestId('per-emitter-valve-block')).toBeNull()
+  })
+
+  it('still renders the aggregate Valve headline regardless of per-emitter presence', () => {
+    render(
+      <RoomDetail
+        name="open_plan"
+        room={{
+          ...baseRoom,
+          valve: 55,
+          valve_positions_per_emitter: {
+            dining_trv: 90,
+            sitting_room_trv: 20,
+          },
+        }}
+        engineering={false}
+        onClose={noop}
+      />
+    )
+    // The aggregate Valve line uses `${room.valve}%`. Tolerate the existing
+    // DetailItem markup by matching the value string anywhere in the document.
+    expect(screen.getByText('55%')).toBeDefined()
+  })
+})
+
+describe('RoomDetail MANUAL context strip (INSTRUCTION-225D)', () => {
+  it('omits the strip when room is in AUTO', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={baseRoom}
+        engineering={false}
+        onClose={noop}
+        manualEntry={{
+          room: 'lounge', mode: 'AUTO', position_pct: null,
+          set_by: 'startup_default', set_at: 0, hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    expect(screen.queryByTestId('manual-strip')).toBeNull()
+    expect(screen.queryByText(/Manual Override/i)).toBeNull()
+  })
+
+  it('shows position, set_by, and set_at when room is in MANUAL', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={baseRoom}
+        engineering={false}
+        onClose={noop}
+        manualEntry={{
+          room: 'lounge', mode: 'MANUAL', position_pct: 65,
+          set_by: 'engineering_ui',
+          set_at: 1715600000,
+          hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    const strip = screen.getByTestId('manual-strip')
+    expect(strip).toBeDefined()
+    expect(strip.textContent).toContain('Manual Override')
+    expect(strip.textContent).toContain('65')
+    expect(strip.textContent).toContain('engineering_ui')
+    // set_at formatted via toLocaleTimeString — verify the text contains
+    // something time-like (digits-colon-digits). Avoids tying the test to
+    // a specific locale.
+    expect(strip.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
+  })
+
+  it('strip does NOT include an AUTO/MAN toggle (read-only)', () => {
+    render(
+      <RoomDetail
+        name="lounge"
+        room={baseRoom}
+        engineering={false}
+        onClose={noop}
+        manualEntry={{
+          room: 'lounge', mode: 'MANUAL', position_pct: 65,
+          set_by: 'engineering_ui', set_at: 1715600000, hardware_type: 'direct_type1',
+        }}
+      />
+    )
+    const strip = screen.getByTestId('manual-strip')
+    // No <button> elements inside the strip.
+    expect(strip.querySelectorAll('button').length).toBe(0)
+    // And no AUTO/MAN labels rendered as controls within the strip.
+    expect(strip.querySelector('[aria-pressed]')).toBeNull()
+  })
+})

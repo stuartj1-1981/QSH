@@ -478,6 +478,197 @@ describe('Tariff strategy', () => {
   })
 })
 
+// 228B Task 3: Active-source provenance badge.
+describe('StatusBanner active-source badge', () => {
+  const sourceSelection = {
+    active_source: 'heat_pump',
+    reason: 'cost' as const,
+    detail: 'heat_pump 0.062 < lpg_boiler 0.073 £/kWh-equiv',
+    blocked_switches: [],
+    failover_active: false,
+  }
+
+  it('renders the active-source badge when heat_sources.length >= 2', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={sourceSelection}
+      />,
+    )
+    const badge = screen.getByTestId('active-source-badge')
+    expect(badge).toBeDefined()
+    expect(screen.getByTestId('active-source-name').textContent).toBe('heat_pump')
+    expect(screen.getByTestId('active-source-reason-chip').textContent).toBe('Cost')
+  })
+
+  it('hides the badge when heat_sources.length < 2', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={1}
+        sourceSelection={sourceSelection}
+      />,
+    )
+    expect(screen.queryByTestId('active-source-badge')).toBeNull()
+  })
+
+  it('hides the badge when heatSourceCount is undefined (defensive default)', () => {
+    render(<StatusBanner {...baseProps} sourceSelection={sourceSelection} />)
+    expect(screen.queryByTestId('active-source-badge')).toBeNull()
+  })
+
+  it("hides the badge when reason === 'single_source'", () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{ ...sourceSelection, reason: 'single_source' }}
+      />,
+    )
+    expect(screen.queryByTestId('active-source-badge')).toBeNull()
+  })
+
+  it('hides the badge when sourceSelection is undefined', () => {
+    render(<StatusBanner {...baseProps} heatSourceCount={2} />)
+    expect(screen.queryByTestId('active-source-badge')).toBeNull()
+  })
+
+  // Parametrised — one chip text per Literal value.
+  const chipTextCases: Array<[string, string]> = [
+    ['cost',           'Cost'],
+    ['carbon',         'Carbon'],
+    ['manual_lock',    'Locked'],
+    ['failover',       'Failover'],
+    ['dwell_hold',     'Hold (dwell)'],
+    ['deadband_hold',  'Hold (close)'],
+    ['daily_cap_hold', 'Hold (cap)'],
+  ]
+  it.each(chipTextCases)(
+    'renders chip text %s -> %s exactly',
+    (reason, expected) => {
+      render(
+        <StatusBanner
+          {...baseProps}
+          heatSourceCount={2}
+          sourceSelection={{
+            ...sourceSelection,
+            reason: reason as typeof sourceSelection.reason,
+          }}
+        />,
+      )
+      const chip = screen.getByTestId('active-source-reason-chip')
+      expect(chip.textContent).toBe(expected)
+    },
+  )
+
+  it("does not render a chip when reason === 'single_source' (badge hidden entirely)", () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{ ...sourceSelection, reason: 'single_source' }}
+      />,
+    )
+    expect(screen.queryByTestId('active-source-reason-chip')).toBeNull()
+  })
+
+  it("applies failover styling when reason === 'failover'", () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{ ...sourceSelection, reason: 'failover', failover_active: true }}
+      />,
+    )
+    const badge = screen.getByTestId('active-source-badge')
+    expect(badge.className).toMatch(/amber/)
+    expect(badge.getAttribute('data-source-reason')).toBe('failover')
+  })
+
+  it('tooltip surfaces the detail field', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{
+          ...sourceSelection,
+          detail: 'dwell 1240s of 1800s',
+        }}
+      />,
+    )
+    const badge = screen.getByTestId('active-source-badge')
+    expect(badge.getAttribute('title')).toMatch(/dwell 1240s of 1800s/)
+  })
+
+  it("tooltip lists blocked_switches when reason is not 'failover'", () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{
+          ...sourceSelection,
+          reason: 'dwell_hold',
+          detail: 'dwell 1240s of 1800s',
+          blocked_switches: [{ to: 'lpg_boiler', reason: 'dwell' }],
+        }}
+      />,
+    )
+    const badge = screen.getByTestId('active-source-badge')
+    const title = badge.getAttribute('title') ?? ''
+    expect(title).toMatch(/dwell 1240s of 1800s/)
+    expect(title).toMatch(/lpg_boiler held back by dwell/)
+  })
+
+  it("tooltip omits blocked_switches under failover (per parent Decision 4)", () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={{
+          ...sourceSelection,
+          reason: 'failover',
+          failover_active: true,
+          detail: 'heat_pump unavailable for 3 cycles; switched to lpg_boiler',
+          blocked_switches: [{ to: 'heat_pump', reason: 'dwell' }],
+        }}
+      />,
+    )
+    const badge = screen.getByTestId('active-source-badge')
+    const title = badge.getAttribute('title') ?? ''
+    expect(title).toMatch(/heat_pump unavailable for 3 cycles/)
+    expect(title).not.toMatch(/held back by/)
+  })
+
+  it('renders the heat-pump icon when active source type is heat_pump', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSourceCount={2}
+        sourceSelection={sourceSelection}
+      />,
+    )
+    // The icon is rendered inside the badge — assert presence by data-testid.
+    expect(screen.getByTestId('active-source-icon')).toBeDefined()
+  })
+
+  it('renders the boiler icon when active source type is a boiler', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSource={{
+          ...baseProps.heatSource,
+          type: 'gas_boiler',
+          performance: { value: 0.85, source: 'config' },
+        }}
+        heatSourceCount={2}
+        sourceSelection={sourceSelection}
+      />,
+    )
+    expect(screen.getByTestId('active-source-icon')).toBeDefined()
+  })
+})
+
 // INSTRUCTION-186: active control-method diagnostic badge.
 describe('StatusBanner control-method badge', () => {
   it('renders the badge when controlMethod is a known value', () => {

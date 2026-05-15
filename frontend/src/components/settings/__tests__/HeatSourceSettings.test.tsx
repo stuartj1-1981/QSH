@@ -1,14 +1,16 @@
 /**
- * INSTRUCTION-127A — HeatSourceSettings MQTT branch DHW signal parity.
+ * INSTRUCTION-236 — HeatSourceSettings is positively non-authoritative for
+ * DHW signal keys (water_heater, hot_water_active, hot_water_boolean). The
+ * fields are relocated to HotWaterSettings; HeatSourceSettings must NOT
+ * render them and MUST NOT write them in its save payload, even when a
+ * stale prop carries DHW values.
  *
- * - DHW Active (primary) + DHW Active Boolean (optional OR) TopicFields render
- *   under a "Hot Water Signals" subsection on MQTT.
- * - The legacy `water_heater` TopicField row is removed.
- * - Save issues PATCH /api/config/heat_source then PATCH /api/config/mqtt
- *   with a full mqtt body whose inputs contain the new topics.
+ * Originally INSTRUCTION-127A (MQTT DHW signal parity inside HeatSourceSettings);
+ * that contract is retired by INSTRUCTION-236.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import type { MqttConfig } from '../../../types/config'
 
 const patch = vi.fn()
 
@@ -34,63 +36,93 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('HeatSourceSettings — MQTT DHW signals (INSTRUCTION-127A)', () => {
-  it('MQTT driver: DHW Active (primary) TopicField renders in Sensor Topics', () => {
+describe('HeatSourceSettings — DHW relocation (INSTRUCTION-236)', () => {
+  it('DHW signal fields are absent from the sensor section in both drivers', () => {
+    ;(['ha', 'mqtt'] as const).forEach((driver) => {
+      const { unmount } = render(
+        <HeatSourceSettings
+          heatSource={baseHs}
+          driver={driver}
+          mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+          onRefetch={noop}
+        />,
+      )
+      fireEvent.click(screen.getByText(driver === 'mqtt' ? 'Sensor Topics' : 'Sensor Entities'))
+
+      // HA: Water Heater EntityField removed.
+      expect(screen.queryByText(/^Water Heater$/)).toBeNull()
+      expect(screen.queryByPlaceholderText('water_heater.heat_pump')).toBeNull()
+
+      // MQTT: Hot Water Signals sub-block (DHW Active primary + boolean) removed.
+      expect(screen.queryByText('Hot Water Signals')).toBeNull()
+      expect(screen.queryByText('DHW Active (primary)')).toBeNull()
+      expect(screen.queryByText('DHW Active Boolean (optional OR)')).toBeNull()
+      expect(screen.queryByPlaceholderText('heat_pump/dhw/active')).toBeNull()
+      expect(screen.queryByPlaceholderText('heat_pump/dhw/demand_bool')).toBeNull()
+
+      unmount()
+    })
+  })
+
+  it('HeatSourceSettings save never includes DHW keys in patch payload, regardless of prop state', async () => {
     render(
       <HeatSourceSettings
-        heatSource={baseHs}
-        driver="mqtt"
-        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+        heatSource={{
+          type: 'heat_pump',
+          efficiency: 3.5,
+          flow_min: 25,
+          flow_max: 50,
+          sensors: {
+            // Stale prop carries DHW keys from a pre-236 save or a concurrent
+            // HotWaterSettings tab. The HeatSource save MUST omit them.
+            flow_temp: 'sensor.hp_flow_temp',
+            water_heater: 'water_heater.STALE_VALUE',
+            hot_water_boolean: 'binary_sensor.STALE_VALUE',
+          },
+        }}
+        mqtt={{
+          broker: 'localhost',
+          port: 1883,
+          // Stale MQTT prop too — though HeatSource no longer writes mqtt, prove it.
+          inputs: {
+            hot_water_active: { topic: 'qsh/dhw/STALE', format: 'plain' },
+            hot_water_boolean: { topic: 'qsh/dhw/STALE2', format: 'plain' },
+          },
+        } as MqttConfig}
+        driver="ha"
         onRefetch={noop}
       />,
     )
-    fireEvent.click(screen.getByText('Sensor Topics'))
-    expect(screen.getByText('DHW Active (primary)')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('heat_pump/dhw/active')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }))
+
+    await waitFor(() => {
+      const hsCall = patch.mock.calls.find(c => c[0] === 'heat_source')
+      expect(hsCall).toBeDefined()
+    })
+
+    const hsCall = patch.mock.calls.find(c => c[0] === 'heat_source')!
+    const body = hsCall[1] as { sensors?: Record<string, unknown> }
+    // Non-DHW sensor preserved.
+    expect(body.sensors?.flow_temp).toBe('sensor.hp_flow_temp')
+    // DHW keys explicitly omitted by the destructure in HeatSourceSettings.save().
+    expect(body.sensors?.water_heater).toBeUndefined()
+    expect(body.sensors?.hot_water_boolean).toBeUndefined()
+    // No MQTT patch fired — the entire branch was deleted.
+    const mqttCall = patch.mock.calls.find(c => c[0] === 'mqtt')
+    expect(mqttCall).toBeUndefined()
   })
 
-  it('MQTT driver: DHW Active Boolean (optional OR) TopicField renders', () => {
+  it('MQTT driver: HeatSourceSettings save does not patch mqtt at all (DHW writes owned by HotWaterSettings)', async () => {
     render(
-      <HeatSourceSettings
-        heatSource={baseHs}
-        driver="mqtt"
-        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
-        onRefetch={noop}
-      />,
-    )
-    fireEvent.click(screen.getByText('Sensor Topics'))
-    expect(screen.getByText('DHW Active Boolean (optional OR)')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('heat_pump/dhw/demand_bool')).toBeInTheDocument()
-  })
-
-  it('MQTT driver: legacy Water Heater TopicField is absent from the Sensor Topics section', () => {
-    render(
-      <HeatSourceSettings
-        heatSource={baseHs}
-        driver="mqtt"
-        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
-        onRefetch={noop}
-      />,
-    )
-    fireEvent.click(screen.getByText('Sensor Topics'))
-    // Scope to the Sensor Topics section — "Water Heater" must not appear here.
-    const sensorHeader = screen.getByText('Sensor Topics')
-    const sensorSection = sensorHeader.closest('div')
-    expect(sensorSection).not.toBeNull()
-    expect(within(sensorSection!).queryByText(/^Water Heater$/)).toBeNull()
-    expect(screen.queryByPlaceholderText('heat_pump/water_heater')).toBeNull()
-  })
-
-  it('MQTT driver: Save issues PATCH heat_source then PATCH mqtt with full body + new topic', async () => {
-    const { container } = render(
       <HeatSourceSettings
         heatSource={baseHs}
         driver="mqtt"
         mqtt={{
           broker: 'mqtt.local',
           port: 1883,
-          password: '***REDACTED***',
           inputs: {
+            hot_water_active: { topic: 'existing/active', format: 'plain' },
             outdoor_temp: { topic: 'sensors/outdoor_temp', format: 'plain' },
           },
         }}
@@ -98,27 +130,12 @@ describe('HeatSourceSettings — MQTT DHW signals (INSTRUCTION-127A)', () => {
       />,
     )
 
-    // Expand sensors and populate primary DHW topic.
-    fireEvent.click(screen.getByText('Sensor Topics'))
-    const primaryInput = screen.getByPlaceholderText('heat_pump/dhw/active') as HTMLInputElement
-    fireEvent.change(primaryInput, { target: { value: 'heat_pump/dhw/active' } })
-
-    fireEvent.click(screen.getByText('Save Changes'))
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }))
 
     await waitFor(() => {
       expect(patch).toHaveBeenCalledWith('heat_source', expect.any(Object))
-      expect(patch).toHaveBeenCalledWith('mqtt', expect.any(Object))
     })
-
-    const mqttCall = patch.mock.calls.find(c => c[0] === 'mqtt')
-    expect(mqttCall).toBeTruthy()
-    const body = mqttCall![1] as Record<string, unknown>
-    expect(body.broker).toBe('mqtt.local')
-    expect(body.port).toBe(1883)
-    expect(body.password).toBe('***REDACTED***') // UI echoes sentinel; server swaps it
-    const inputs = body.inputs as Record<string, { topic: string }>
-    expect(inputs.hot_water_active.topic).toBe('heat_pump/dhw/active')
-    expect(inputs.outdoor_temp.topic).toBe('sensors/outdoor_temp')
-    void container
+    // Crucial: no mqtt patch is fired from HeatSourceSettings.
+    expect(patch.mock.calls.find(c => c[0] === 'mqtt')).toBeUndefined()
   })
 })

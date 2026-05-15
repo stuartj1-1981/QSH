@@ -34,7 +34,11 @@ const MOCK_RESPONSE: SourceSelectionState = {
   switch_count_today: 0,
   max_switches_per_day: 6,
   failover_active: false,
-  last_switch_reason: 'auto',
+  last_switch_reason: 'cost',
+  // 228B Task 1: new required fields on SourceSelectionPayload base.
+  reason: 'cost',
+  detail: '',
+  blocked_switches: [],
 }
 
 describe('useSourceSelection', () => {

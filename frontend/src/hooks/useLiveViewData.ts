@@ -70,14 +70,25 @@ export function useLiveViewData(): {
     // installs; on boilers the performance value is η and semantically
     // not a COP — the 3D view's legacy field is left at 0 so nothing
     // downstream renders a misleading COP figure.
+    //
+    // Performance provenance gate (mirrors StatusBanner.tsx:183-184):
+    // only surface the COP when the resolver marks it `'live'` — i.e.
+    // measured this cycle or inside the 5-cycle HP hold window. When the
+    // resolver emits `'config'` (HP off, sensor loss fallback, etc.) the
+    // value is the caps baseline (e.g. 2.5), NOT a real COP, and must
+    // not appear on the live canvas. The downstream renderer suppresses
+    // the readout via `cop != null && cop > 0`, so 0 is the off-sentinel.
     const hs = live.status?.heat_source
     const isHp = hs?.type === 'heat_pump'
+    const copLive = isHp && hs?.performance.source === 'live'
+      ? hs.performance.value
+      : 0
     return {
       rooms,
       hp: {
         power_kw: hs?.input_power_kw ?? 0,
         capacity_kw: live.status?.hp_capacity_kw ?? 8.0,
-        cop: isHp ? hs?.performance.value ?? 0 : 0,
+        cop: copLive,
         flow_temp: hs?.flow_temp ?? 0,
         return_temp: hs?.return_temp ?? 0,
         outdoor_temp: live.status?.outdoor_temp ?? 0,

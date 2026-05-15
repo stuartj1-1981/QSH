@@ -33,19 +33,24 @@ export function Rooms({ engineering }: RoomsProps) {
       <h2 className="text-xl font-bold mb-4">Rooms</h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-        {Object.entries(rooms).map(([name, room]) => (
-          <RoomCard
-            key={name}
-            name={name}
-            room={room}
-            boost={boostRooms[name]}
-            onClick={() => setSelectedRoom(name)}
-            entityIds={entityMap?.rooms[name]}
-            engineering={engineering}
-            comfortTempActive={comfortTempActive}
-            hpActive={hpActive}
-          />
-        ))}
+        {Object.entries(rooms).map(([name, room]) => {
+          const manualMap = live?.manual_state?.[name]
+          const manualEntry = manualMap ? { room: name, ...manualMap } : undefined
+          return (
+            <RoomCard
+              key={name}
+              name={name}
+              room={room}
+              boost={boostRooms[name]}
+              onClick={() => setSelectedRoom(name)}
+              entityIds={entityMap?.rooms[name]}
+              engineering={engineering}
+              comfortTempActive={comfortTempActive}
+              hpActive={hpActive}
+              manualEntry={manualEntry}
+            />
+          )
+        })}
       </div>
 
       {/* Multi-room temperature overlay */}
@@ -62,18 +67,30 @@ export function Rooms({ engineering }: RoomsProps) {
       )}
 
       {/* Room detail modal */}
-      {selectedRoom && rooms[selectedRoom] && (
-        <RoomDetail
-          name={selectedRoom}
-          room={rooms[selectedRoom]}
-          sysid={sysidData?.rooms?.[selectedRoom]}
-          boost={boostRooms[selectedRoom]}
-          engineering={engineering}
-          onClose={() => setSelectedRoom(null)}
-          entityIds={entityMap?.rooms[selectedRoom]}
-          hpActive={hpActive}
-        />
-      )}
+      {selectedRoom && rooms[selectedRoom] && (() => {
+        const manualMap = live?.manual_state?.[selectedRoom]
+        const manualEntry = manualMap ? { room: selectedRoom, ...manualMap } : undefined
+        return (
+          <RoomDetail
+            name={selectedRoom}
+            room={{
+              ...rooms[selectedRoom],
+              // INSTRUCTION-224E — flatten the top-level per-emitter dict for
+              // this room onto the per-room view-model object so RoomDetail
+              // sees a uniform shape (no extra prop or direct useLive access).
+              valve_positions_per_emitter:
+                live?.valve_positions_per_emitter?.[selectedRoom],
+            }}
+            sysid={sysidData?.rooms?.[selectedRoom]}
+            boost={boostRooms[selectedRoom]}
+            engineering={engineering}
+            onClose={() => setSelectedRoom(null)}
+            entityIds={entityMap?.rooms[selectedRoom]}
+            hpActive={hpActive}
+            manualEntry={manualEntry}
+          />
+        )
+      })()}
     </div>
   )
 }

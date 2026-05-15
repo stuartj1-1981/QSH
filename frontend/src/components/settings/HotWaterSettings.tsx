@@ -64,6 +64,25 @@ export function HotWaterSettings({
   )
   const [hwBooleanTopic, setHwBooleanTopic] = useState<string | undefined>(() => {
     const raw = (initialMqtt?.inputs as Record<string, unknown> | undefined)?.hot_water_boolean
+    if (raw && typeof raw === 'object' && 'topic' in (raw as Record<string, unknown>)) {
+      const topic = (raw as { topic?: unknown }).topic
+      return typeof topic === 'string' ? topic : undefined
+    }
+    return typeof raw === 'string' ? raw : undefined
+  })
+  // INSTRUCTION-236: Primary DHW signal — water_heater entity (HA) and
+  // hot_water_active topic (MQTT). Relocated from HeatSourceSettings so both
+  // OR-partners sit on the same screen, and so HotWaterSettings is the sole
+  // edit surface for these three keys.
+  const [waterHeaterEntity, setWaterHeaterEntity] = useState<string | undefined>(
+    initialHeatSource?.sensors?.water_heater
+  )
+  const [hwActiveTopic, setHwActiveTopic] = useState<string | undefined>(() => {
+    const raw = (initialMqtt?.inputs as Record<string, unknown> | undefined)?.hot_water_active
+    if (raw && typeof raw === 'object' && 'topic' in (raw as Record<string, unknown>)) {
+      const topic = (raw as { topic?: unknown }).topic
+      return typeof topic === 'string' ? topic : undefined
+    }
     return typeof raw === 'string' ? raw : undefined
   })
 
@@ -90,11 +109,20 @@ export function HotWaterSettings({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setHwBooleanEntity(initialHeatSource?.sensors?.hot_water_boolean)
+    setWaterHeaterEntity(initialHeatSource?.sensors?.water_heater)
   }, [initialHeatSource])
   useEffect(() => {
-    const t = (initialMqtt?.inputs as Record<string, unknown> | undefined)?.hot_water_boolean
+    const inputs = (initialMqtt?.inputs as Record<string, unknown> | undefined) || {}
+    const extractTopic = (raw: unknown): string | undefined => {
+      if (raw && typeof raw === 'object' && 'topic' in (raw as Record<string, unknown>)) {
+        const topic = (raw as { topic?: unknown }).topic
+        return typeof topic === 'string' ? topic : undefined
+      }
+      return typeof raw === 'string' ? raw : undefined
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
-    setHwBooleanTopic(typeof t === 'string' ? t : undefined)
+    setHwBooleanTopic(extractTopic(inputs.hot_water_boolean))
+    setHwActiveTopic(extractTopic(inputs.hot_water_active))
   }, [initialMqtt])
 
   // On MQTT, force schedule source to 'fixed' — HA entity schedule is unavailable
@@ -117,9 +145,10 @@ export function HotWaterSettings({
         tank.sensor_top,
         tank.sensor_bottom,
         hwBooleanEntity,
+        waterHeaterEntity,
       ].filter(Boolean) as string[]
     },
-    [schedule.entity_id, tank.water_heater_entity, tank.sensor_top, tank.sensor_bottom, hwBooleanEntity, driver]
+    [schedule.entity_id, tank.water_heater_entity, tank.sensor_top, tank.sensor_bottom, hwBooleanEntity, waterHeaterEntity, driver]
   )
   const { resolved } = useEntityResolve(entityIds, driver)
 
@@ -163,14 +192,26 @@ export function HotWaterSettings({
           name: 'mqtt',
           fn: () => {
             const mqttCfg = (initialMqtt || {}) as unknown as Record<string, unknown>
+            // INSTRUCTION-236: MQTT inputs are normalised to MqttTopicInput
+            // object shape ({ topic, format }) for both hot_water_active and
+            // hot_water_boolean. Backend mqtt_driver tolerates both bare
+            // strings and the object form (see qsh/drivers/mqtt/topic_map.py),
+            // but the object form is the canonical MqttTopicInput contract.
+            // Round-trip read handles legacy bare-string values via the
+            // typeof check in the state initialiser.
             const existingInputs = (mqttCfg.inputs as Record<string, unknown> | undefined) || {}
-            const nextMqtt = {
-              ...mqttCfg,
-              inputs: {
-                ...existingInputs,
-                hot_water_boolean: hwBooleanTopic || undefined,
-              },
+            const nextInputs: Record<string, unknown> = { ...existingInputs }
+            if (hwActiveTopic) {
+              nextInputs.hot_water_active = { topic: hwActiveTopic, format: 'plain' }
+            } else {
+              delete nextInputs.hot_water_active
             }
+            if (hwBooleanTopic) {
+              nextInputs.hot_water_boolean = { topic: hwBooleanTopic, format: 'plain' }
+            } else {
+              delete nextInputs.hot_water_boolean
+            }
+            const nextMqtt = { ...mqttCfg, inputs: nextInputs }
             return patchOrDelete('mqtt', true, nextMqtt as Record<string, unknown>)
           },
         })
@@ -182,6 +223,7 @@ export function HotWaterSettings({
               ...((initialHeatSource || { type: 'heat_pump' }) as HeatSourceYaml),
               sensors: {
                 ...(initialHeatSource?.sensors || {}),
+                water_heater: waterHeaterEntity || undefined,
                 hot_water_boolean: hwBooleanEntity || undefined,
               },
             }
@@ -362,27 +404,53 @@ export function HotWaterSettings({
               </div>
             </div>
 
-            {/* Hot water boolean — optional OR'd signal (INSTRUCTION-126) */}
-            {driver === 'mqtt' ? (
-              <TopicField
-                label="Hot Water Boolean Topic (optional)"
-                value={hwBooleanTopic || ''}
-                onChange={(v) => setHwBooleanTopic(v || undefined)}
-                placeholder="qsh/hot_water/demand"
-                helpText="OR'd with the hot_water_active topic. Accepts on/true/1/heat/high_demand."
-              />
-            ) : (
-              <EntityField
-                label="Hot Water Boolean (optional)"
-                value={hwBooleanEntity || ''}
-                friendlyName={resolved[hwBooleanEntity || '']?.friendly_name}
-                state={resolved[hwBooleanEntity || '']?.state}
-                unit={resolved[hwBooleanEntity || '']?.unit}
-                onChange={(v) => setHwBooleanEntity(v || undefined)}
-                placeholder="binary_sensor.hw_demand"
-                helpText="OR'd with the water-heater entity. Accepts on/true/1/heat/high_demand."
-              />
-            )}
+            {/* Hot Water Signals — INSTRUCTION-236 (relocated from HeatSourceSettings) */}
+            <div className="pt-2 mt-2 border-t border-[var(--border)]">
+              <p className="text-xs font-medium text-[var(--text-muted)] mb-2 flex items-center gap-1">
+                Hot Water Signals <HelpTip text={HOT_WATER.signalsGroup} size={12} />
+              </p>
+              {driver === 'mqtt' ? (
+                <>
+                  <TopicField
+                    label="DHW Active Topic (primary)"
+                    value={hwActiveTopic || ''}
+                    onChange={(v) => setHwActiveTopic(v || undefined)}
+                    placeholder="heat_pump/dhw/active"
+                    helpText={HOT_WATER.signalsPrimary}
+                  />
+                  <TopicField
+                    label="DHW Active Boolean Topic (optional, OR'd)"
+                    value={hwBooleanTopic || ''}
+                    onChange={(v) => setHwBooleanTopic(v || undefined)}
+                    placeholder="heat_pump/dhw/demand_bool"
+                    helpText={HOT_WATER.signalsBoolean}
+                  />
+                </>
+              ) : (
+                <>
+                  <EntityField
+                    label="Water Heater Entity (primary)"
+                    value={waterHeaterEntity || ''}
+                    friendlyName={resolved[waterHeaterEntity || '']?.friendly_name}
+                    state={resolved[waterHeaterEntity || '']?.state}
+                    unit={resolved[waterHeaterEntity || '']?.unit}
+                    onChange={(v) => setWaterHeaterEntity(v || undefined)}
+                    placeholder="water_heater.heat_pump"
+                    helpText={HOT_WATER.signalsPrimary}
+                  />
+                  <EntityField
+                    label="Hot Water Boolean Entity (optional, OR'd)"
+                    value={hwBooleanEntity || ''}
+                    friendlyName={resolved[hwBooleanEntity || '']?.friendly_name}
+                    state={resolved[hwBooleanEntity || '']?.state}
+                    unit={resolved[hwBooleanEntity || '']?.unit}
+                    onChange={(v) => setHwBooleanEntity(v || undefined)}
+                    placeholder="binary_sensor.hw_demand"
+                    helpText={HOT_WATER.signalsBoolean}
+                  />
+                </>
+              )}
+            </div>
 
             {/* Temperature probes — adjustable 0/1/2 */}
             <div className="space-y-3">

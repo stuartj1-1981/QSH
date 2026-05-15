@@ -44,6 +44,7 @@ def query_historian(
     measurement: str = Query(..., description="InfluxDB measurement name"),
     field: str = Query(..., description="Field name(s), comma-separated"),
     room: Optional[str] = Query(default=None, description="Room tag filter"),
+    hw_active: Optional[str] = Query(default=None, description="Optional 'true'/'false' filter on hw_active tag (qsh_system only)"),
     time_from: str = Query(default="-24h", alias="from", description="Start time (e.g. -24h, -7d)"),
     time_to: str = Query(default="now()", alias="to", description="End time"),
     interval: str = Query(default="5m", description="Aggregation interval"),
@@ -67,6 +68,7 @@ def query_historian(
         time_from=time_from,
         time_to=time_to,
         room=room,
+        hw_active=hw_active,
         aggregation=aggregation,
         interval=interval,
     )

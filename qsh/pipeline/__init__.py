@@ -361,7 +361,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         SourceSelectionController(config=config),
         ForecastController(
             config=config,
-            weather_forecaster=kw.get("weather_forecaster"),
+            forecast_provider=kw.get("forecast_provider"),
         ),
         # INSTRUCTION-136A V7 Task 6: TariffOptimiserController inserted
         # between ForecastController and CycleController. Reads the active

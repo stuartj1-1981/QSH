@@ -29,7 +29,12 @@ describe('HotWaterSettings driver branching', () => {
     expect(screen.getByDisplayValue('temps/hwBotTemp')).toBeInTheDocument()
   })
 
-  it('water_heater_entity control is not rendered in either driver mode (127B consolidation)', () => {
+  it('legacy HwTankYaml.water_heater_entity prop value is not rendered as a control in either driver (127B consolidation)', () => {
+    // INSTRUCTION-236 re-introduces a "Water Heater Entity (primary)" control,
+    // but it reads from heat_source.sensors.water_heater — NOT from
+    // HwTankYaml.water_heater_entity. The 127B contract is that the tank-level
+    // legacy field is not surfaced; assert by the prop's value, not by label
+    // (the new field's label substring-matches the prior regex by coincidence).
     ;(['ha', 'mqtt'] as const).forEach((driver) => {
       const { unmount } = render(
         <HotWaterSettings
@@ -39,7 +44,7 @@ describe('HotWaterSettings driver branching', () => {
           onRefetch={noop}
         />
       )
-      expect(screen.queryByLabelText(/water heater entity/i)).toBeNull()
+      expect(screen.queryByDisplayValue('water_heater.hp')).toBeNull()
       unmount()
     })
   })

@@ -125,3 +125,160 @@ describe('StepRooms — per-room scan feedback (INSTRUCTION-145)', () => {
     expect(screen.queryByText(/Scanned —/)).toBeNull()
   })
 })
+
+
+// =============================================================================
+// INSTRUCTION-231D — paired per-emitter heating_entity rows (wizard)
+// =============================================================================
+
+
+describe('INSTRUCTION-231D: paired per-emitter heating_entity rows (wizard)', () => {
+  it('renders one paired emitter row when both lists are empty', () => {
+    const config = haConfig({
+      area_m2: 15,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    // One TRV row and one heating row with the wizard label conventions.
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity').length).toBe(1)
+    expect(screen.queryAllByRole('button', { name: /remove emitter/i }).length).toBe(0)
+  })
+
+  it('renders N paired rows when trv and heating lists have equal length', () => {
+    const config = haConfig({
+      area_m2: 40,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: ['climate.dining_trv', 'climate.sitting_room_trv'],
+      heating_entity: [
+        'number.dining_trv_valve_closing_degree',
+        'number.sitting_room_trv_valve_closing_degree',
+      ],
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 2').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity 2').length).toBe(1)
+    expect(screen.queryAllByRole('button', { name: /remove emitter/i }).length).toBe(2)
+  })
+
+  it('renders max(trv, heating) rows when lengths differ', () => {
+    const config = haConfig({
+      area_m2: 40,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: ['climate.A', 'climate.B', 'climate.C'],
+      heating_entity: 'sensor.lounge_heating',
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 2').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 3').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity 2').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity 3').length).toBe(1)
+  })
+
+  it('add emitter appends slot to both trv and heating lists', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 20,
+      facing: 'N',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: 'climate.lounge_trv',
+      heating_entity: 'sensor.lounge_heating',
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    const addBtn = screen.getByRole('button', { name: /add emitter/i })
+    fireEvent.click(addBtn)
+    // Wizard pushes the full rooms object on each update; verify the
+    // most recent call has both lists extended to length 2.
+    const lastCall = onUpdate.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    expect(lastCall![0]).toBe('rooms')
+    const updatedRooms = lastCall![1] as Record<string, RoomConfigYaml>
+    expect(updatedRooms.lounge.trv_entity).toEqual(['climate.lounge_trv', ''])
+    expect(updatedRooms.lounge.heating_entity).toEqual(['sensor.lounge_heating', ''])
+  })
+
+  it('remove emitter removes slot at same index from both lists', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 40,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: ['climate.A', 'climate.B'],
+      heating_entity: ['sensor.A', 'sensor.B'],
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    const removeButtons = screen.getAllByRole('button', { name: /remove emitter/i })
+    expect(removeButtons.length).toBe(2)
+    fireEvent.click(removeButtons[1])
+    const lastCall = onUpdate.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    const updatedRooms = lastCall![1] as Record<string, RoomConfigYaml>
+    // After collapse-to-scalar normalisation: both fields scalar.
+    expect(updatedRooms.lounge.trv_entity).toBe('climate.A')
+    expect(updatedRooms.lounge.heating_entity).toBe('sensor.A')
+  })
+
+  it('single-emitter scalar heating_entity contract preserved on edit via candidate selection', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 6,
+      facing: 'N',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: 'climate.lounge_trv',
+      heating_entity: 'sensor.lounge_heating',
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    // EntityPicker is a button-dropdown; we don't simulate a candidate
+    // pick here (would require populating roomCandidates which is set
+    // by the scan-room hook). Instead verify the rendered row count
+    // matches the scalar input (1 row, since heLen = trvLen = 1).
+    expect(screen.getAllByText('TRV Entity').length).toBe(1)
+    expect(screen.getAllByText('Heating Feedback Entity').length).toBe(1)
+    // Confirm the EntityPicker button surfaces the current scalar value
+    // somewhere on the page — the picker shows the value or
+    // friendly_name in the closed-state span.
+    expect(screen.getByText('sensor.lounge_heating')).toBeInTheDocument()
+  })
+
+  it('V2 MEDIUM-1 regression: extra heating row exists at index 2 when scalar heating + 3-trv list', () => {
+    const config = haConfig({
+      area_m2: 40,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: ['climate.A', 'climate.B', 'climate.C'],
+      heating_entity: 'sensor.shared_template',
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    // V2 MEDIUM-1 pin: the third paired row exists (Heating Feedback
+    // Entity 3 label rendered). Pre-V2 the helper would silently drop
+    // a value typed at index 2; the rendering pre-condition is that
+    // row 2 must be present so the operator CAN attempt to type into
+    // it. The full updateHeatingAt scalar-pad behaviour is exercised
+    // in the RoomSettings test (which uses text inputs); StepRooms
+    // uses EntityPicker (button-dropdown) so the pad-and-set logic
+    // is the same helper code but the interaction differs.
+    expect(screen.getAllByText('Heating Feedback Entity 3').length).toBe(1)
+    expect(screen.getAllByText('TRV Entity 3').length).toBe(1)
+  })
+})

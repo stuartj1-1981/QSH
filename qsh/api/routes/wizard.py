@@ -376,11 +376,42 @@ def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
             score -= 5
 
     elif slot == "heating_entity":
-        if not (eid.startswith("binary_sensor.") or eid.startswith("input_boolean.")):
+        # INSTRUCTION-231C — broaden prefix set to match validate_yaml.py:380
+        # canonical list. Pre-fix the gate accepted only binary_sensor./
+        # input_boolean. which rejected every actual heating_entity shape
+        # the codebase consumes (sensor.X_heating per the Tado template
+        # pattern; number.X_valve_position per the Sonoff direct_type1
+        # pattern; number.X_valve_opening_degree per direct_type2). The
+        # scoring heuristic now reflects the actual heating_entity
+        # semantic: a 0-100 valve-open percentage value.
+        _HE_PREFIXES = (
+            "sensor.", "number.", "binary_sensor.",
+            "input_boolean.", "switch.", "input_number.",
+        )
+        if not eid.startswith(_HE_PREFIXES):
             return 0
         score += 5
-        if "heating" in eid_lower or "heat" in name:
+        # Strong signals: entity_id contains "_heating" (the canonical
+        # template-sensor naming convention sensor.<room>_heating used by
+        # the majority of fleet installations) OR contains
+        # "valve_position" / "valve_opening_degree" (the canonical Sonoff
+        # number-entity naming).
+        if "_heating" in eid_lower:
+            score += 15
+        elif "valve_position" in eid_lower:
+            score += 12
+        elif "valve_opening_degree" in eid_lower:
             score += 10
+        elif "valve_closing_degree" in eid_lower:
+            # Closing-degree is operationally valid but inverted-polarity;
+            # score lower than opening-degree so the wizard's top
+            # suggestion is the non-inverted shape.
+            score += 5
+        # Friendly-name fallback heuristic (lower weight; entity_id is
+        # more reliable in HA than friendly_name).
+        if "heating" in name or "heat" in name:
+            score += 5
+        # Room-name match boost (preserved from pre-231C heuristic).
         if room_lower and room_lower in eid_lower:
             score += 20
 

@@ -127,6 +127,8 @@ from qsh.control import determine_hp_mode; \
 import qsh.pipeline; \
 import qsh.occupancy; \
 import qsh.drivers; \
+import qsh.forecast; \
+import qsh.forecast.providers; \
 print('T-23 / T-24 Check A deep import smoke PASS')"
 
 # Check B — boot-and-probe. Boots `python -m qsh` (which takes the template-mode

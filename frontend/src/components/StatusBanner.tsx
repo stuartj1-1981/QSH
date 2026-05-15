@@ -3,10 +3,18 @@ import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { sourceShortName } from '../lib/sourceLabels'
 import { DEFAULT_TARIFF_AGGRESSION_MODE, TARIFF_LABELS } from '../lib/tariff'
-import type { RoomState, DriverStatus, HeatSourceState } from '../types/api'
+import type {
+  RoomState,
+  DriverStatus,
+  HeatSourceState,
+  SourceSelectionPayload,
+} from '../types/api'
 import type { TariffAggressionMode } from '../types/config'
 import type { Page } from '../App'
 import { EntityValue } from './EntityValue'
+import { HeatPumpIcon } from './icons/HeatPumpIcon'
+import { BoilerIcon } from './icons/BoilerIcon'
+import { SOURCE_REASON_CHIP_TEXT } from '../lib/sourceReasonLabels'
 
 const PAUSE_STRATEGIES = [
   'hw active', 'hw pre-charge', 'hw recovery',
@@ -97,6 +105,13 @@ interface StatusBannerProps {
   // chip. Loose `string` type tolerates unknown future backend values
   // (forward-compat — see the unmapped-value test).
   controlMethod?: string
+  // 228B Task 3: active-source provenance payload from /ws/live. The
+  // badge renders when `sourceSelection` is present, the install is
+  // multi-source (heatSourceCount >= 2), and `reason !== 'single_source'`.
+  // heatSourceCount is read from the config / heat_sources length —
+  // the payload alone does not disclose that count.
+  sourceSelection?: SourceSelectionPayload
+  heatSourceCount?: number
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -121,6 +136,8 @@ export const StatusBanner = memo(function StatusBanner({
   tariffMode,
   summerMonitoring,
   controlMethod,
+  sourceSelection,
+  heatSourceCount,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -258,6 +275,11 @@ export const StatusBanner = memo(function StatusBanner({
                     {CONTROL_METHOD_LABELS[controlMethod] ?? controlMethod}
                   </span>
                 )}
+                <ActiveSourceBadge
+                  sourceSelection={sourceSelection}
+                  heatSourceCount={heatSourceCount}
+                  heatSourceType={heatSource.type}
+                />
               </div>
               <div className="text-xs text-[var(--text-muted)]" data-testid="status-banner-subtitle">
                 {controlEnabled ? 'Active control' : 'Shadow mode'}
@@ -360,4 +382,70 @@ function getStateColor(state: string): string {
   if (s.includes('away')) return 'bg-[var(--blue)]'
   if (s.includes('shoulder') || s.includes('summer')) return 'bg-[var(--amber)]'
   return 'bg-[var(--text-muted)]'
+}
+
+// 228B Task 3: Active-source provenance badge. Hidden on single-source
+// installs (heatSourceCount < 2) and when reason === 'single_source'.
+// Failover uses `detail` for the displaced source name (parent Decision 4);
+// `blocked_switches` is only rendered when reason is not 'failover'.
+interface ActiveSourceBadgeProps {
+  sourceSelection?: SourceSelectionPayload
+  heatSourceCount?: number
+  heatSourceType: string
+}
+
+function ActiveSourceBadge({
+  sourceSelection,
+  heatSourceCount,
+  heatSourceType,
+}: ActiveSourceBadgeProps) {
+  if (!sourceSelection) return null
+  if ((heatSourceCount ?? 0) < 2) return null
+  if (sourceSelection.reason === 'single_source') return null
+
+  const isFailover = sourceSelection.reason === 'failover'
+  const chipText = SOURCE_REASON_CHIP_TEXT[sourceSelection.reason]
+  const Icon = heatSourceType === 'heat_pump' ? HeatPumpIcon : BoilerIcon
+
+  // Tooltip body: detail line + any blocked_switches (suppressed under failover).
+  const tooltipLines: string[] = []
+  if (sourceSelection.detail) {
+    tooltipLines.push(sourceSelection.detail)
+  }
+  if (!isFailover && sourceSelection.blocked_switches.length > 0) {
+    for (const bs of sourceSelection.blocked_switches) {
+      tooltipLines.push(`${bs.to} held back by ${bs.reason}`)
+    }
+  }
+  const tooltip = tooltipLines.length > 0 ? tooltipLines.join('\n') : undefined
+
+  return (
+    <span
+      data-testid="active-source-badge"
+      data-source-reason={sourceSelection.reason}
+      title={tooltip}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium',
+        isFailover
+          ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+          : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+      )}
+    >
+      <Icon size={12} data-testid="active-source-icon" />
+      <span data-testid="active-source-name">{sourceSelection.active_source}</span>
+      {chipText && (
+        <span
+          data-testid="active-source-reason-chip"
+          className={cn(
+            'rounded px-1.5 py-0 text-[10px] uppercase tracking-wide',
+            isFailover
+              ? 'bg-amber-500/30 text-amber-800 dark:text-amber-200'
+              : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
+          )}
+        >
+          {chipText}
+        </span>
+      )}
+    </span>
+  )
 }

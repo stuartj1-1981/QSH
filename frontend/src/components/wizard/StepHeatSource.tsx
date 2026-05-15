@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Flame, Droplets, Fuel } from 'lucide-react'
-import { cn } from '../../lib/utils'
+import { cn, formatInterval } from '../../lib/utils'
 import type { HeatSourceYaml, QshConfigYaml } from '../../types/config'
+
+type WriteBudgetKey = 'flow_writes_per_hour' | 'mode_writes_per_hour'
 
 interface StepHeatSourceProps {
   config: Partial<QshConfigYaml>
@@ -301,6 +304,27 @@ export function StepHeatSource({ config, onUpdate }: StepHeatSourceProps) {
         </div>
       )}
 
+      {/* Heat source write budget (216A/B) */}
+      {hs.type && (
+        <div className="space-y-2">
+          <p className="text-xs text-[var(--text-muted)]">
+            Cap the rate of writes to the HP controller. Lower if your vendor enforces a flash budget.
+          </p>
+          <WizardWriteBudgetField
+            label="Flow writes per hour"
+            fieldKey="flow_writes_per_hour"
+            config={config}
+            onUpdate={onUpdate}
+          />
+          <WizardWriteBudgetField
+            label="Mode writes per hour"
+            fieldKey="mode_writes_per_hour"
+            config={config}
+            onUpdate={onUpdate}
+          />
+        </div>
+      )}
+
       {/* MQTT shadow publishing toggle */}
       {hs.type && isMqttDriver && (
         <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
@@ -363,6 +387,98 @@ function InputField({
         placeholder={placeholder}
         className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
       />
+    </div>
+  )
+}
+
+interface WizardWriteBudgetFieldProps {
+  label: string
+  fieldKey: WriteBudgetKey
+  config: Partial<QshConfigYaml>
+  onUpdate: (section: string, data: unknown) => void
+}
+
+function WizardWriteBudgetField({
+  label,
+  fieldKey,
+  config,
+  onUpdate,
+}: WizardWriteBudgetFieldProps) {
+  const committed = config[fieldKey] ?? 6
+  const [value, setValue] = useState<number>(committed)
+  const [error, setError] = useState<string | null>(null)
+  // React-recommended pattern for syncing local state with a prop that may
+  // change externally (user navigated back). Setting state during render is
+  // OK when guarded by a previous-value comparison — React bails out fast.
+  const [lastCommitted, setLastCommitted] = useState<number>(committed)
+  if (lastCommitted !== committed) {
+    setLastCommitted(committed)
+    setValue(committed)
+  }
+
+  const isValid = (v: number): boolean =>
+    Number.isInteger(v) && v >= 3 && v <= 6
+
+  const clamp = (v: number): number => {
+    if (!Number.isFinite(v)) return 6
+    return Math.max(3, Math.min(6, Math.round(v)))
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-3">
+        <label className="text-sm text-[var(--text)] min-w-[10rem]" htmlFor={`wizard-${fieldKey}`}>
+          {label}
+        </label>
+        <input
+          id={`wizard-${fieldKey}`}
+          type="number"
+          min={3}
+          max={6}
+          step={1}
+          value={value}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw === '') {
+              return
+            }
+            const v = Number(raw)
+            if (Number.isNaN(v)) {
+              return
+            }
+            if (isValid(v)) {
+              setError(null)
+              setValue(v)
+              onUpdate(fieldKey, v)
+            } else if (Number.isInteger(v)) {
+              setError('Must be 3–6')
+              setValue(v)
+            } else {
+              setError('Must be 3–6')
+            }
+          }}
+          onBlur={() => {
+            const clamped = clamp(value)
+            if (clamped !== value) {
+              setValue(clamped)
+            }
+            if (isValid(clamped)) {
+              setError(null)
+            }
+            if (clamped !== (config[fieldKey] ?? 6)) {
+              onUpdate(fieldKey, clamped)
+            }
+          }}
+          className={cn(
+            'w-20 px-2 py-1 rounded border bg-[var(--bg)] text-sm text-[var(--text)]',
+            error ? 'border-red-500' : 'border-[var(--border)]'
+          )}
+        />
+        <span className="text-xs text-[var(--text-muted)]">
+          ≈ one update every {formatInterval(3600 / clamp(value))}
+        </span>
+      </div>
+      {error && <span className="text-xs text-red-600 pl-[10.75rem]">{error}</span>}
     </div>
   )
 }

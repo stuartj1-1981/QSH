@@ -284,6 +284,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         tariffMode={configData?.energy?.tariff_aggression_mode}
         summerMonitoring={Boolean(eng?.summer_monitoring)}
         controlMethod={initial?.control_method}
+        sourceSelection={sourceSelection ?? undefined}
+        heatSourceCount={configData?.heat_sources?.length}
       />
 
       {/* Comfort temperature & shadow/live toggle */}
@@ -365,9 +367,13 @@ export function Home({ engineering, onNavigate }: HomeProps) {
       {/* Room mini-cards */}
       {displayRooms && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
-          {Object.entries(displayRooms).map(([name, room]) => (
-            <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} comfortTempActive={comfortTempActive} hpActive={hpActive} />
-          ))}
+          {Object.entries(displayRooms).map(([name, room]) => {
+            const manualMap = live?.manual_state?.[name]
+            const manualEntry = manualMap ? { room: name, ...manualMap } : undefined
+            return (
+              <RoomCard key={name} name={name} room={room} boost={live?.boost?.rooms?.[name]} entityIds={entityMap?.rooms[name]} engineering={engineering} comfortTempActive={comfortTempActive} hpActive={hpActive} manualEntry={manualEntry} />
+            )
+          })}
         </div>
       )}
 

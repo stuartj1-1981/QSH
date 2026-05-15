@@ -7,9 +7,13 @@ InputBlock and OutputBlock.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Protocol
 
 from ..signal_bus import InputBlock, OutputBlock
+
+if TYPE_CHECKING:
+    from qsh.forecast.provider import ForecastProvider
+    from qsh.manual_state import ManualEntry
 
 
 class IODriver(Protocol):
@@ -46,6 +50,43 @@ class IODriver(Protocol):
     @property
     def is_realtime(self) -> bool:
         """True for wall-clock drivers, False for simulation."""
+        ...
+
+    def get_forecast_provider(self) -> "ForecastProvider":
+        """Return this driver's forecast provider.
+
+        Drivers without forecast capability for this install return a
+        NullForecastProvider instance (never None — the Protocol contract
+        must always return a provider). Called once during pipeline build
+        in qsh.main; the returned instance is reused across cycles.
+
+        INSTRUCTION-220A introduces this method with NullForecastProvider
+        stubs on every driver. Subsequent sub-instructions (220B HA,
+        220C MQTT, 220D Mock) replace the stubs with real providers.
+        """
+        ...
+
+    def apply_manual_position(self, room: str, position_pct: int, config: Dict) -> bool:
+        """Write a MANUAL position to a single direct TRV immediately.
+
+        Bypasses cycle scheduling. Bypasses shadow mode (control_enabled).
+        Subject to the hardware-protection slew and debounce of the underlying
+        dispatcher. Returns True if the write was dispatched, False on
+        hardware-unavailable / unknown-hardware-type. Does not raise.
+
+        Drivers without direct-TRV hardware (e.g. mock without valve plumbing)
+        may return False unconditionally; the manual-state mutation in the
+        API layer is independent of this method's success.
+        """
+        ...
+
+    def manual_state_snapshot(self, config: Dict) -> Dict[str, "ManualEntry"]:
+        """Return the live manual-state map for inclusion in CycleSnapshot.
+
+        Keys are room names from configured_direct_rooms(config); every such
+        room appears in the result with at minimum the AUTO sentinel. Rooms
+        not in configured_direct_rooms are omitted.
+        """
         ...
 
 

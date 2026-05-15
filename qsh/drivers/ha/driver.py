@@ -68,6 +68,10 @@ class HADriver:
         from .hardware_dispatch import get_current_heat_source_mode
         from . import octopus_hp_control as octopus_api
 
+        # INSTRUCTION-220B — cache config for get_forecast_provider() consumption.
+        # Protocol contract requires the method to be callable after setup() returns.
+        self._config_cache = config
+
         # dfan_control_toggle is now read each cycle via resolve_value (INSTRUCTION-36A).
         # Changes in HA propagate within one cycle; Web UX changes sync back to HA.
         dfan_entity = config.get("entities", {}).get("dfan_control_toggle")
@@ -81,8 +85,13 @@ class HADriver:
         # dashboard.py code retained for potential future use.
         logging.info("Dashboard: push disabled (Web UX is primary interface)")
 
-        # Init Octopus direct API if configured
-        if config.get("has_octopus"):
+        # Init Octopus direct API only when control routing actually uses it.
+        # INSTRUCTION-234: has_octopus alone is not sufficient -- it signals an
+        # Octopus *tariff* API key is present, which says nothing about whether
+        # the heat pump is Octopus-managed. The routing decision (made in
+        # qsh/config.py and qsh/validate_yaml.py against the same predicate)
+        # is the single source of truth for whether the direct API is in play.
+        if config.get("has_octopus") and config.get("control_method") == "octopus_api":
             octopus_cfg = config.get("octopus_config", {})
             init_ok = octopus_api.init(
                 api_key=octopus_cfg.get("api_key", ""),
@@ -111,6 +120,20 @@ class HADriver:
 
         prev_mode = get_current_heat_source_mode(config)
         self._cycle_interval = config.get("cycle_interval", 30)
+
+        # INSTRUCTION-225A — manual-state foundation. V2 in-memory contract:
+        # init() resets the in-process map; restart returns every direct TRV
+        # to AUTO. Operator MANUAL settings do NOT survive a process restart.
+        from ... import manual_state
+        manual_state.init(config)
+        _direct_count = len(manual_state.configured_direct_rooms(config))
+        if _direct_count > 0:
+            logging.info(
+                "manual_state: %d direct TRVs configured; all start in AUTO on restart "
+                "(transient state, INSTRUCTION-225A V2)",
+                _direct_count,
+            )
+
         return {"prev_mode": prev_mode}
 
     def teardown(self, controllers: List) -> None:
@@ -131,6 +154,40 @@ class HADriver:
         from .hardware_dispatch import apply_failsafe as _ha_failsafe
 
         _ha_failsafe(config, safe_flow=safe_flow, safe_mode=safe_mode)
+
+    def get_forecast_provider(self):
+        """Return HAForecastProvider when entities.forecast_weather is configured,
+        else NullForecastProvider.
+
+        INSTRUCTION-220B activation. Loud-guard on pre-setup invocation per
+        V1 reviewer H-1 disposition: get_forecast_provider() called before
+        setup() (i.e., before self._config_cache is set) raises RuntimeError.
+        The Protocol contract states 'called once during pipeline build';
+        pre-setup invocation is a contract violation, not a recoverable state.
+
+        Per parent §2.6: this method is not invoked by main.py in production
+        until 220D wiring lands. During the 220B->220D window the method
+        exists and is exercised by test code only.
+        """
+        if hasattr(self, "_forecast_provider"):
+            return self._forecast_provider
+        if not hasattr(self, "_config_cache"):
+            raise RuntimeError(
+                "HADriver.get_forecast_provider() called before setup() — "
+                "Protocol contract violation. setup(config) must complete "
+                "(establishing self._config_cache) before forecast provider "
+                "construction."
+            )
+        forecast_entity = (
+            self._config_cache.get("entities", {}).get("forecast_weather", "").strip()
+        )
+        if not forecast_entity:
+            from ...forecast.providers.null import NullForecastProvider
+            self._forecast_provider = NullForecastProvider()
+        else:
+            from ...forecast.providers.ha import HAForecastProvider
+            self._forecast_provider = HAForecastProvider(forecast_entity)
+        return self._forecast_provider
 
     @property
     def is_realtime(self) -> bool:
@@ -255,8 +312,11 @@ class HADriver:
         # Flow limits from HA entities
         flow_min, flow_max = get_flow_temp_limits(config)
 
-        # Forecast state (if forecaster is available)
-        forecast_state = self._fetch_forecast_state(config, sensor_data.outdoor_temp, current_rate, tariff_rates)
+        # INSTRUCTION-220B — HADriver no longer fetches forecast in read_inputs.
+        # Pipeline consumes forecast via ForecastController's ForecastProvider DI
+        # (wired in 220D). InputBlock.forecast_state slot stays as a dead None;
+        # field removal is a follow-up cleanup tranche post-220E.
+        forecast_state = None
 
         # HW state (if HW-aware controller is available)
         hw_state = self._fetch_hw_state(config, sensor_data)
@@ -352,6 +412,10 @@ class HADriver:
             defrost_valve_pct=_defrost_valve,
             # Valve positions
             valve_positions=dict(sensor_data.heating_percs),
+            valve_positions_per_emitter={
+                room: dict(emitters)
+                for room, emitters in sensor_data.heating_percs_per_emitter.items()
+            },
             avg_open_frac=sensor_data.avg_open_frac,
             # Energy
             solar_production=sensor_data.solar_production,
@@ -409,28 +473,52 @@ class HADriver:
         if outputs.hardware_changed:
             logging.debug("HADriver: dispatching hardware commands")
 
-        # ── Shoulder heat source commands ──
-        if outputs.heat_source_changed and outputs.heat_source_command is not None:
-            from .hardware_dispatch import set_heat_source_mode
+        # ── 228A: per-source heat source commands ─────────────────────────
+        # No fallback to outputs.heat_source_command. HardwareController
+        # synthesises the per-source dict every cycle from
+        # ctx.active_source + outputs.heat_source_command (single-source
+        # installs produce a single-key dict).
+        if outputs.source_changed and outputs.source_command is not None:
+            from .hardware_dispatch import apply_source_command
 
             if control_enabled:
-                logging.info(f"HADriver: shoulder command → {outputs.heat_source_command}")
-                set_heat_source_mode(
+                logging.info(
+                    "HADriver: per-source dispatch → %s",
+                    outputs.source_command,
+                )
+                apply_source_command(
                     config,
-                    outputs.heat_source_command,
+                    outputs.source_command,
                     dfan_control=True,
                 )
             else:
-                logging.debug(f"SHADOW MODE: suppressed shoulder command → {outputs.heat_source_command}")
+                for src, cmd in outputs.source_command.items():
+                    logging.debug(
+                        "SHADOW MODE: suppressed source command %s -> %s",
+                        src, cmd,
+                    )
 
         # ── Valve commands ──
         if outputs.valves_changed:
             from .valve_dispatch import update_type2_external_temperatures
 
             if outputs.type2_external_temps:
+                # INSTRUCTION-205 V3 — combine dissipation/hybrid TRV setpoints
+                # with forecast attenuation offset (per-room, non-positive).
+                # Single-writer discipline: type2_external_temps owned by
+                # dissipation/hybrid; type2_external_temps_forecast_offset
+                # owned by ValveController._apply_forecast_attenuation. The
+                # combination happens at dispatch time only.
+                combined_temps = dict(outputs.type2_external_temps)
+                offset_dict = getattr(
+                    outputs, "type2_external_temps_forecast_offset", None
+                ) or {}
+                for room, offset_c in offset_dict.items():
+                    if room in combined_temps:
+                        combined_temps[room] = combined_temps[room] + float(offset_c)
                 update_type2_external_temperatures(
                     config,
-                    outputs.type2_external_temps,
+                    combined_temps,
                     dfan_control=control_enabled,
                 )
 
@@ -479,25 +567,6 @@ class HADriver:
                     logging.warning(f"HADriver: notification dispatch failed: {e}")
 
     # ── Helpers ────────────────────────────────────────────────────────
-
-    def _fetch_forecast_state(self, config, outdoor_temp, current_rate, tariff_rates):
-        """Fetch forecast state if forecast entity is configured."""
-        if not config.get("entities", {}).get("forecast_weather"):
-            return None
-        try:
-            from ...forecast import WeatherForecaster
-            from .forecast_fetcher import fetch_forecast_from_ha
-
-            if not hasattr(self, "_forecaster"):
-                self._forecaster = WeatherForecaster(config, fetch_fn=fetch_forecast_from_ha)
-            return self._forecaster.get_forecast_state(
-                current_outdoor_temp=outdoor_temp,
-                current_rate=current_rate,
-                rates=tariff_rates,
-            )
-        except Exception as e:
-            logging.debug(f"HADriver: forecast fetch failed: {e}")
-            return None
 
     def _fetch_hw_state(self, config, sensor_data):
         """Fetch HW-aware state if HW config is enabled."""
@@ -570,3 +639,45 @@ class HADriver:
             return temps if temps else None
         except Exception:
             return None
+
+    # ── Manual override (INSTRUCTION-225A) ─────────────────────────────
+
+    def apply_manual_position(self, room: str, position_pct: int, config: Dict) -> bool:
+        """Dispatch a MANUAL position write directly to the room's direct TRV.
+
+        Bypasses cycle scheduling and shadow mode (dfan_control=True). The
+        terminal dispatcher applies hardware-protection slew + debounce.
+        Returns False (without raising) when the room is not direct-controlled
+        or its hardware type is unknown.
+        """
+        from ... import valve_control as _vc
+        from . import valve_dispatch as _vd
+
+        hardware_type = config.get("room_valve_hardware", {}).get(room)
+        if hardware_type not in (
+            _vc.VALVE_HARDWARE_DIRECT_TYPE1,
+            _vc.VALVE_HARDWARE_DIRECT_TYPE2,
+            _vc.VALVE_HARDWARE_GENERIC,
+        ):
+            logging.info(
+                "%s not a direct TRV — manual position not dispatched", room
+            )
+            return False
+
+        if hardware_type == _vc.VALVE_HARDWARE_DIRECT_TYPE1:
+            return _vd.apply_direct_valve_control_type1(
+                room, position_pct, config, dfan_control=True, control_state=None
+            )
+        if hardware_type == _vc.VALVE_HARDWARE_DIRECT_TYPE2:
+            return _vd.apply_direct_valve_control_type2(
+                room, position_pct, config, dfan_control=True, control_state=None
+            )
+        return _vd.apply_direct_valve_control_generic(
+            room, position_pct, config, dfan_control=True, control_state=None
+        )
+
+    def manual_state_snapshot(self, config: Dict) -> Dict[str, Any]:
+        """Return MANUAL/AUTO state for every configured direct TRV."""
+        from ... import manual_state
+        rooms = manual_state.configured_direct_rooms(config)
+        return {r: manual_state.get(r) for r in rooms}

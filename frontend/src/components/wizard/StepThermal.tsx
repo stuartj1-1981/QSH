@@ -208,6 +208,31 @@ export function StepThermal({ config, onUpdate }: StepThermalProps) {
           </div>
         </div>
       )}
+
+      {/* INSTRUCTION-227C Task 7 — Solar production capacity informational
+          paragraph. Placed inside the existing StepThermal step because
+          solar gain coupling is a thermal property; adding a new step
+          would require touching useWizard.ts / WizardShell.tsx and the
+          validation surface, disproportionate scope for purely
+          informational content. */}
+      <section
+        className="mt-6 pt-6 border-t border-[var(--border)]"
+        data-testid="step-thermal-solar-capacity-info"
+      >
+        <h2 className="text-lg font-semibold mb-2">Solar production capacity</h2>
+        <p className="text-sm text-[var(--text-muted)] mb-3">
+          QSH learns your installation&apos;s peak solar production capacity (kWp)
+          from observation. No setup is required. The system records the highest
+          solar production it has seen and uses that value when projecting how
+          solar gain will warm your rooms over the next few hours. The value
+          updates as you accumulate sunny periods. You can monitor the learning
+          progress in Settings &rsaquo; Solar &amp; Battery.
+        </p>
+        <p className="text-xs text-[var(--text-muted)]">
+          Manual override is intentionally not offered. If a sensor glitch
+          produces a one-off spike, reset by editing sysid_state.json.
+        </p>
+      </section>
     </div>
   )
 }

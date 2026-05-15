@@ -30,8 +30,10 @@ vi.mock('../../hooks/useHistorian', () => ({
 }))
 
 import { useScop } from '../../hooks/useScop'
+import { useHistorianQuery } from '../../hooks/useHistorian'
 
 const mockUseScop = useScop as ReturnType<typeof vi.fn>
+const mockUseHistorianQuery = useHistorianQuery as ReturnType<typeof vi.fn>
 
 const loadingState = { data: null, loading: true, error: null }
 
@@ -189,5 +191,44 @@ describe('Scop page', () => {
     render(<Scop />)
 
     expect(mockUseScop).toHaveBeenCalledWith('90d', 'combined')
+  })
+
+  it('CH card no longer shows sparkline pending placeholder', () => {
+    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
+      availableState(mode, 3.5),
+    )
+    mockUseHistorianQuery.mockReturnValue({
+      data: { points: [{ t: 1700000000, cop: 3.5 }] },
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(<Scop />)
+
+    expect(screen.queryByText(/sparkline pending/i)).toBeNull()
+  })
+
+  it('CH card requests qsh_system.cop with hwActive=false', () => {
+    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
+      availableState(mode, 3.5),
+    )
+    mockUseHistorianQuery.mockReturnValue({
+      data: { points: [] },
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(<Scop />)
+
+    const chCall = mockUseHistorianQuery.mock.calls.find(
+      (args) =>
+        args[0] === 'qsh_system' &&
+        Array.isArray(args[1]) &&
+        args[1].includes('cop') &&
+        args[2]?.hwActive === 'false',
+    )
+    expect(chCall).toBeTruthy()
   })
 })

@@ -13,7 +13,7 @@ import {
   testEdfRegionResponseSchema,
   cycleSnapshotSchema,
 } from '../schemas'
-import type { RoomState } from '../api'
+import type { RoomState, CycleMessage } from '../api'
 
 describe('providerStatusSchema', () => {
   it('parses a representative Octopus electricity payload', () => {
@@ -259,5 +259,57 @@ describe('RoomState aux fields (INSTRUCTION-131C V6)', () => {
     }
     expect(room.aux_state).toBe(true)
     expect(room.aux_dispatched).toBe(false)
+  })
+})
+
+describe('CycleMessage valve_positions_per_emitter (INSTRUCTION-224D)', () => {
+  // TS-level shape gates for the new per-emitter field on CycleMessage.
+  // `tsc -b --noEmit` enforces the type contract; the runtime assertions
+  // below double as smoke checks that the literal shape fits the declared
+  // type without `as` casts.
+
+  it('accepts CycleMessage without valve_positions_per_emitter (pre-224D backend)', () => {
+    const msg: CycleMessage = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 1,
+    }
+    expect(msg.valve_positions_per_emitter).toBeUndefined()
+  })
+
+  it('accepts valve_positions_per_emitter as Record<string, Record<string, number>>', () => {
+    const msg: CycleMessage = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 1,
+      valve_positions_per_emitter: {
+        open_plan: { dining_trv: 90.0, sitting_room_trv: 20.0 },
+        kitchen: { kitchen_trv: 60.0 },
+      },
+    }
+    expect(msg.valve_positions_per_emitter?.open_plan?.dining_trv).toBe(90.0)
+    expect(msg.valve_positions_per_emitter?.kitchen?.kitchen_trv).toBe(60.0)
+  })
+
+  it('accepts an empty valve_positions_per_emitter dict (no per-emitter zones)', () => {
+    const msg: CycleMessage = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 1,
+      valve_positions_per_emitter: {},
+    }
+    expect(msg.valve_positions_per_emitter).toEqual({})
+  })
+
+  it('cycleSnapshotSchema passes payload with valve_positions_per_emitter (passthrough)', () => {
+    const payload = {
+      type: 'cycle',
+      timestamp: 1234567890,
+      cycle_number: 1,
+      valve_positions_per_emitter: {
+        open_plan: { dining_trv: 90.0, sitting_room_trv: 20.0 },
+      },
+    }
+    expect(() => cycleSnapshotSchema.parse(payload)).not.toThrow()
   })
 })

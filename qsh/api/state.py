@@ -80,6 +80,14 @@ class CycleSnapshot:
     rooms: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Each room: {temp, target, valve, occupancy, status, facing, area_m2}
 
+    # INSTRUCTION-224D — per-emitter valve positions for multi-emitter zones.
+    # Outer key: room. Inner key: emitter stem (matches the 222A-derived
+    # trv_name[i] for HA, or _mqtt_emitter_stem(topic) for MQTT). Value:
+    # per-emitter valve position 0-100. Single-emitter rooms have a one-entry
+    # inner dict; multi-emitter rooms have N entries. Empty for rooms without
+    # per-emitter data. The room aggregate continues to live in rooms[room].valve.
+    valve_positions_per_emitter: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
     # Energy
     current_rate: float = 0.0
     export_rate: float = 0.0
@@ -161,6 +169,28 @@ class CycleSnapshot:
     # the UI can render a banner; Zod schema parses via .passthrough()
     # (frontend/src/types/schemas.ts:54-62) — no schema update required.
     telemetry_revoked: bool = False
+
+    # ====================================================================
+    # INSTRUCTION-208A V2 — DFAN forecast extension.
+    # All fields default to "no data" (empty dicts / lists) so the
+    # snapshot is JSON-serialisable from the very first cycle before
+    # forecast_extension_master_enable flips on.
+    # ====================================================================
+    forecast_state_snapshot: Dict[str, Any] = field(default_factory=dict)
+    passive_recovery: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    forecast_predicted_decisions: Dict[str, Dict[str, Dict[str, Any]]] = field(
+        default_factory=dict
+    )
+    twin_calibration_drift: Dict[str, bool] = field(default_factory=dict)
+    active_alarms: List[Dict[str, Any]] = field(default_factory=list)
+
+    # INSTRUCTION-225C — operator MANUAL/AUTO override map for direct-TRV rooms.
+    # Outer key: room. Inner: {mode, position_pct, set_by, set_at, hardware_type}.
+    # Populated from qsh.manual_state for every room in configured_direct_rooms.
+    # AUTO rooms appear with the sentinel; rooms with non-direct hardware are
+    # omitted. Plain dict so the existing WS JSON encoder serialises it without
+    # touching ManualEntry's frozen dataclass.
+    manual_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def _resolve_operating_state(ctx) -> str:
@@ -327,7 +357,9 @@ class SharedState:
         self._balancing_ref = None  # Reference to BalancingDetector (set after API start)
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
+        self._driver_ref = None        # INSTRUCTION-225C: IODriver, set by main.py post-create_driver
         self._telemetry_ref = None     # INSTRUCTION-193 Task 4: TelemetryService for is_revoked()
+        self._debouncer_ref = None     # Reference to ControlDebouncer (set after pipeline build)
         self._migration_pending: bool = False
         self._driver_status: str = "pending"        # "pending" | "connected" | "error"
         self._driver_error: Optional[str] = None    # Human-readable error message
@@ -517,6 +549,23 @@ class SharedState:
                 "thermal_kwh_today_hw": 0.0,
             }
 
+        # INSTRUCTION-225C — build the manual_state map from qsh.manual_state.
+        # Filter to configured_direct_rooms so indirect rooms are absent (parity
+        # with the API GET /api/manual contract). Plain dict per the snapshot
+        # field's documented serialisation shape.
+        from qsh import manual_state
+        manual_map: Dict[str, Dict[str, Any]] = {}
+        hardware_map = config.get("room_valve_hardware", {})
+        for r in manual_state.configured_direct_rooms(config):
+            entry = manual_state.get(r)
+            manual_map[r] = {
+                "mode": entry.mode,
+                "position_pct": entry.position_pct,
+                "set_by": entry.set_by,
+                "set_at": entry.set_at,
+                "hardware_type": hardware_map.get(r, "generic"),
+            }
+
         snap = CycleSnapshot(
             timestamp=ctx.timestamp,
             cycle_number=ctx.cycle_number,
@@ -590,6 +639,16 @@ class SharedState:
             peak_thermal_demand_kw=ctx.peak_thermal_demand_kw,
             tariff_providers_status=_collect_tariff_providers_status(),
             available_provider_kinds=SUPPORTED_PROVIDER_KINDS,
+            # INSTRUCTION-224D — per-emitter valve readings deep-copied from
+            # InputBlock. Defence-in-depth getattr in case a driver predating
+            # 224B emits an InputBlock without the field.
+            valve_positions_per_emitter={
+                _room: dict(_emitters)
+                for _room, _emitters in getattr(
+                    ctx.inputs, "valve_positions_per_emitter", {}
+                ).items()
+            },
+            manual_state=manual_map,
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──
@@ -709,9 +768,94 @@ class SharedState:
                 "sources": sources_list,
                 "switch_count_today": ctx.source_switch_count_today,
                 "max_switches_per_day": sel_config.get("max_switches_per_day", 6),
+                # 228A Task 4: backend-to-payload field-name mapping.
+                # ctx.source_failover_active → failover_active
+                # ctx.source_switch_reason → reason  (Literal — see SourceSelectionReason)
+                # ctx.source_selection_detail → detail
+                # ctx.source_blocked_switches → blocked_switches
                 "failover_active": ctx.source_failover_active,
+                "reason": ctx.source_switch_reason,
+                "detail": ctx.source_selection_detail,
+                "blocked_switches": list(ctx.source_blocked_switches),
+                # back-compat alias retained during frontend rollout
                 "last_switch_reason": ctx.source_switch_reason,
             }
+
+        # ====================================================================
+        # INSTRUCTION-208A V2 — DFAN forecast carriers populated from ctx with
+        # defensive getattr fallbacks. Snapshot stays JSON-serialisable on
+        # early-boot cycles and when forecast_extension_master_enable=False.
+        # ====================================================================
+        fs = getattr(ctx, "forecast_state", None)
+        if fs is not None:
+            snap.forecast_state_snapshot = {
+                "oat_rise_next_6h_c": getattr(fs, "oat_rise_next_6h_c", None),
+                "solar_kwh_12h": getattr(fs, "solar_kwh_12h", None),
+                "forecast_load_kwh_4h": getattr(fs, "forecast_load_kwh_4h", None),
+                "forecast_load_kwh_12h": getattr(fs, "forecast_load_kwh_12h", None),
+                "forecast_load_kwh_24h": getattr(fs, "forecast_load_kwh_24h", None),
+                "forecast_load_per_room_kwh": dict(
+                    getattr(fs, "forecast_load_per_room_kwh", {}) or {}
+                ),
+                "forecast_solar_per_room_kwh": dict(
+                    getattr(fs, "forecast_solar_per_room_kwh", {}) or {}
+                ),
+                "hourly_temps_first_6": list(
+                    (getattr(fs, "hourly_temps", []) or [])[:6]
+                ),
+                "hourly_solar_first_6": list(
+                    (getattr(fs, "hourly_solar", []) or [])[:6]
+                ),
+                "cold_snap_active": bool(getattr(fs, "cold_snap_active", False)),
+                "wind_active": bool(getattr(fs, "wind_active", False)),
+            }
+
+        pr = getattr(ctx, "passive_recovery", None) or {}
+        if pr:
+            snap.passive_recovery = {
+                room: {
+                    "predicted_t_indoor": getattr(state, "predicted_t_indoor", None),
+                    "composite_confidence": getattr(state, "composite_confidence", None),
+                    "weather_class": (
+                        list(state.weather_class)
+                        if getattr(state, "weather_class", None) else None
+                    ),
+                    "bias_correction_c": getattr(state, "bias_correction_c", None),
+                    "prediction_target_ts": getattr(state, "prediction_target_ts", None),
+                }
+                for room, state in pr.items()
+            }
+
+        fpd = getattr(ctx, "forecast_predicted_decisions", None) or {}
+        snap.forecast_predicted_decisions = {
+            controller_name: {
+                room_name: {
+                    "predicted_value": record["predicted_value"],
+                    "predicted_metric": record["predicted_metric"],
+                    "prediction_target_ts": record["prediction_target_ts"],
+                    "decision_basis": dict(record["decision_basis"]),
+                    "decision_taken": record["decision_taken"],
+                }
+                for room_name, record in room_records.items()
+            }
+            for controller_name, room_records in fpd.items()
+        }
+
+        snap.twin_calibration_drift = dict(
+            getattr(ctx, "twin_calibration_drift", None) or {}
+        )
+
+        active_alarms_list = getattr(ctx, "active_alarms", None) or []
+        snap.active_alarms = [
+            {
+                "alarm_id": getattr(ev, "alarm_id", None),
+                "timestamp": getattr(ev, "timestamp", None),
+                "room": getattr(ev, "room", None),
+                "payload": dict(getattr(ev, "payload", {}) or {}),
+                "severity": getattr(ev, "severity", None),
+            }
+            for ev in active_alarms_list
+        ]
 
         with self._lock:
             self._snapshot = snap
@@ -778,6 +922,33 @@ class SharedState:
     def set_mqtt_client(self, client):
         with self._lock:
             self._mqtt_client = client
+
+    def get_driver(self):
+        """INSTRUCTION-225C: IODriver accessor for API write paths.
+
+        Returns None during the brief startup window before main.py wires the
+        driver via set_driver(). API routes that dispatch immediate writes
+        (e.g. /api/manual PUT) must handle the None case explicitly per V3 N2.
+        """
+        with self._lock:
+            return self._driver_ref
+
+    def set_driver(self, driver) -> None:
+        with self._lock:
+            self._driver_ref = driver
+
+    def set_debouncer(self, debouncer) -> None:
+        """Register the live ControlDebouncer for runtime PATCH access.
+        Called once from main.py after pipeline construction."""
+        with self._lock:
+            self._debouncer_ref = debouncer
+
+    def get_debouncer(self):
+        """Return the live ControlDebouncer or None if not yet registered.
+        Returns None during the brief startup window before main.py
+        registers the debouncer — API routes must handle the None case."""
+        with self._lock:
+            return self._debouncer_ref
 
     def set_migration_pending(self, value: bool) -> None:
         with self._lock:

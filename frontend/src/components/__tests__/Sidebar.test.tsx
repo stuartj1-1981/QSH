@@ -75,12 +75,26 @@ describe('Sidebar', () => {
     expect(onNavigate).toHaveBeenCalledWith('rooms')
   })
 
+  it('Valves link hidden when engineering off', () => {
+    render(<Sidebar {...baseProps} engineering={false} />)
+    expect(screen.queryByText('Valves')).toBeNull()
+  })
+
+  it('Valves link shown when engineering on; click navigates', () => {
+    const onNavigate = vi.fn()
+    render(<Sidebar {...baseProps} engineering={true} onNavigate={onNavigate} />)
+    const valvesLink = screen.getByText('Valves')
+    expect(valvesLink).toBeDefined()
+    fireEvent.click(valvesLink)
+    expect(onNavigate).toHaveBeenCalledWith('valves')
+  })
+
   it('redirects to home when on engineering page with toggle off', async () => {
     // Test the redirect guard logic used in App.tsx:
     // When engineering=false and page is an engineering page, activePage resolves to 'home'.
     const { ENGINEERING_PAGES } = await import('../../lib/constants')
 
-    const engineeringPages = ['engineering', 'balancing', 'historian', 'settings']
+    const engineeringPages = ['engineering', 'balancing', 'historian', 'settings', 'forecast', 'valves']
     expect([...ENGINEERING_PAGES]).toEqual(engineeringPages)
 
     // Simulate the guard: activePage = engineering-gated page + toggle off → 'home'

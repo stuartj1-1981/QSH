@@ -339,6 +339,51 @@ def set_control_mode(body: ControlModeBody):
     return {"control_enabled": body.enabled}
 
 
+# ── Forecast extension master enable (INSTRUCTION-200 V3) ───────────
+
+
+class ForecastMasterEnableBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/forecast-master-enable")
+def get_forecast_master_enable():
+    """Return the current DFAN forecast-extension master-enable flag.
+
+    Reads in-memory config. Defaults to False when the key is absent
+    (opt-in per installation, design §6.4)."""
+    config = shared_state.get_config()
+    value = bool(config.get("forecast_extension_master_enable", False)) if config else False
+    return {"forecast_extension_master_enable": value}
+
+
+@router.post("/forecast-master-enable")
+def set_forecast_master_enable(body: ForecastMasterEnableBody):
+    """Toggle the DFAN forecast-extension master-enable flag.
+
+    Updates in-memory config (takes effect next cycle) and persists to
+    qsh.yaml (survives restart). Single-point operator authority — when
+    False, every forecast-aware controller treats the extension as
+    inactive (defence-in-depth per design §6.4).
+
+    YAML write is the audit trail (mirror of set_control_mode pattern).
+    No HA / MQTT sync — the flag is QSH-internal."""
+    # 1. Update in-memory config (live effect, no restart)
+    config = shared_state.get_config()
+    if config is not None:
+        config["forecast_extension_master_enable"] = body.enabled
+
+    # 2. Persist to YAML (survives restart)
+    try:
+        read_modify_write(_update_config_key("forecast_extension_master_enable", body.enabled))
+    except HTTPException:
+        raise  # Safety-critical — caller must see 503 on template/empty config.
+    except Exception as e:
+        logger.warning("Failed to persist forecast_extension_master_enable: %s", e)
+
+    return {"forecast_extension_master_enable": body.enabled}
+
+
 # ── Internal value endpoints ──────────────────────────────────────────
 
 
@@ -418,6 +463,60 @@ def set_flow_max_internal(body: FlowMaxBody):
     _mqtt_writeback("flow_max", str(body.value))
 
     return {"flow_max_internal": body.value}
+
+
+class WritesPerHourBody(BaseModel):
+    value: int
+
+
+@router.patch("/flow-writes-per-hour")
+def set_flow_writes_per_hour(body: WritesPerHourBody):
+    """Set the per-hour LWT-flow write cap (3–6 writes/hr).
+
+    Hot-applied via ControlDebouncer.set_flow_debounce_time(seconds).
+    No pipeline restart required.
+    """
+    if not isinstance(body.value, int) or body.value < 3 or body.value > 6:
+        raise HTTPException(
+            status_code=422,
+            detail="flow_writes_per_hour must be an integer in [3, 6]",
+        )
+    config = shared_state.get_config()
+    if config is not None:
+        config["flow_writes_per_hour"] = body.value
+    try:
+        read_modify_write(_update_config_key("flow_writes_per_hour", body.value))
+    except Exception as e:
+        logger.warning("Failed to persist flow_writes_per_hour: %s", e)
+    debouncer = shared_state.get_debouncer()
+    if debouncer is not None:
+        debouncer.set_flow_debounce_time(3600.0 / body.value)
+    return {"flow_writes_per_hour": body.value, "restart_required": False}
+
+
+@router.patch("/mode-writes-per-hour")
+def set_mode_writes_per_hour(body: WritesPerHourBody):
+    """Set the per-hour HP mode-change write cap (3–6 writes/hr).
+
+    Hot-applied via ControlDebouncer.set_mode_debounce_time(seconds).
+    No pipeline restart required.
+    """
+    if not isinstance(body.value, int) or body.value < 3 or body.value > 6:
+        raise HTTPException(
+            status_code=422,
+            detail="mode_writes_per_hour must be an integer in [3, 6]",
+        )
+    config = shared_state.get_config()
+    if config is not None:
+        config["mode_writes_per_hour"] = body.value
+    try:
+        read_modify_write(_update_config_key("mode_writes_per_hour", body.value))
+    except Exception as e:
+        logger.warning("Failed to persist mode_writes_per_hour: %s", e)
+    debouncer = shared_state.get_debouncer()
+    if debouncer is not None:
+        debouncer.set_mode_debounce_time(3600.0 / body.value)
+    return {"mode_writes_per_hour": body.value, "restart_required": False}
 
 
 class PidTargetBody(BaseModel):

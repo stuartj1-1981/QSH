@@ -360,17 +360,35 @@ def patch_config_section(section: str, body: dict):
             "flow_min_internal",
             "flow_max_internal",
             "pid_target_internal",
+            "flow_writes_per_hour",
+            "mode_writes_per_hour",
         }
 
         def _apply_root(raw: dict) -> dict:
             if isinstance(incoming, dict):
                 for key, value in incoming.items():
                     if key in _ROOT_ALLOWED:
+                        # Range-validate writes-per-hour keys before persisting.
+                        if key in ("flow_writes_per_hour", "mode_writes_per_hour"):
+                            if not isinstance(value, int) or value < 3 or value > 6:
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=f"{key} must be an integer in [3, 6], got {value!r}",
+                                )
                         raw[key] = value
                         # Also update in-memory config
                         config = shared_state.get_config()
                         if config is not None:
                             config[key] = value
+                        # Hot-reload the live debouncer for writes-per-hour keys.
+                        if key == "flow_writes_per_hour":
+                            debouncer = shared_state.get_debouncer()
+                            if debouncer is not None:
+                                debouncer.set_flow_debounce_time(3600.0 / value)
+                        elif key == "mode_writes_per_hour":
+                            debouncer = shared_state.get_debouncer()
+                            if debouncer is not None:
+                                debouncer.set_mode_debounce_time(3600.0 / value)
                     else:
                         logger.info(
                             "config/root: dropping unknown key '%s' (not in _ROOT_ALLOWED)",

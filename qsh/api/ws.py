@@ -183,4 +183,26 @@ def _format_snapshot(snap) -> dict:
             snap.tariff_providers_status
         ),
         "available_provider_kinds": list(snap.available_provider_kinds),
+        # INSTRUCTION-226 — DFAN forecast carriers. CycleSnapshot fields are
+        # populated by qsh/api/state.py (lines 736-803) every cycle; CycleMessage
+        # contract on the frontend (api.ts:319-326) declares them as optional.
+        # Pre-226 these were silently dropped by this envelope, blanking the
+        # Forecast page's Sections 1 and 2 on every install.
+        # PROTOCOL: any new top-level CycleMessage field requires a parallel
+        # key here AND a parallel assertion in test_ws_broadcast.py's
+        # test_format_snapshot_includes_dfan_forecast_carriers.
+        "forecast_state_snapshot": snap.forecast_state_snapshot,
+        "passive_recovery": snap.passive_recovery,
+        "forecast_predicted_decisions": snap.forecast_predicted_decisions,
+        "twin_calibration_drift": snap.twin_calibration_drift,
+        "active_alarms": snap.active_alarms,
+        # INSTRUCTION-224D — per-emitter valve readings. Outer key: room.
+        # Inner key: emitter stem. Empty for rooms without per-emitter data
+        # (single-emitter HA-driver pre-224B-rebuild, or non-multi-emitter
+        # MQTT topics). 224E renders this on RoomDetail's per-emitter section.
+        "valve_positions_per_emitter": snap.valve_positions_per_emitter,
+        # INSTRUCTION-225C — operator MANUAL/AUTO override map for direct TRVs.
+        # Empty dict if no direct rooms configured; the AUTO sentinel is
+        # included for every direct room when no MANUAL is active.
+        "manual_state": snap.manual_state,
     }
