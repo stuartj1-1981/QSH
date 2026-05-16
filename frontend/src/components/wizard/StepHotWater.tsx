@@ -282,7 +282,10 @@ export function StepHotWater({ config, onUpdate }: StepHotWaterProps) {
               <EntityPicker
                 slot="hot_water_boolean"
                 label="Hot Water Boolean (optional, OR'd with water heater)"
-                value={(config.heat_source as HeatSourceYaml | undefined)?.sensors?.hot_water_boolean || ''}
+                value={(() => {
+                  const v = (config.heat_source as HeatSourceYaml | undefined)?.sensors?.hot_water_boolean
+                  return typeof v === 'string' ? v : ''
+                })()}
                 onChange={(v) => {
                   const hs = (config.heat_source as HeatSourceYaml | undefined) || ({ type: 'heat_pump' } as HeatSourceYaml)
                   onUpdate('heat_source', {

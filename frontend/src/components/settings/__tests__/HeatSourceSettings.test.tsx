@@ -723,3 +723,165 @@ describe('HeatSourceSettings — multi-card editor (INSTRUCTION-237B)', () => {
 // import-order-clean. The `HeatSourceYamlT` alias avoids re-importing the
 // real type if the existing top-of-file import is sufficient.
 type HeatSourceYamlT = import('../../../types/config').HeatSourceYaml
+
+/**
+ * INSTRUCTION-241C Task 3 — settings-component render tests for the
+ * shared `mqttSensorPlaceholder` helper. Two cases only; the table-driven
+ * helper-unit tests live at frontend/src/lib/__tests__/mqtt-placeholders.test.ts
+ * per 241B Task 0 (M5 disposition).
+ */
+describe('HeatSourceSettings — MQTT placeholder differentiation (INSTRUCTION-241C Task 3)', () => {
+  it('Test 1: collision-disambiguated render — two same-type sources get name-derived placeholders', () => {
+    const heatSources: HeatSourceYamlT[] = [
+      { type: 'heat_pump', name: 'Main HP' },
+      { type: 'heat_pump', name: 'Garage HP' },
+    ]
+    render(
+      <HeatSourceSettings
+        heatSource={heatSources[0]}
+        heatSources={heatSources}
+        driver="mqtt"
+        mqtt={{ broker: 'localhost', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    // Card 1 is expanded by default — expand its Sensor Topics block.
+    fireEvent.click(screen.getByRole('button', { name: 'Sensor Topics' }))
+    expect(
+      screen.getByPlaceholderText('main_hp_hp/flow_temp'),
+    ).toBeInTheDocument()
+
+    // Switch to card 2 — click the Expand button for source 2.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand source 2' }))
+    // Now expand card 2's Sensor Topics block.
+    fireEvent.click(screen.getByRole('button', { name: 'Sensor Topics' }))
+    expect(
+      screen.getByPlaceholderText('garage_hp_hp/flow_temp'),
+    ).toBeInTheDocument()
+  })
+
+  it('Test 2: single-source legacy continuity — placeholder uses heat_pump stem', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'heat_pump', name: 'Primary' }}
+        heatSources={[{ type: 'heat_pump', name: 'Primary' }]}
+        driver="mqtt"
+        mqtt={{ broker: 'localhost', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    // Expand sensor topics.
+    fireEvent.click(screen.getByRole('button', { name: 'Sensor Topics' }))
+    // Single source — legacy heat_pump/<slot> form retained.
+    expect(
+      screen.getByPlaceholderText('heat_pump/flow_temp'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText('heat_pump/power_input'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText('heat_pump/cop'),
+    ).toBeInTheDocument()
+  })
+})
+
+/**
+ * INSTRUCTION-241C Task 6 — save-error banner surfaces backend detail
+ * verbatim on PATCH failure (e.g. duplicate-topic 400 from §D-6).
+ */
+describe('HeatSourceSettings — save-error banner (INSTRUCTION-241C Task 6)', () => {
+  it('Test 1: 400 with detail body — banner renders the backend prose verbatim', async () => {
+    const heatSources: HeatSourceYamlT[] = [
+      { type: 'heat_pump', name: 'Main' },
+      { type: 'heat_pump', name: 'Garage' },
+    ]
+    // First call (via patch hook) → null on error. Second call (sibling
+    // fetch in persist) → 400 with detail body.
+    patch.mockResolvedValue(null)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        detail:
+          "Duplicate sensor topic 'foo/bar' assigned to both (Main, flow_temp) and (Garage, flow_temp). Per INSTRUCTION-241C §D-6 the same topic may not feed two heat sources — silent data fusion.",
+      }),
+    } as unknown as Response)
+
+    render(
+      <HeatSourceSettings
+        heatSource={heatSources[0]}
+        heatSources={heatSources}
+        driver="mqtt"
+        mqtt={{ broker: 'localhost', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+
+    // Dirty + save card 1.
+    const nameInput = screen.getAllByLabelText(/^Source \d+ name$/)[0] as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeInTheDocument()
+    })
+    const alertText = screen.getByRole('alert').textContent ?? ''
+    expect(alertText).toContain("Duplicate sensor topic 'foo/bar'")
+    expect(alertText).toContain('(Main, flow_temp)')
+    expect(alertText).toContain('(Garage, flow_temp)')
+
+    fetchSpy.mockRestore()
+  })
+
+  it('Test 2: 500 without parseable body — banner falls back to HTTP status', async () => {
+    patch.mockResolvedValue(null)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error('not JSON')
+      },
+    } as unknown as Response)
+
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'heat_pump', name: 'A' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const nameInput = screen.getByLabelText(/^Source 1 name$/) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'B' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/HTTP 500/)
+    })
+    fetchSpy.mockRestore()
+  })
+
+  it('Test 3: network failure — banner reads "Save failed — network error"', async () => {
+    patch.mockResolvedValue(null)
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new TypeError('NetworkError when attempting to fetch'))
+
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'heat_pump', name: 'A' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const nameInput = screen.getByLabelText(/^Source 1 name$/) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'B' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Save failed — network error/)
+    })
+    fetchSpy.mockRestore()
+  })
+})

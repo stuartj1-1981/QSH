@@ -23,6 +23,7 @@ and preserves data dependencies:
 """
 
 from .boost_controller import BoostController
+from .heat_source_sensor_selector import HeatSourceSensorSelector
 from .sensor_controller import SensorController
 from .thermal_controller import ThermalController
 from .energy_controller import EnergyController
@@ -47,6 +48,7 @@ from .tariff_optimiser import TariffOptimiserController
 
 __all__ = [
     "BoostController",
+    "HeatSourceSensorSelector",
     "SensorController",
     "ThermalController",
     "EnergyController",

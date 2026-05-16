@@ -930,6 +930,71 @@ class MQTTDriver:
             ):
                 per_room_comfort[room_slug] = room_comfort_rv.value
 
+        # ── Per-source heat-source assembly (INSTRUCTION-241A Task 4) ──
+        # Walk system_values for fields named "heat_source__<name>__<slot>"
+        # and assemble into inputs.heat_sources[name] = HeatSourceReading(...).
+        # Each source's HeatSourceReading defaults to the legacy flat-slot
+        # values; only fields present in system_values are overwritten.
+        from ...sensors import HeatSourceReading
+
+        heat_sources_block: Dict[str, HeatSourceReading] = {}
+        sources_cfg = config.get("heat_sources", []) or []
+        for source_cfg in sources_cfg:
+            name = source_cfg.get("name") or "heat_source"
+            heat_sources_block.setdefault(name, HeatSourceReading(
+                flow_temp=system_values.get("hp_flow_temp", 35.0),
+                power=system_values.get("hp_power", 0.0),
+                output=0.0,
+                cop=system_values.get("hp_cop", 3.5),
+                delta_t=computed_delta_t,
+                return_temp=system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
+                flow_rate=system_values.get("flow_rate", 0.0),
+                has_live_power=capabilities.get("has_live_power", False),
+                has_live_cop=capabilities.get("has_live_cop", False),
+                has_live_return_temp=has_live_return,
+                has_live_flow_rate=has_live_flow_rate,
+                has_live_delta_t=has_live_delta_t,
+            ))
+
+        for fkey, fval in list(system_values.items()):
+            if not fkey.startswith("heat_source__"):
+                continue
+            # Format: heat_source__<name>__<slot> — split on the slot delimiter.
+            # Source names cannot contain "__" by config validation (per config.py
+            # name handling); slot vocabulary is fixed.
+            try:
+                _, name_slot = fkey.split("__", 1)
+                name, slot = name_slot.rsplit("__", 1)
+            except ValueError:
+                continue
+            reading = heat_sources_block.get(name)
+            if reading is None:
+                reading = HeatSourceReading()
+                heat_sources_block[name] = reading
+            if slot == "flow_temp":
+                reading.flow_temp = fval
+            elif slot == "power_input":
+                reading.power = fval
+                reading.has_live_power = True
+            elif slot == "heat_output":
+                reading.output = fval
+            elif slot == "cop":
+                reading.cop = fval
+                reading.has_live_cop = True
+            elif slot == "delta_t":
+                reading.delta_t = fval
+                reading.has_live_delta_t = True
+            elif slot == "return_temp":
+                reading.return_temp = fval
+                reading.has_live_return_temp = True
+            elif slot == "flow_rate":
+                reading.flow_rate = fval
+                reading.has_live_flow_rate = True
+            elif slot == "total_energy":
+                reading.total_energy = fval
+            elif slot == "pump_power":
+                reading.pump_power = fval
+
         return InputBlock(
             room_temps=room_temps,
             independent_sensors=independent_sensors,
@@ -970,6 +1035,7 @@ class MQTTDriver:
             per_zone_away=per_zone_away,
             per_room_comfort_overrides=per_room_comfort,
             occupancy_sensor_states=occupancy_sensor_states,
+            heat_sources=heat_sources_block,
             timestamp=now,
         )
 

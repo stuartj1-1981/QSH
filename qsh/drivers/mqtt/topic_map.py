@@ -572,6 +572,8 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
       - config["mqtt"]["outputs"] for system output topics
       - config["room_mqtt_topics"][room] for per-room topics
       - config["mqtt"]["topic_prefix"] for prefix
+      - config["heat_sources"][i]["sensors"] for per-source topics
+        (INSTRUCTION-241A Task 4)
     """
     tm = TopicMap()
     mqtt_cfg = config.get("mqtt", {})
@@ -582,9 +584,42 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
         mqtt_cfg.get("staleness_defaults", {}) or {}
     )
 
+    # ── L1 disposition (INSTRUCTION-241A V2 Task 4) — when heat_sources[0]
+    # provides a per-source topic for a slot covered by legacy mqtt.inputs.hp_*,
+    # skip the legacy mapping to avoid double-subscription. Legacy retained
+    # as fallback when the per-source slot is absent (partial migrations).
+    _LEGACY_TO_PER_SOURCE_SLOT = {
+        "hp_flow_temp":   "flow_temp",
+        "hp_power":       "power_input",
+        "hp_cop":         "cop",
+        "hp_return_temp": "return_temp",
+        "hp_flow_rate":   "flow_rate",
+        "hp_heat_output": "heat_output",
+        "hp_total_energy": "total_energy",
+        "hp_delta_t":     "delta_t",
+    }
+
+    sources = config.get("heat_sources", []) or []
+    per_source_covered_slots: set = set()
+    if sources:
+        primary_sensors = (sources[0].get("sensors") or {})
+        for legacy_key, per_source_key in _LEGACY_TO_PER_SOURCE_SLOT.items():
+            entry = primary_sensors.get(per_source_key)
+            topic = entry.get("topic") if isinstance(entry, dict) else entry
+            if topic:
+                per_source_covered_slots.add(legacy_key)
+
     # ── System input topics ──
     inputs = mqtt_cfg.get("inputs", {})
     for config_key, topic_cfg in inputs.items():
+        if config_key in per_source_covered_slots:
+            logger.debug(
+                "L1: skipping legacy mqtt.inputs.%s — covered by per-source "
+                "heat_sources[0].sensors.%s",
+                config_key, _LEGACY_TO_PER_SOURCE_SLOT[config_key],
+            )
+            continue
+
         if isinstance(topic_cfg, dict):
             raw_topic = topic_cfg.get("topic", "")
             fmt = topic_cfg.get("format", "plain")
@@ -619,6 +654,63 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
             availability=availability,
             last_seen=last_seen,
         ))
+
+    # ── Per-source heat-source topics (INSTRUCTION-241A Task 4) ──
+    # For each source, for each slot with a non-empty topic, register a
+    # TopicMapping using a deterministic per-source field name. The MQTT
+    # driver's read_inputs routes these into inputs.heat_sources[name].<slot>.
+    for source in sources:
+        name = source.get("name") or "heat_source"
+        sensors_block = source.get("sensors") or {}
+        for slot in (
+            "flow_temp", "power_input", "heat_output", "cop",
+            "delta_t", "return_temp", "flow_rate",
+            "total_energy", "pump_power",
+        ):
+            entry = sensors_block.get(slot)
+            if isinstance(entry, dict):
+                raw_topic = entry.get("topic", "")
+                fmt = entry.get("format", "plain")
+                jp = entry.get("json_path")
+                category = entry.get("category")
+                availability = _build_availability_spec(entry.get("availability"), prefix)
+                last_seen = _build_last_seen_spec(entry.get("last_seen"))
+            elif isinstance(entry, str):
+                raw_topic = entry
+                fmt = "plain"
+                jp = None
+                category = None
+                availability = None
+                last_seen = None
+            else:
+                continue
+
+            if not raw_topic:
+                continue
+
+            field_name = f"heat_source__{name}__{slot}"
+            # Slot-derived category inference: power_input/heat_output/pump_power → power
+            # else default per the legacy convention.
+            if category is None:
+                if slot in ("power_input", "heat_output", "pump_power"):
+                    category = "power"
+                elif slot in ("flow_temp", "return_temp"):
+                    category = "temperature"
+                elif slot == "total_energy":
+                    category = "energy"
+                else:
+                    category = "default"
+
+            tm.input_mappings.append(TopicMapping(
+                topic=_prefixed(prefix, raw_topic),
+                field=field_name,
+                room=None,
+                payload_format=fmt,
+                json_path=jp,
+                category=category,
+                availability=availability,
+                last_seen=last_seen,
+            ))
 
     # ── Per-room input topics ──
     room_mqtt = config.get("room_mqtt_topics", {})

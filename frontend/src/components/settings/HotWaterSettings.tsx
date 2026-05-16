@@ -60,7 +60,9 @@ export function HotWaterSettings({
     deriveProbeConfig(initialTank || {})
   )
   const [hwBooleanEntity, setHwBooleanEntity] = useState<string | undefined>(
-    initialHeatSource?.sensors?.hot_water_boolean
+    typeof initialHeatSource?.sensors?.hot_water_boolean === 'string'
+      ? initialHeatSource.sensors.hot_water_boolean
+      : undefined
   )
   const [hwBooleanTopic, setHwBooleanTopic] = useState<string | undefined>(() => {
     const raw = (initialMqtt?.inputs as Record<string, unknown> | undefined)?.hot_water_boolean
@@ -75,7 +77,9 @@ export function HotWaterSettings({
   // OR-partners sit on the same screen, and so HotWaterSettings is the sole
   // edit surface for these three keys.
   const [waterHeaterEntity, setWaterHeaterEntity] = useState<string | undefined>(
-    initialHeatSource?.sensors?.water_heater
+    typeof initialHeatSource?.sensors?.water_heater === 'string'
+      ? initialHeatSource.sensors.water_heater
+      : undefined
   )
   const [hwActiveTopic, setHwActiveTopic] = useState<string | undefined>(() => {
     const raw = (initialMqtt?.inputs as Record<string, unknown> | undefined)?.hot_water_active
@@ -108,8 +112,16 @@ export function HotWaterSettings({
   }, [initialPrecharge])
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
-    setHwBooleanEntity(initialHeatSource?.sensors?.hot_water_boolean)
-    setWaterHeaterEntity(initialHeatSource?.sensors?.water_heater)
+    setHwBooleanEntity(
+      typeof initialHeatSource?.sensors?.hot_water_boolean === 'string'
+        ? initialHeatSource.sensors.hot_water_boolean
+        : undefined,
+    )
+    setWaterHeaterEntity(
+      typeof initialHeatSource?.sensors?.water_heater === 'string'
+        ? initialHeatSource.sensors.water_heater
+        : undefined,
+    )
   }, [initialHeatSource])
   useEffect(() => {
     const inputs = (initialMqtt?.inputs as Record<string, unknown> | undefined) || {}

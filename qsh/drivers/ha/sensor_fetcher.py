@@ -747,8 +747,156 @@ def fetch_heating_percentages(
     return heating_percs, heating_percs_per_emitter, avg_open_frac
 
 
+# INSTRUCTION-241A Task 2a — per-source sensor key map. Mirrors the legacy
+# sensor_map at qsh/config.py:1536-1547 but indexed by the per-source yaml key
+# (which appears under heat_sources[i].sensors.<key>).
+_PER_SOURCE_SENSOR_KEYS = (
+    "flow_temp",
+    "power_input",
+    "heat_output",
+    "cop",
+    "delta_t",
+    "return_temp",
+    "flow_rate",
+    "total_energy",
+    "pump_power",
+)
+
+
+def _fetch_heat_source_status_for(
+    sensors_block: Dict,
+    default_efficiency: float,
+    default_flow_temp: float,
+    default_return_temp: float,
+) -> Dict:
+    """Per-source heat-source fetch.
+
+    Reads each entry of `sensors_block` as a HA entity_id and returns the
+    same result-dict shape as the legacy `fetch_heat_source_status`, with
+    additional keys `total_energy` and `pump_power` for non-HP sources.
+
+    sensors_block: the per-source `sensors:` mapping from
+        config['heat_sources'][i]['sensors']. Entries may be missing —
+        the function defaults each unfilled slot.
+    """
+    result = {
+        "flow_temp": default_flow_temp,
+        "power": 0.0,
+        "output": 0.0,
+        "cop": default_efficiency,
+        "delta_t": 3.0,
+        "return_temp": default_return_temp,
+        "flow_rate": 0.0,
+        "total_energy": 0.0,
+        "pump_power": 0.0,
+        "has_live_cop": False,
+        "has_live_delta_t": False,
+        "has_live_power": False,
+        "has_live_return_temp": False,
+        "has_live_flow_rate": False,
+    }
+
+    flow_entity = sensors_block.get("flow_temp")
+    if flow_entity:
+        val_raw, is_fresh = _fetch_with_staleness(flow_entity, "heat_source", default=default_flow_temp)
+        result["flow_temp"] = safe_float(val_raw, default_flow_temp)
+        if not is_fresh:
+            logging.debug(f"Flow temp sensor stale  -  using last known {result['flow_temp']:.1f}C")
+
+    power_entity = sensors_block.get("power_input")
+    if power_entity:
+        val_raw, is_fresh = _fetch_with_staleness(power_entity, "heat_source", default=None)
+        val = safe_float(val_raw, None)
+        if val is not None:
+            val = val / _get_power_divisor(power_entity)
+        if val is not None and is_fresh:
+            result["power"] = val
+            result["has_live_power"] = True
+        elif val is not None and not is_fresh:
+            result["power"] = val
+            result["has_live_power"] = False
+            logging.debug(f"Power sensor stale  -  value {val:.2f}kW not trusted for reward")
+
+    output_entity = sensors_block.get("heat_output")
+    if output_entity:
+        val_raw, is_fresh = _fetch_with_staleness(output_entity, "heat_source", default=0.0)
+        result["output"] = safe_float(val_raw, 0.0) / _get_power_divisor(output_entity)
+
+    cop_entity = sensors_block.get("cop")
+    if cop_entity:
+        cop_raw, is_fresh = _fetch_with_staleness(cop_entity, "heat_source", default=None)
+        cop_val = safe_float(cop_raw, None)
+        if cop_val is not None and 0.5 <= cop_val <= 10.0 and is_fresh:
+            result["cop"] = cop_val
+            result["has_live_cop"] = True
+        elif cop_val is not None and not is_fresh:
+            logging.debug(f"COP sensor stale  -  using default {default_efficiency}")
+
+    dt_entity = sensors_block.get("delta_t")
+    if dt_entity:
+        dt_raw, is_fresh = _fetch_with_staleness(dt_entity, "heat_source", default=None)
+        dt_val = safe_float(dt_raw, None)
+        if dt_val is not None and is_fresh:
+            result["delta_t"] = dt_val
+            result["has_live_delta_t"] = True
+        elif dt_val is not None and not is_fresh:
+            result["delta_t"] = dt_val
+            result["has_live_delta_t"] = False
+
+    return_entity = sensors_block.get("return_temp")
+    if return_entity:
+        rt_raw, is_fresh = _fetch_with_staleness(return_entity, "heat_source", default=None)
+        rt_val = safe_float(rt_raw, None)
+        if rt_val is not None and is_fresh:
+            result["return_temp"] = rt_val
+            result["has_live_return_temp"] = True
+            if not result["has_live_delta_t"] and result["flow_temp"] > 0:
+                calculated_dt = result["flow_temp"] - rt_val
+                result["delta_t"] = calculated_dt
+                result["has_live_delta_t"] = True
+                logging.debug(
+                    f"Delta-T calculated from flow/return: "
+                    f"{result['flow_temp']:.1f} - {rt_val:.1f} = {calculated_dt:.1f}°C"
+                )
+        elif rt_val is not None and not is_fresh:
+            result["return_temp"] = rt_val
+            result["has_live_return_temp"] = False
+
+    fr_entity = sensors_block.get("flow_rate")
+    if fr_entity:
+        fr_raw, is_fresh = _fetch_with_staleness(fr_entity, "heat_source", default=None)
+        fr_val = safe_float(fr_raw, None)
+        if fr_val is not None and is_fresh:
+            result["flow_rate"] = fr_val
+            result["has_live_flow_rate"] = True
+        elif fr_val is not None and not is_fresh:
+            result["flow_rate"] = fr_val
+            result["has_live_flow_rate"] = False
+            logging.debug(f"Flow rate sensor stale  -  value {fr_val:.2f} L/min not trusted")
+
+    te_entity = sensors_block.get("total_energy")
+    if te_entity:
+        te_raw, _ = _fetch_with_staleness(te_entity, "heat_source", default=0.0)
+        result["total_energy"] = safe_float(te_raw, 0.0)
+
+    pp_entity = sensors_block.get("pump_power")
+    if pp_entity:
+        pp_raw, _ = _fetch_with_staleness(pp_entity, "heat_source", default=0.0)
+        result["pump_power"] = safe_float(pp_raw, 0.0) / _get_power_divisor(pp_entity)
+
+    return result
+
+
 def fetch_heat_source_status(config: Dict) -> Dict:
-    """Fetch heat source operating status with graceful degradation."""
+    """Fetch heat source operating status with graceful degradation.
+
+    Legacy path — reads from config['entities'] using the singular-source
+    entity keys (hp_flow_temp, hp_energy_rate, etc.). Kept for backward
+    compatibility with single-source code paths. INSTRUCTION-241A retains
+    this function unchanged in semantics; the per-source acquisition layer
+    is provided by `fetch_all_heat_source_statuses` and consumed via
+    `HeatSourceSensorSelector`.
+    """
     entities = config["entities"]
     default_efficiency = config.get("heat_source_efficiency", 3.5)
 
@@ -847,6 +995,45 @@ def fetch_heat_source_status(config: Dict) -> Dict:
             logging.debug(f"Flow rate sensor stale  -  value {fr_val:.2f} L/min not trusted")
 
     return result
+
+
+def fetch_all_heat_source_statuses(config: Dict) -> Dict[str, Dict]:
+    """Per-source HA acquisition (INSTRUCTION-241A Task 2b).
+
+    Iterates `config['heat_sources']` and returns a dict keyed by source name,
+    each value being the same shape as `fetch_heat_source_status`'s result
+    plus `total_energy` and `pump_power`. Legacy singular config (empty
+    `heat_sources`) falls back to a one-entry dict keyed by the resolved
+    singular source's name.
+    """
+    sources = config.get("heat_sources", []) or []
+    default_efficiency = config.get("heat_source_efficiency", 3.5)
+    default_flow_temp = config.get("default_flow_temp", 35.0)
+    default_return_temp = config.get("default_return_temp", 30.0)
+
+    out: Dict[str, Dict] = {}
+
+    if sources:
+        for source in sources:
+            name = source.get("name") or "heat_source"
+            sensors_block = source.get("sensors") or {}
+            result = _fetch_heat_source_status_for(
+                sensors_block, default_efficiency, default_flow_temp, default_return_temp,
+            )
+            result["name"] = name
+            out[name] = result
+        return out
+
+    # Legacy singular config — synthesise one entry keyed by the singular
+    # source's name. Reads from the old config['entities'] map for backward
+    # compatibility (matches the legacy fetch_heat_source_status semantics).
+    legacy = fetch_heat_source_status(config)
+    legacy.setdefault("total_energy", 0.0)
+    legacy.setdefault("pump_power", 0.0)
+    legacy_name = config.get("active_source_name") or "heat_source"
+    legacy["name"] = legacy_name
+    out[legacy_name] = legacy
+    return out
 
 
 def fetch_energy_data(config: Dict) -> Dict[str, float]:
@@ -993,6 +1180,32 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.flow_rate = hs_status.get("flow_rate", 0.0)
     data.has_live_return_temp = hs_status.get("has_live_return_temp", False)
     data.has_live_flow_rate = hs_status.get("has_live_flow_rate", False)
+
+    # INSTRUCTION-241A Task 3 — populate per-source dict alongside the legacy
+    # flat slots. Selector reads sd.heat_sources[active] and overwrites the
+    # flat slots from there in the same cycle. Empty heat_sources config →
+    # legacy singular path returns one entry; selector treats as no-op.
+    from ...sensors import HeatSourceReading
+
+    data.heat_sources = {
+        name: HeatSourceReading(
+            flow_temp=result["flow_temp"],
+            power=result["power"],
+            output=result["output"],
+            cop=result["cop"],
+            delta_t=result["delta_t"],
+            return_temp=result["return_temp"],
+            flow_rate=result["flow_rate"],
+            total_energy=result.get("total_energy", 0.0),
+            pump_power=result.get("pump_power", 0.0),
+            has_live_power=result["has_live_power"],
+            has_live_cop=result["has_live_cop"],
+            has_live_return_temp=result["has_live_return_temp"],
+            has_live_flow_rate=result["has_live_flow_rate"],
+            has_live_delta_t=result["has_live_delta_t"],
+        )
+        for name, result in fetch_all_heat_source_statuses(config).items()
+    }
 
     energy_data = fetch_energy_data(config)
     data.battery_soc = energy_data["battery_soc"]
