@@ -70,9 +70,10 @@ vi.mock('../../hooks/useHistory', () => ({
 }))
 
 // TrendChart pulls in recharts; stub it out to keep this test focused on
-// tooltip wiring rather than chart rendering.
+// tooltip wiring rather than chart rendering. The stub still renders the
+// title so the title-honesty assertion (INSTRUCTION-239) can verify it.
 vi.mock('../../components/TrendChart', () => ({
-  TrendChart: () => null,
+  TrendChart: ({ title }: { title: string }) => <div>{title}</div>,
 }))
 
 // HardwareTelemetry is real — it does not pull anything heavy. Leave unmocked.
@@ -174,5 +175,18 @@ describe('Engineering page tooltips', () => {
     render(<Engineering />)
     const block = within(screen.getByTestId('pipeline-state'))
     expect(block.getAllByLabelText('Help')).toHaveLength(9)
+  })
+
+  it('chart titles do not advertise specific time windows', () => {
+    // INSTRUCTION-239: the buffer-depth window grows from startup onwards,
+    // so a chart title that commits to "(48h)" or "(7d)" is a UX defect
+    // when rendered on a fresh install or shortly after restart.
+    render(<Engineering />)
+    expect(screen.getByText('RL Reward')).toBeInTheDocument()
+    expect(screen.getByText('RL Loss')).toBeInTheDocument()
+    expect(screen.getByText('Blend Factor')).toBeInTheDocument()
+    expect(screen.getByText('Flow Comparison')).toBeInTheDocument()
+    expect(screen.queryByText(/\(48h\)/)).toBeNull()
+    expect(screen.queryByText(/\(7d\)/)).toBeNull()
   })
 })

@@ -6,7 +6,7 @@ import os
 import yaml
 from typing import Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from ..state import shared_state
@@ -277,14 +277,20 @@ def get_raw_config():
 
 
 @router.patch("/config/{section}")
-def patch_config_section(section: str, body: dict):
+def patch_config_section(section: str, body=Body(...)):
     """Update a single config section.
 
     All changes trigger a pipeline restart to adopt the new config.
+
+    INSTRUCTION-237A: body is declared via fastapi.Body so list-shaped PATCHes
+    (heat_sources) are accepted alongside dict-shaped ones. The
+    body.get("data", body) pattern below collapses both forms uniformly when
+    body is a dict; lists pass through directly.
     """
     valid_sections = {
         "rooms",
         "heat_source",
+        "heat_sources",
         "outdoor",
         "energy",
         "thermal",
@@ -312,6 +318,34 @@ def patch_config_section(section: str, body: dict):
 
     if section not in valid_sections:
         raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
+
+    # INSTRUCTION-237A Task 1b: heat_sources element-level guard. Element
+    # shape and bounds checks before the snapshot fires, so malformed PATCHes
+    # are rejected cheaply and the snapshot is not wasted.
+    if section == "heat_sources":
+        from qsh.heat_source_limits import MIN_HEAT_SOURCES, MAX_HEAT_SOURCES
+
+        guard_incoming = body.get("data", body) if isinstance(body, dict) else body
+        if not isinstance(guard_incoming, list):
+            raise HTTPException(
+                status_code=400,
+                detail="heat_sources PATCH body must be a list of source objects",
+            )
+        if not (MIN_HEAT_SOURCES <= len(guard_incoming) <= MAX_HEAT_SOURCES):
+            raise HTTPException(
+                status_code=400,
+                detail=f"heat_sources must contain {MIN_HEAT_SOURCES}..{MAX_HEAT_SOURCES} entries",
+            )
+        if not all(isinstance(x, dict) for x in guard_incoming):
+            raise HTTPException(
+                status_code=400,
+                detail="heat_sources entries must all be objects (dicts)",
+            )
+        if not all(isinstance(x.get("type"), str) for x in guard_incoming):
+            raise HTTPException(
+                status_code=400,
+                detail="heat_sources[*].type is required and must be a string",
+            )
 
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml
@@ -349,7 +383,7 @@ def patch_config_section(section: str, body: dict):
             detail="Configuration snapshot failed; write aborted to preserve recoverability.",
         ) from exc
 
-    incoming = body.get("data", body)
+    incoming = body.get("data", body) if isinstance(body, dict) else body
 
     # "root" section merges individual keys at the YAML root level
     # (e.g. publish_mqtt_shadow, flow_min_internal)
@@ -430,6 +464,27 @@ def patch_config_section(section: str, body: dict):
             raw[section] = restore_redacted(existing_section, local_incoming)
         else:
             raw[section] = local_incoming
+        # INSTRUCTION-237A Task 1b: server-authoritative singular/plural
+        # reconciliation for heat_sources. Mirror to singular when only one
+        # source; strip the stale singular when 2+. Atomic within this
+        # read_modify_write block.
+        if section == "heat_sources" and isinstance(local_incoming, list):
+            if len(local_incoming) == 1:
+                # Singular mirror — preserves back-compat for any code path that
+                # still reads raw["heat_source"] (validation at config.py:2053,
+                # legacy callers).
+                raw["heat_source"] = local_incoming[0]
+                # V2 G-N5: N→1 transition cleanup. Symmetric with the 1→N
+                # singular strip below — source_selection becomes inert when
+                # only one source remains; leaving it on disk is the same class
+                # of stale-block hazard as a stale singular.
+                raw.pop("source_selection", None)
+            else:
+                # len >= 2: strip the stale singular block. Verified at
+                # config.py:2041 that singular→plural normalisation is skipped
+                # when both keys are present, so the stale singular would persist
+                # forever without this strip and trip _validate_heat_source.
+                raw.pop("heat_source", None)
         # On-disk YAML hygiene for entity/topic fields. Runtime safety is already
         # provided by Task 1's .strip() at config-load — this block exists so the
         # persisted YAML matches what the runtime sees, GET-after-PATCH returns a

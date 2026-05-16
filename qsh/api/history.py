@@ -51,6 +51,19 @@ class HistoryEntry:
 # 7 days at 30s cycles
 MAX_ENTRIES = 20160
 
+# Seed window derived from deque capacity × cycle period. The 30 s cycle
+# cadence is set operationally by the driver loop — see
+# qsh/drivers/ha/driver.py:42,122,150 (time.sleep(self._cycle_interval),
+# default 30) and qsh/drivers/mock_driver.py:77 (simulation-path parity).
+# Encoding the derivation rather than declaring a parallel literal means
+# that if MAX_ENTRIES or the implied cycle period ever drifts, the
+# Task 4 assertion `SEED_WINDOW_HOURS == 168` fails loudly rather than
+# silently under- or over-seeding the buffer. No api→pipeline.controllers
+# import layering inversion (`qsh/pipeline/controllers/hydraulic_controller.py:69
+# CYCLE_PERIOD_S = 30.0` is a controller-internal constant and structurally
+# the wrong layer to import from here).
+SEED_WINDOW_HOURS = (MAX_ENTRIES * 30) // 3600  # = 168
+
 
 class CycleHistory:
     """Thread-safe ring buffer of cycle history entries."""
@@ -102,10 +115,13 @@ class CycleHistory:
             return len(self._buffer)
 
     def seed_from_influxdb(self, historian: Any) -> None:
-        """Seed the history buffer with last 24h of data from InfluxDB.
+        """Seed the history buffer with the deque's full capacity (SEED_WINDOW_HOURS)
+        of data from InfluxDB.
 
-        Called once on startup so that 24h graphs are populated immediately
-        after a restart rather than starting empty.
+        Called once on startup so that the widest-window charts on the Engineering
+        page (rl_blend at 168 h) are populated immediately after a restart rather
+        than starting empty. The deque's maxlen clips if the result is ever wider
+        than MAX_ENTRIES — under the 30 s cycle contract these are sized to match.
         """
         if historian is None or not historian.is_active:
             logger.info("CycleHistory: No active historian — starting empty")
@@ -145,9 +161,9 @@ class CycleHistory:
 
         # ── Query system metrics ──
         sys_query = (
-            "SELECT flow_temp, outdoor_temp, hp_power_kw, cop, delta_t, "
-            "demand_kw, tariff_rate, return_temp, operating_state "
-            "FROM qsh_system WHERE time > now() - 24h"
+            f"SELECT flow_temp, outdoor_temp, hp_power_kw, cop, delta_t, "
+            f"demand_kw, tariff_rate, return_temp, operating_state "
+            f"FROM qsh_system WHERE time > now() - {SEED_WINDOW_HOURS}h"
         )
         try:
             sys_result = client.query(sys_query)
@@ -158,8 +174,8 @@ class CycleHistory:
 
         # ── Query RL metrics ──
         rl_query = (
-            "SELECT reward, loss, blend_factor, det_flow, rl_proposed_flow "
-            "FROM qsh_rl WHERE time > now() - 24h"
+            f"SELECT reward, loss, blend_factor, det_flow, rl_proposed_flow "
+            f"FROM qsh_rl WHERE time > now() - {SEED_WINDOW_HOURS}h"
         )
         try:
             rl_result = client.query(rl_query)
@@ -170,8 +186,8 @@ class CycleHistory:
 
         # ── Query room metrics ──
         room_query = (
-            "SELECT temperature, target, valve_pct, occupancy "
-            "FROM qsh_room WHERE time > now() - 24h GROUP BY room"
+            f"SELECT temperature, target, valve_pct, occupancy "
+            f"FROM qsh_room WHERE time > now() - {SEED_WINDOW_HOURS}h GROUP BY room"
         )
         try:
             room_result = client.query(room_query)

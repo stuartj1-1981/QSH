@@ -738,7 +738,17 @@ def validate_config(req: WizardValidateRequest):
     warnings = []
 
     if req.step == "heat_source" or req.step is None:
-        hs = cfg.get("heat_source", {})
+        # INSTRUCTION-237A: plural-first read. The wizard now writes only
+        # heat_sources; the singular heat_source key only exists on legacy
+        # configs or as the server-authoritative mirror after deploy. Both
+        # the validation gate and downstream checks operate against the
+        # first source, mirroring the plural-first hydration the frontend
+        # uses.
+        hs_list = cfg.get("heat_sources")
+        if isinstance(hs_list, list) and hs_list and isinstance(hs_list[0], dict):
+            hs = hs_list[0]
+        else:
+            hs = cfg.get("heat_source", {})
         if not hs.get("type"):
             errors.append("heat_source.type is required")
         elif hs["type"] not in ("heat_pump", "gas_boiler", "oil_boiler"):
@@ -1683,6 +1693,17 @@ async def scan_mqtt_topics(req: MqttScanRequest):
 @router.post("/deploy")
 def deploy_config(req: WizardDeployRequest):
     """Write validated config to qsh.yaml and trigger pipeline restart."""
+    # INSTRUCTION-237A V2 G-N1: reject an empty heat_sources list as a
+    # structurally malformed config BEFORE validation. Surfaces 400 with a
+    # clear detail rather than the validator's generic 422 "heat_source.type
+    # is required" which would obscure the actual cause.
+    _hs_pre = req.config.get("heat_sources")
+    if isinstance(_hs_pre, list) and len(_hs_pre) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="heat_sources must contain at least one entry (empty list is malformed)",
+        )
+
     # 1. Final validation
     validation = validate_config(
         WizardValidateRequest(config=req.config, step=None)
@@ -1706,10 +1727,45 @@ def deploy_config(req: WizardDeployRequest):
     # arrive as ***REDACTED*** and would clobber the real value on write.
     req.config = restore_redacted(existing, req.config)
 
+    # INSTRUCTION-237A Task 1c: server-authoritative singular/plural
+    # reconciliation. Mirror to singular when only one source; strip the
+    # stale singular when 2+; strip source_selection on N→1 (V2 G-N5).
+    #
+    # Ordering rationale (V2 G-N2): runs AFTER restore_redacted intentionally.
+    # Any secrets that restore_redacted merged back into req.config["heat_source"]
+    # are duplicates of those already in heat_sources[0] (or are stale singulars
+    # from a prior install), and are correctly discarded along with the stale
+    # singular block. Running this BEFORE restore_redacted would risk losing
+    # real secrets that the user redacted then re-submitted.
+    #
+    # Runs BEFORE the section-preservation guard so the guard sees the
+    # post-reconciliation key set and doesn't 409 on a legitimate 1→N transition.
+    # Empty-list rejection (V2 G-N1) is handled earlier at deploy-entry to
+    # surface a clear 400 before validation can mis-report it as 422.
+    heat_sources = req.config.get("heat_sources")
+    if isinstance(heat_sources, list) and len(heat_sources) >= 1:
+        if len(heat_sources) == 1:
+            req.config["heat_source"] = heat_sources[0]
+            # V2 G-N5: N→1 transition. If the prior on-disk config had
+            # source_selection (multi-source install reducing to single),
+            # drop it from the outgoing config so it doesn't survive.
+            req.config.pop("source_selection", None)
+        else:
+            req.config.pop("heat_source", None)
+
     # Section-preservation guard — refuse a deploy that would drop any
     # top-level section present in the on-disk YAML, unless force=True.
     if existing:
         removed_sections = set(existing.keys()) - set(req.config.keys())
+        # INSTRUCTION-237A Task 1c: exempt legitimate 1→N / N→1 transitions
+        # from the destructive-drop check. Reconciliation above already
+        # stripped the relevant key from req.config in each direction.
+        hs_list = req.config.get("heat_sources")
+        if isinstance(hs_list, list):
+            if "heat_source" in removed_sections and len(hs_list) >= 2:
+                removed_sections.discard("heat_source")
+            if "source_selection" in removed_sections and len(hs_list) == 1:
+                removed_sections.discard("source_selection")
         if removed_sections and not req.force:
             raise HTTPException(
                 status_code=409,
