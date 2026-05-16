@@ -189,15 +189,15 @@ export function StepReview({
             <>
               <SummaryItem
                 label="Flow Temp"
-                value={hs?.sensors?.flow_temp || 'Not set'}
+                value={(typeof hs?.sensors?.flow_temp === 'string' ? hs.sensors.flow_temp : '') || 'Not set'}
               />
               <SummaryItem
                 label="Power"
-                value={hs?.sensors?.power_input || 'Not set'}
+                value={(typeof hs?.sensors?.power_input === 'string' ? hs.sensors.power_input : '') || 'Not set'}
               />
               <SummaryItem
                 label="Flow rate sensor"
-                value={hs?.sensors?.flow_rate || 'Not configured (capability fallback)'}
+                value={(typeof hs?.sensors?.flow_rate === 'string' ? hs.sensors.flow_rate : '') || 'Not configured (capability fallback)'}
               />
               <SummaryItem
                 label="Outdoor"

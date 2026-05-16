@@ -5,7 +5,58 @@ import type {
   DeployResponse,
   DestructiveDeployError,
   QshConfigYaml,
+  HeatSourceYaml,
+  MqttTopicInput,
 } from '../types/config'
+
+// INSTRUCTION-241B Task 4b — legacy mqtt.inputs.hp_* → heat_sources[0].sensors.*
+// migration helper. Runs once on wizard config bootstrap; idempotent.
+// Mirrors backend topic_map.py de-dup table at qsh/drivers/mqtt/topic_map.py.
+const LEGACY_TO_PER_SOURCE_SLOT_REMAP: Record<string, string> = {
+  hp_flow_temp:   'flow_temp',
+  hp_return_temp: 'return_temp',
+  flow_rate:      'flow_rate',
+  hp_power:       'power_input',
+  hp_cop:         'cop',
+  hp_heat_output: 'heat_output',
+  // hp_mode_state intentionally NOT remapped — parent §D-8 V2 retains as global.
+}
+
+export function migrateLegacyMqttInputsToPerSource(
+  config: Partial<QshConfigYaml>,
+): Partial<QshConfigYaml> {
+  if (config.driver !== 'mqtt') return config
+  const sources: HeatSourceYaml[] = Array.isArray(config.heat_sources)
+    ? [...config.heat_sources]
+    : (config.heat_source ? [config.heat_source] : [])
+  if (sources.length === 0) return config
+
+  const primary: HeatSourceYaml = {
+    ...sources[0],
+    sensors: { ...(sources[0].sensors ?? {}) },
+  }
+  const legacyInputs = (config.mqtt?.inputs ?? {}) as Record<string, MqttTopicInput>
+
+  let migrated = false
+  for (const [legacyKey, perSourceKey] of Object.entries(LEGACY_TO_PER_SOURCE_SLOT_REMAP)) {
+    const legacyEntry = legacyInputs[legacyKey]
+    const existing = (primary.sensors as Record<string, unknown> | undefined)?.[perSourceKey]
+    if (legacyEntry && !existing) {
+      (primary.sensors as Record<string, MqttTopicInput | string>)[perSourceKey] = legacyEntry
+      migrated = true
+    }
+  }
+  if (!migrated) return config
+
+  sources[0] = primary
+  // Legacy mqtt.inputs.hp_* keys are LEFT IN PLACE in the in-memory config —
+  // backend 241A V2 Task 4 L1 de-dup skips them when the per-source equivalent
+  // exists. Wizard never re-writes them after migration (F5(b) no-double-write).
+  return {
+    ...config,
+    heat_sources: sources,
+  }
+}
 
 const HA_STEPS = [
   'restore_backup',
@@ -88,7 +139,10 @@ export function useWizard() {
   }, [])
 
   const setConfig = useCallback((config: Partial<QshConfigYaml>) => {
-    setState((prev) => ({ ...prev, config }))
+    // INSTRUCTION-241B Task 4b — migrate legacy mqtt.inputs.hp_* to
+    // heat_sources[0].sensors.* on config load. Idempotent.
+    const migrated = migrateLegacyMqttInputsToPerSource(config)
+    setState((prev) => ({ ...prev, config: migrated }))
   }, [])
 
   const validateStep = useCallback(

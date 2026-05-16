@@ -420,3 +420,297 @@ describe('StepSensors — per-source tabs (INSTRUCTION-237A)', () => {
     expect(screen.queryByText('sensor.STALE_singular')).toBeNull()
   })
 })
+
+/**
+ * INSTRUCTION-241B — MQTT per-source sensor tabs.
+ *
+ * Closes the MQTT-side wizard gap reported 16 May 2026 — a multi-source
+ * MQTT install previously had no way to map per-source topics through
+ * the wizard. The MqttSensors component now mirrors the HA tab strip
+ * pattern from 237A.
+ */
+describe('MqttSensors — per-source tabs (INSTRUCTION-241B)', () => {
+  it('Test 1: single-source MQTT config — no tab strip rendered', () => {
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Primary HP' }],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+  })
+
+  it('Test 2: two-source MQTT config — tab strip with two tabs labelled by name', () => {
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary HP' },
+        { type: 'gas_boiler' as const, name: 'Backup Boiler' },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByRole('tablist')).toBeInTheDocument()
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs).toHaveLength(2)
+    expect(tabs[0]).toHaveTextContent('Primary HP')
+    expect(tabs[1]).toHaveTextContent('Backup Boiler')
+  })
+
+  it('Test 3: edit flow temp on tab 1 writes heat_sources[1].sensors.flow_temp', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary HP', sensors: {} },
+        { type: 'gas_boiler' as const, name: 'Boiler', sensors: {} },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+
+    fireEvent.click(screen.getAllByRole('tab')[1])
+
+    // Find the Flow Temperature picker under the per-source heading.
+    const heading = screen.getByText('Heat Source Sensors')
+    const sectionRoot = heading.closest('div')!.parentElement as HTMLElement
+    const flowLabel = sectionRoot.querySelector('input[placeholder="gas_boiler/flow_temp"]') as HTMLInputElement
+    expect(flowLabel).not.toBeNull()
+
+    fireEvent.change(flowLabel, { target: { value: 'qsh/boiler/flow_temp' } })
+
+    const heatSourcesCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(heatSourcesCalls.length).toBeGreaterThan(0)
+    const last = heatSourcesCalls[heatSourcesCalls.length - 1]
+    const payload = last[1] as Array<{ sensors?: Record<string, { topic?: string } | string> }>
+    expect(payload[0].sensors).toEqual({})
+    const slot = payload[1].sensors?.flow_temp
+    const topic = typeof slot === 'string' ? slot : slot?.topic
+    expect(topic).toBe('qsh/boiler/flow_temp')
+  })
+
+  it('Test 4: switching tabs reflects each source\'s stored topics', () => {
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary',
+          sensors: { flow_temp: { topic: 'qsh/primary/flow', format: 'plain' as const } } },
+        { type: 'gas_boiler' as const, name: 'Boiler',
+          sensors: { flow_temp: { topic: 'qsh/boiler/flow', format: 'plain' as const } } },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+
+    // Tab 0 active by default — primary topic shown.
+    const heading = screen.getByText('Heat Source Sensors')
+    const sectionRoot = heading.closest('div')!.parentElement as HTMLElement
+    let flowInput = sectionRoot.querySelector(
+      'input[placeholder="heat_pump/flow_temp"]',
+    ) as HTMLInputElement
+    expect(flowInput.value).toBe('qsh/primary/flow')
+
+    // Switch to tab 1.
+    fireEvent.click(screen.getAllByRole('tab')[1])
+    flowInput = sectionRoot.querySelector(
+      'input[placeholder="gas_boiler/flow_temp"]',
+    ) as HTMLInputElement
+    expect(flowInput.value).toBe('qsh/boiler/flow')
+  })
+
+  it('Test 5: placeholder uses type stem per source (singleSource mode suppresses name disambiguation)', () => {
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary' },
+        { type: 'gas_boiler' as const, name: 'Boiler' },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+
+    // Default tab — Primary, placeholder uses heat_pump stem.
+    const heading = screen.getByText('Heat Source Sensors')
+    const sectionRoot = heading.closest('div')!.parentElement as HTMLElement
+    expect(
+      sectionRoot.querySelector('input[placeholder="heat_pump/flow_temp"]'),
+    ).not.toBeNull()
+
+    // Switch to Boiler — placeholder uses gas_boiler stem.
+    fireEvent.click(screen.getAllByRole('tab')[1])
+    expect(
+      sectionRoot.querySelector('input[placeholder="gas_boiler/flow_temp"]'),
+    ).not.toBeNull()
+  })
+
+  it('Test 6: clearing topic removes the field from heat_sources[i].sensors', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: { broker: 'localhost', port: 1883, inputs: {} },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary',
+          sensors: { flow_temp: { topic: 'qsh/p/flow', format: 'plain' as const } } },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+
+    const heading = screen.getByText('Heat Source Sensors')
+    const sectionRoot = heading.closest('div')!.parentElement as HTMLElement
+    const flowInput = sectionRoot.querySelector(
+      'input[placeholder="heat_pump/flow_temp"]',
+    ) as HTMLInputElement
+    fireEvent.change(flowInput, { target: { value: '' } })
+
+    const heatSourcesCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(heatSourcesCalls.length).toBeGreaterThan(0)
+    const last = heatSourcesCalls[heatSourcesCalls.length - 1]
+    const payload = last[1] as Array<{ sensors?: Record<string, unknown> }>
+    expect(payload[0].sensors).toBeDefined()
+    expect((payload[0].sensors as Record<string, unknown>).flow_temp).toBeUndefined()
+  })
+})
+
+/**
+ * INSTRUCTION-241B Task 4b — legacy mqtt.inputs.hp_* → heat_sources[0].sensors.*
+ * migration helper.
+ */
+describe('migrateLegacyMqttInputsToPerSource (INSTRUCTION-241B Task 4b)', () => {
+  it('Test 7: migration produces correct per-source state', async () => {
+    const { migrateLegacyMqttInputsToPerSource } = await import('../../../hooks/useWizard')
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { hp_flow_temp: { topic: 'foo/bar', format: 'plain' as const } },
+      },
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Primary', sensors: {} }],
+    }
+    const migrated = migrateLegacyMqttInputsToPerSource(config)
+    const slot = migrated.heat_sources?.[0]?.sensors?.flow_temp
+    expect(slot).toEqual({ topic: 'foo/bar', format: 'plain' })
+  })
+
+  it('Test 8: no-double-write — wizard never writes mqtt.inputs.hp_* after migration', () => {
+    const onUpdate = vi.fn()
+    // Post-migration config: per-source has the migrated value, legacy is still in mqtt.inputs.
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { hp_flow_temp: { topic: 'foo/bar', format: 'plain' as const } },
+      },
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Primary',
+          sensors: { flow_temp: { topic: 'foo/bar', format: 'plain' as const } } },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+
+    const heading = screen.getByText('Heat Source Sensors')
+    const sectionRoot = heading.closest('div')!.parentElement as HTMLElement
+    const flowInput = sectionRoot.querySelector(
+      'input[placeholder="heat_pump/flow_temp"]',
+    ) as HTMLInputElement
+    fireEvent.change(flowInput, { target: { value: 'new/topic' } })
+
+    const mqttCalls = onUpdate.mock.calls.filter((c) => c[0] === 'mqtt')
+    // The wizard MUST NOT write into mqtt.inputs.hp_* when the user edits a
+    // per-source flow temp. F5(b) no-double-write invariant.
+    for (const call of mqttCalls) {
+      const payload = call[1] as { inputs?: Record<string, unknown> }
+      const hpKeys = Object.keys(payload.inputs ?? {}).filter((k) => k.startsWith('hp_'))
+      // hp_flow_temp must not appear as a new write target; if mqtt was
+      // written at all, it must not have been for an hp_* slot.
+      for (const k of hpKeys) {
+        expect(k).not.toBe('hp_flow_temp')
+      }
+    }
+    const heatSourcesCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(heatSourcesCalls.length).toBeGreaterThan(0)
+  })
+
+  it('Test 9: idempotent — second run returns unchanged config', async () => {
+    const { migrateLegacyMqttInputsToPerSource } = await import('../../../hooks/useWizard')
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { hp_flow_temp: { topic: 'foo/bar', format: 'plain' as const } },
+      },
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Primary', sensors: {} }],
+    }
+    const once = migrateLegacyMqttInputsToPerSource(config)
+    const twice = migrateLegacyMqttInputsToPerSource(once)
+    expect(twice).toBe(once)
+  })
+
+  it('Test 10: legacy globals preserved — outdoor_temp stays in mqtt.inputs', async () => {
+    const { migrateLegacyMqttInputsToPerSource } = await import('../../../hooks/useWizard')
+    const config = {
+      driver: 'mqtt' as const,
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: {
+          outdoor_temp: { topic: 'home/outdoor', format: 'plain' as const },
+          hp_flow_temp: { topic: 'home/hp/flow', format: 'plain' as const },
+        },
+      },
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Primary', sensors: {} }],
+    }
+    const migrated = migrateLegacyMqttInputsToPerSource(config)
+    expect(migrated.mqtt?.inputs.outdoor_temp).toEqual({
+      topic: 'home/outdoor', format: 'plain',
+    })
+    const flowSlot = migrated.heat_sources?.[0]?.sensors?.flow_temp
+    expect(flowSlot).toEqual({ topic: 'home/hp/flow', format: 'plain' })
+  })
+
+  it('Test 11: slot remap completeness — eight legacy keys covered, hp_mode_state NOT remapped', async () => {
+    const { migrateLegacyMqttInputsToPerSource } = await import('../../../hooks/useWizard')
+
+    const remap: Array<[string, string]> = [
+      ['hp_flow_temp', 'flow_temp'],
+      ['hp_return_temp', 'return_temp'],
+      ['flow_rate', 'flow_rate'],
+      ['hp_power', 'power_input'],
+      ['hp_cop', 'cop'],
+      ['hp_heat_output', 'heat_output'],
+    ]
+
+    for (const [legacy, perSource] of remap) {
+      const config = {
+        driver: 'mqtt' as const,
+        mqtt: {
+          broker: 'localhost', port: 1883,
+          inputs: { [legacy]: { topic: `t/${legacy}`, format: 'plain' as const } },
+        },
+        heat_sources: [{ type: 'heat_pump' as const, name: 'Primary', sensors: {} }],
+      }
+      const migrated = migrateLegacyMqttInputsToPerSource(config)
+      const slot = (migrated.heat_sources?.[0]?.sensors as Record<string, unknown> | undefined)?.[
+        perSource
+      ]
+      expect(slot, `${legacy} → ${perSource}`).toEqual({
+        topic: `t/${legacy}`, format: 'plain',
+      })
+    }
+
+    // hp_mode_state must NOT be remapped — it's a global per §D-8.
+    const modeConfig = {
+      driver: 'mqtt' as const,
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { hp_mode_state: { topic: 'home/hp/mode', format: 'plain' as const } },
+      },
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Primary', sensors: {} }],
+    }
+    const modeMigrated = migrateLegacyMqttInputsToPerSource(modeConfig)
+    expect(modeMigrated.mqtt?.inputs.hp_mode_state).toEqual({
+      topic: 'home/hp/mode', format: 'plain',
+    })
+    const sensors = modeMigrated.heat_sources?.[0]?.sensors as Record<string, unknown> | undefined
+    expect(sensors?.mode_state).toBeUndefined()
+    expect(sensors?.hp_mode_state).toBeUndefined()
+  })
+})

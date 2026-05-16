@@ -1,80 +1,186 @@
 # Changelog
 
-All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
+## [Unreleased]
+
+## [1.4.2] — 2026-05-16
+
+### Fixed
+- Dual heat source acquisition pipeline: per-source sensor selector,
+  MQTT placeholder differentiation, duplicate-topic PATCH guard
+  (INSTRUCTION-241A, INSTRUCTION-241B, INSTRUCTION-241C)
+- Wizard per-source sensor tab routing for multi-heat-source configs
 
 ## [1.4.1] — 2026-05-16
 
 ### Added
-- Multi-heat-source configuration: configure two or more heat sources
-  (e.g. HP + gas/LPG/oil boiler) with per-source carbon factor and
-  dispatch rules, in both the Setup Wizard and Settings
-- BEIS carbon-factor defaults shown as placeholders for boiler types
-  (gas / LPG / oil)
+- Multi-heat-source wizard + Settings editor (INSTRUCTION-237A,
+  INSTRUCTION-237B) — plural `heat_sources` array with per-source
+  carbon factor (BEIS defaults as placeholders for gas/LPG/oil), max
+  source count enforced via `MAX_HEAT_SOURCES`, plural-first hydration
+  through validate/deploy/scan-MQTT
+- HTTP 400 short-circuit in `/api/wizard/deploy` when `heat_sources`
+  list is empty (INSTRUCTION-237A V2 G-N1)
 
 ### Changed
-- Mobile sidebar: navigation list now scrolls independently while the
-  logo header and section footer stay pinned in place
-- Engineering page: RL training charts seed from the full history buffer
-  (up to 7 days) and chart titles reflect the actual rolling window
-  rather than a fixed 48 h claim
-- Wizard heat-source step rewritten to handle a list of sources rather
-  than a single source
+- Mobile sidebar scrollable with pinned header/footer
+  (INSTRUCTION-238) — `flex-1 min-h-0 overflow-y-auto overscroll-contain`
+  on nav, `shrink-0` on logo and section footer
+- History seed window widened from 24 h to 168 h
+  (`SEED_WINDOW_HOURS = (MAX_ENTRIES * 30) // 3600`, INSTRUCTION-239),
+  derived from deque capacity × cycle period to fail loudly on drift
+- Engineering RL chart titles drop "(48h)" suffix that misrepresented
+  the actual rolling window (INSTRUCTION-239)
 
 ### Fixed
-- First-cycle history seed: historian seeding now completes before the
-  first cycle entry is appended, preventing the new cycle from being
-  dropped from the buffer
-- Wizard redirect: setup-mode routing returns users to the Setup Wizard
-  when configuration is incomplete on restart
-- Wizard deploy: empty `heat_sources` list now returns HTTP 400 with a
-  clear error rather than a generic validation failure
+- First-cycle seed ordering: historian seed completes before the first
+  cycle history append, preventing the seeded cycle from being evicted
+  from the buffer (INSTRUCTION-240)
+- Wizard setup-mode redirect tightened — `App.setup-mode-routing.test`
+  covers the case where config retains placeholder markers on restart
+  (INSTRUCTION-240)
 
 ## [1.4.0] — 2026-05-15
 
-Major feature release.
+Major feature release. 132 commits since 1.3.7. Headline work is the
+DFAN (Dynamic Forecast-Aware Network) forecast tranche, the forecast
+subsystem refactor, multi-emitter direct-TRV zone support, manual
+override at the dispatch layer, and hybrid HP+boiler heat-source
+handover.
 
-### Added
-- Weather-forecast-aware control across shoulder, flow, recovery, tariff, and valve decisions
-- New Forecast page with state panel, alarms, blend evolution, reconciliation against actuals, drift detection, and master-enable toggle
-- Multi-emitter direct-TRV zone support — multiple radiators on one zone, with per-emitter feedback in RoomDetail and the Historian emitter filter
-- Manual override at the valve dispatch layer with engineering Valves page and MANUAL badge / strip
-- Hybrid HP + boiler heat source with per-source dispatch, source-selection in Settings and the Home banner
-- Vendor write-budget knob in Settings and the Setup Wizard
-- Solar capacity observer surfaced via API
+### Added — DFAN forecast-aware control
+- Forecast context, master-enable, confidence primitives (INSTRUCTION-200)
+- Forecast scalars + per-room dicts (INSTRUCTION-198)
+- Forecast predictor + drift detector, relocated to `qsh/projection/` per
+  T-31 production-code import-graph constraint (INSTRUCTION-199)
+- Forecast history + reconciliation (INSTRUCTION-201A)
+- Counterfactual + RL evaluation infrastructure (INSTRUCTION-201B)
+- DFAN alarms A + B as notifications (not protective trips) (INSTRUCTION-201C)
+- RecoveryScheduler forecast-aware short-circuit (INSTRUCTION-202)
+- ShoulderController forecast-aware shutdown bias (INSTRUCTION-203)
+- TariffOptimiser forecast-load qualifier detection (INSTRUCTION-204)
+  + qualifier→sweep wiring (INSTRUCTION-213)
+- ValveController solar attenuation, post-dissipation, TRV-setpoint-only
+  (INSTRUCTION-205)
+- FlowController forecast-aware setpoint relaxation (INSTRUCTION-206)
+- RL observation vector + state-dim coupled reset (INSTRUCTION-207A)
+- RL single-writer migration + composition unification (INSTRUCTION-207B)
+- DFAN forecast WebUX backend foundation (INSTRUCTION-208A)
+- DFAN forecast frontend types + 5 hooks (INSTRUCTION-208B)
+- DFAN forecast frontend components (INSTRUCTION-208C)
+- DFAN forecast page composition + routing (INSTRUCTION-208D)
+- DFAN forecast shared helpers (INSTRUCTION-209)
+- ShoulderController forecast-aware restart bias (INSTRUCTION-212)
+- API: DFAN forecast carriers in WebSocket envelope (INSTRUCTION-226)
+
+### Added — Forecast subsystem refactor
+- ForecastProvider Protocol seam (INSTRUCTION-220A)
+- HAForecastProvider + FailureTracker (INSTRUCTION-220B)
+- MQTTForecastProvider + topic schema + config wiring (INSTRUCTION-220C)
+- ForecastController migration + pure parse/compute/state +
+  MockForecastProvider (INSTRUCTION-220D)
+- Defect 1 persistence fix + legacy WeatherForecaster deletion
+  (INSTRUCTION-220E)
+- Public-beta UX cleanup (INSTRUCTION-223)
+- Section renumber + tooltips + HelpTip + t_indoor guard (INSTRUCTION-227A)
+- Sysid+forecast: solar capacity observer + API exposure (INSTRUCTION-227B)
+- Projection: kWp + time-base unit fix at three rate functions
+  (INSTRUCTION-227C)
+
+### Added — Multi-emitter direct TRV zones
+- HA driver fan-out (INSTRUCTION-222A)
+- MQTT driver fan-out (INSTRUCTION-222B)
+- Per-emitter valve-position read-side fan-out — HA (INSTRUCTION-224B),
+  MQTT (INSTRUCTION-224C)
+- CycleSnapshot per-emitter field + `qsh_emitter` historian measurement
+  (INSTRUCTION-224D)
+- UI: per-emitter display in RoomDetail + MQTT list editor + Historian
+  emitter filter (INSTRUCTION-224E)
+
+### Added — Manual override (PCS7 AUTO/MANUAL parity)
+- Manual-state foundation + HA driver intercept at direct-TRV dispatch
+  layer per INSTRUCTION-225A carve-out
+- MQTT driver MANUAL override parity (INSTRUCTION-225B)
+- `/api/manual` REST + `CycleSnapshot.manual_state` (INSTRUCTION-225C)
+- Engineering Valves page + MANUAL badge/strip (INSTRUCTION-225D)
+
+### Added — Hybrid HP+boiler heat source
+- Per-source heat-source dispatch on HA and MQTT (INSTRUCTION-228A)
+- Source-selection surfaced in Settings and Home banner (INSTRUCTION-228B)
+- Hybrid HP+boiler handover integration tests + owner smoke harness
+  (INSTRUCTION-228C)
+
+### Added — EventAnnunciator migration (T-33 + T-34)
+- EventAnnunciator service and Controller shims (INSTRUCTION-221A)
+- Pipeline migration (INSTRUCTION-221B)
+- Drivers migration (INSTRUCTION-221C)
+- Utility modules migration (INSTRUCTION-221D)
+- Remove deprecated primitives + final measurement (INSTRUCTION-221E)
+
+### Added — Other
+- Vendor write-budget knob — backend (INSTRUCTION-216A), frontend +
+  wizard UI (INSTRUCTION-216B)
 - DHW signal inputs consolidated under Settings → Hot Water
-- Engineering page section and column tooltips
-- SCOP central-heating sparkline filtered by active heat source
-
-### Changed
-- Forecast subsystem rewritten with a clean provider seam (HA, MQTT, Mock)
-- Live View canvas CoP gated on the active performance source
-- Building 3D layout: lift the 2-floor cap
+  (INSTRUCTION-236)
+- Engineering page section and column tooltips (INSTRUCTION-214)
+- SCOP CH sparkline via `hw_active` tag filter (INSTRUCTION-215)
+- Building 3D layout: lift 2-floor cap (INSTRUCTION-235)
+- Live View canvas COP gated on `performance.source` (INSTRUCTION-232)
 
 ### Fixed
-- Octopus tariff: gas prefix gate now strips rate class and accepts the current SILVER family
-- Octopus tariff routing keyed on the HP entity, not the tariff name
-- Home Assistant driver: `heating_entity` / `trv_entity` list-form contract; type guards added at three layers; legacy single-stem fallback restored
+- Octopus tariff: gas prefix gate strips rate-class + accepts current
+  SILVER family (INSTRUCTION-219)
+- Octopus tariff: gate routing on `hp_euid`, not tariff key
+  (INSTRUCTION-234)
+- HA driver: `heating_entity` / `trv_entity` list-form contract
+  (INSTRUCTION-231A-D)
+- HA driver: type-guard `heating_entity` at three layers
+  (INSTRUCTION-230)
+- HA driver: restore legacy heating-entity fallback for declared-stems
+  case (INSTRUCTION-229)
 - MQTT driver: first-fresh valve aggregation with last-winner recovery
-- TRV Name field now clearable, and hidden for multi-emitter zones
-- Forecast logging only edges on unavailable transitions (HA + MQTT parity)
-- Inferred-open valve fraction applied in none-mode at all call sites
-- Master-enable toggle URL corrected
+  (INSTRUCTION-231B)
+- Frontend: DFAN Master Enable toggle URL (INSTRUCTION-218)
+- Settings: TRV Name field clearable; hidden for multi-emitter zones
+- None-mode: inject inferred-open valve fraction at call sites
+- Guard scipy import + flip `from_dict` `step_source` default
+  (INSTRUCTION-217)
+- Historian COP write — live-source gate (INSTRUCTION-211)
+- Forecast logging — unavailable edge-detect (HA + MQTT parity)
+  (INSTRUCTION-210)
 
-## [1.3.7] — 2026-05-09
-
-### Changed
-- Historian COP write — live-source gate
-- Forecast logging — unavailable edge-detect (HA + MQTT)
-- Weather forecast logging — unavailable-only policy
-- Starvation-based early shoulder shutdown
+### Release-pipeline
+- Ship `qsh.forecast` and `qsh.forecast.providers` as packages (operational
+  hotfix during 1.4.0 release execution — submodule-compile-list,
+  release-sync, check_import_integrity, Dockerfile.public smoke test
+  all updated to mirror the existing pattern for occupancy / pipeline /
+  projection / tariff package shipping)
 
 ## [1.3.6] — 2026-05-08
 
 ### Fixed
-- Tariff: open-ended slot handling (resolves empty-tariff problem on some installs)
+- Octopus tariff: open-ended slot handling for fixed-rate tariffs and
+  indefinite `valid_to` (INSTRUCTION-194). Resolves "empty tariff" symptom on
+  installs where slots return without a bounded end timestamp.
+- Cost controller midnight rollover: defensive cap and UTC-explicit gate
+  (INSTRUCTION-193). Catches `cycles_total_today` overruns observed in fleet
+  telemetry where the date-change gate failed to fire on some installs.
+  **Operator note (TZ migration):** on first cycle after upgrade, BST
+  installs whose service was last running between 23:00 and 00:00 BST
+  will see a single spurious "midnight rollover (date-change)" log and
+  a partial-day `cost_yesterday_p`. One-shot, self-corrects within 24 h.
+- Cost-per-degree-hour now nulled below 0.05 deg-h denominator instead of
+  emitting noise-dominated values.
+- Daily COP now nulled when integrated performance is config-sourced
+  (boiler always; HP in persistent fallback). Gas-boiler installs no longer
+  echo η_config back as if it were a learned COP.
 
-### Changed
-- Telemetry: improved data handling
+### Added
+- Telemetry recognises server-side revocation (`PushOutcome.REVOKED`) and
+  stops pushing once flagged. Cleared automatically on successful
+  re-registration (e.g. wizard re-run). Exposed via
+  `/api/status.telemetry_revoked` for UI surfacing. Forwards-compatible
+  with current fleet collector (no behavioural change until Worker
+  companion ships).
 
 ## [1.3.5] — 2026-05-07
 
@@ -155,6 +261,11 @@ Major feature release.
 ### Changed
 - UX: heating indication is suppressed when the heat source is not on.
 
+## [1.2.10] — 2026-04-27
+
+### Fixed
+- MQTT driver now correctly parses heat-source telemetry from string-typed JSON payloads.
+
 ## [1.2.9] — 2026-04-27
 
 ### Fixed
@@ -167,203 +278,35 @@ Major feature release.
 ## [1.2.8.1] — 2026-04-27
 
 ### Fixed
-- Complete fix for the cold crash caused in v1.2.7
+- Complete fix for the cold crash caused in v1.2.7.
 
-## [1.2.7] — 2026-04-25
-
-### Fixed
-- Telemetry: fail-silently scenario corrected so transient telemetry errors no longer surface as user-visible failures
-
-## [1.2.6] — 2026-04-25
+## [1.2.8] — 26 April 2026
 
 ### Fixed
-- Font and backend fixes for MQTT installs
+- Restore `qsh.config_io` module to the public Docker image. v1.2.7 lifted
+  YAML atomic-write helpers into a new shared module (INSTRUCTION-130 Task 0)
+  but did not add the module to `scripts/release/submodule-compile-list.txt`,
+  so it shipped as neither source nor compiled `.so`. Three import sites
+  (`qsh/api/routes/config.py:19`, `qsh/main.py:328`, `qsh/telemetry.py:475`)
+  failed at first-boot with `ModuleNotFoundError`. Public issue #38.
 
-## [1.2.5] — 2026-04-23
-
-### Changed
-- Hot Water cycle detection sensor can now be a boolean
-
-## [1.2.4] — 2026-04-22
-
-### Fixed
-- MQTT: stub fix
-- Mode: restart persistence improvement
-- Historian: mode fix
-
-## [1.2.3] — 2026-04-22
-
-### Changed
-- Split Building Layout save into separate **Save** and **Save & Apply** buttons so edits can be captured without triggering an immediate add-on restart
-
-### Fixed
-- Auto-symmetry conflict that wrongly blocked multiple rooms from sharing the same floor/ceiling boundary (issues #29, #30)
-
-## [1.2.2] — 2026-04-21
-
-### Changed
-- Octopus Energy API hardening; back end overhaul
-- Gas/LPG heat source UX improvements
-
-## [1.2.1] — 2026-04-19
-
-### Fixed
-- UX: fix to building layout
-- MQTT: persistence fix on addition of sensors
-
-## [1.2.0] — 2026-04-18
-
-### Added
-- Room topology configuration: new configuration page in settings to define adjacent rooms
-
-## [1.1.16] — 2026-04-16
-
-### Changed
-- Improved MQTT signal quality reporting for multi-source devices (best-of resolution)
-- Tariff rate display now matches Octopus 2dp precision
-
-## [1.1.15] — 2026-04-16
-
-### Changed
-- MQTT driver now persists previous mode and comfort temperature across restarts
-- Minor UX polish and MQTT outdoor-temp validation
-
-## [1.1.14] — 2026-04-16
-
-### Changed
-- Telemetry cadence improvements
-- MQTT signal quality improvements
-- UX improvements
-
-## [1.1.13] — 2026-04-15
-
-### Changed
-- MQTT driver hardening
-- UX: MQTT fixes
-
-## [1.1.12] — 2026-04-15
-
-### Changed
-- MQTT: logging and staleness optimisation
-- UX: minor graphic improvements
-
-## [1.1.11] — 2026-04-14
-
-### Fixed
-- MQTT variant fixes
-- Telemetry send optimised
-
-## [1.1.10] — 2026-04-13
-
-### Changed
-- Web UX rebuild for MQTT variant
-
-## [1.1.9] — 2026-04-13
-
-### Fixed
-- MQTT driver fix
-
-## [1.1.8] — 2026-04-13
-
-### Fixed
-- Concurrent config write race condition
-- Telemetry endpoints
-
-## [1.1.7] — 2026-04-13
-
-### Fixed
-- Prevent system crash if MQTT (standalone) is not available on startup
-
-## [1.1.6] — 2026-04-12
-
-### Added
-- Option to use backup in Wizard
-
-## [1.1.5] — 2026-04-12
-
-### Fixed
-- Release-sync regressions
-- `__main__.py` fix
+<!-- v1.2.0 through v1.2.7 were tagged but their CHANGELOG entries were not maintained; backfill tracked under Governance Ledger Entry 017 open item 3. -->
 
 ## [1.1.4] — 2026-04-12
 
 ### Fixed
-- Restore of existing configuration
-
-## [1.1.3] — 2026-04-12
-
-### Fixed
-- Add `if __name__ == "__main__":` guard to `qsh/__main__.py` so the Dockerfile
-  entrypoint shim verification step (`from qsh.__main__ import main`) imports the
-  function without starting the full application. Without the guard, the build-time
-  `RUN` step launched the API server and hung indefinitely, blocking all CI builds
-  after the INSTRUCTION-76A changes landed on `main`.
-
-## [1.1.2] — 2026-04-11
-
-### Fixed
-- Fix `python -m qsh.main` startup failure on Home Assistant OS reported by beta testers (GitHub Issue #4). The compiled `main.cpython-312-*.so` extension module cannot be executed via `python -m` because Python cannot extract a code object from a compiled extension, raising "No code object available for qsh.main"
-- Add `qsh/__main__.py` source shim that imports and calls `main()` from the compiled module, shipped as source alongside `__init__.py`
-- Change Dockerfile `CMD` from `python -m qsh.main` to `python -m qsh` so the shim is invoked instead of the compiled extension
-- Extend Dockerfile IP boundary assertion to permit `__main__.py` as a source-boundary exception alongside `__init__.py`
-- Add build-time entrypoint shim smoke test that exercises the `__main__.py` → compiled `main.so` import chain so the original failure mode is caught before an image reaches the registry
-- Replace dead `python3 /qsh_script.py` reference in `run.sh` with `exec python -m qsh`, matching the Dockerfile CMD and using `exec` for proper signal handling; mark `run.sh` executable so HA add-on scaffolds that invoke it directly don't fail
-
-### Deployment
-- Add `"image": "ghcr.io/stuartj1-1981/qsh"` to `config.json` so Home Assistant Supervisor pulls the pre-built multi-arch image from ghcr.io instead of rebuilding the Dockerfile locally on beta testers' hardware. Without this field the INSTRUCTION-75 CI pipeline was effectively bypassed on every install
-
-## [1.1.1] — 2026-04-11
-
-### CI/CD
-- Switched multi-arch Docker build to native arm64 runners (`ubuntu-24.04-arm`), eliminating QEMU emulation
-- Split build into three parallel jobs: `build-amd64`, `build-arm64`, and `merge-manifest` using the by-digest push pattern
-- Per-arch GitHub Actions layer caching (`scope=linux-amd64`, `scope=linux-arm64`) for independent cache lanes
-- Bumped all workflow actions to Node.js 24-compatible versions (`checkout@v5`, `setup-buildx-action@v4`, `login-action@v4`, `metadata-action@v6`, `build-push-action@v7`, `upload/download-artifact@v4`) ahead of the June 2026 Node.js 20 deprecation
-- Reduces worst-case build time from 60+ minutes under QEMU to ~5 minutes on native runners
-
-## [1.1.0] — 2026-04-11
-
-### CI/CD
-- GitHub Actions workflow to build and publish multi-arch Docker images (`linux/amd64`, `linux/arm64`) to `ghcr.io/stuartj1-1981/qsh` on version tag push
-- Assembly-only build reusing the pre-compiled `.so` artefacts synced by `release-sync.sh` — no compilation in CI
-- Image tagged with git tag, semantic version from `config.json`, and `latest`
-- GitHub Actions build cache enabled for faster subsequent builds
-
-## [1.0.0] — 2026-04-11
-
-First public release.
-
-### Core
-- Adaptive heat pump optimisation with per-room thermal parameter learning
-- System identification: heat loss coefficient (U), thermal mass (C), and solar gain factor learned from passive observation
-- Passive cooling analyser for thermal mass convergence via Newton's law decay fitting
-- Weather-compensated flow temperature control
-- Reinforcement learning layer with deterministic-to-RL blend progression
-- Multi-zone valve control (Zigbee TRVs via ZCL `pi_heating_demand`, setpoint manipulation)
-- Seasonal operating modes: winter (anti-frost equilibrium), shoulder (demand-gated), summer (seasonal shutdown)
-
-### Deployment
-- Home Assistant add-on (amd64, aarch64)
-- MQTT standalone via Docker (any MQTT broker)
-- Web-based setup wizard with entity scanning (HA) and topic mapping (MQTT)
-
-### Web Dashboard
-- Real-time room status, temperatures, and system overview
-- Per-room detail with thermal parameter visibility (engineering mode)
-- Historian page with trend display and optional InfluxDB integration
-- Comfort target control with per-room adjustment
-- Schedule editor with HA Schedule integration
-- Away mode with recovery tracking
-- Shadow/learning mode toggle
-- Dark mode
-
-### Telemetry
-- Optional fleet telemetry with explicit consent control (default on, opt-out via wizard or settings). See privacy policy for details
-- Anonymised daily payload: thermal parameters, energy metrics, HP characteristics
-- CloudFlare Worker + R2 transport
-- Install UUID identification (no personal data)
-
-### Operations
-- Configuration backup and restore (export ZIP, merge or replace on import)
-- InfluxDB historian integration (optional, write-only batch client)
-- 24-hour trend buffer with startup seed from InfluxDB
+- Align all state persistence paths to use `/config/` as primary location with `/data/`
+  as fallback. Previously, state loaders were hardcoded to `/data/` while backup/restore
+  wrote to `/config/` on fresh installs, causing restored state to be ignored and
+  overwritten with empty priors. This broke alpha-to-beta migration and caused loss of
+  accumulated sysid learning (U, C, solar parameters), RL model weights, schedules,
+  and pipeline state on every add-on reinstall.
+- Add `qsh/paths.py` utility module centralising the `/config/`-first, `/data/`-fallback
+  search pattern already used by `schedule_store.py`.
+- Affected files: `sysid.py`, `main.py`, `rl_model.py`, `balancing.py`, `telemetry.py`,
+  `api/routes/away.py`, `hw_aware.py`, `pipeline/__init__.py`.
+- Back-port `__main__.py` entrypoint shim, `image` field in `config.json`, and `run.sh`
+  fix from public repo to private repo (source of truth). These originated in
+  INSTRUCTION-76A/76B on the public repo and were regressed by the v1.1.4 release sync.
+- Add T-18 guard to `release-sync.sh` to hard-fail if `config.json` is missing the
+  `image` field after copy.

@@ -452,6 +452,9 @@ class HADriver:
             forecast_temps=forecast_temps,
             # Occupancy
             occupancy_sensor_states=occupancy_sensor_states,
+            # Per-source readings (INSTRUCTION-241A) — copied from
+            # sensor_fetcher's fetch_all_sensor_data → SensorData.heat_sources.
+            heat_sources=dict(getattr(sensor_data, "heat_sources", {})),
         )
 
     # ── Write ──────────────────────────────────────────────────────────

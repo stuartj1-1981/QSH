@@ -5,6 +5,10 @@ import { useEntityResolve } from '../../hooks/useEntityResolve'
 import { apiUrl } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { MAX_HEAT_SOURCES } from '../../lib/constants'
+import {
+  mqttSensorPlaceholder,
+  mqttControlPlaceholder,
+} from '../../lib/mqtt-placeholders'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { HelpTip } from '../HelpTip'
@@ -39,6 +43,18 @@ function carbonFactorPlaceholder(type: string | undefined): string {
   return CARBON_FACTOR_DEFAULTS[type]?.toString() ?? ''
 }
 
+/** Narrowing helper: HA sensor slots store string entity IDs; MQTT sensor
+ * slots store `{topic, format, ...}` objects (INSTRUCTION-241B). The HA
+ * branch uses EntityField which only knows about entity_id strings; the
+ * MQTT branch uses TopicField which only knows topic strings. This helper
+ * returns the string form for either case: entity_id for HA inputs,
+ * topic for MQTT inputs. */
+function sensorEntity(v: string | { topic?: string } | undefined): string {
+  if (typeof v === 'string') return v
+  if (v && typeof v === 'object' && typeof v.topic === 'string') return v.topic
+  return ''
+}
+
 function computeInitial(
   heatSource: HeatSourceYaml,
   heatSources: HeatSourceYaml[] | undefined,
@@ -70,6 +86,11 @@ export function HeatSourceSettings({
   // handleRemove's empty-payload guard (V5 D-V4-1) and cleared on
   // successful persist (V5 N-V5-2) or by user dismissal.
   const [removeError, setRemoveError] = useState<string | null>(null)
+  // INSTRUCTION-241C Task 6 — captures backend detail prose on PATCH failure
+  // (e.g. the duplicate-topic 400 from §D-6). usePatchConfig.patch returns
+  // null on error and discards the response body; this state lets the call
+  // site below recapture it via a direct fetch without refactoring the hook.
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
 
   // Per-card dirty tracking. A card is dirty when its current state in
@@ -152,6 +173,12 @@ export function HeatSourceSettings({
   // V3 D-V3-1: persist returns boolean ok/notok so handleRemove can roll
   // back local state on failure. usePatchConfig.patch returns null on
   // error, non-null object on success — we collapse to boolean here.
+  // INSTRUCTION-241C Task 6: on failure, a sibling fetch against the same
+  // endpoint captures the response detail body the backend emits on
+  // duplicate-topic guard rejection (§D-6). The hook's patch() discards
+  // the body on error; refactoring it touches every caller — out of scope
+  // per Task 6 V2 closing note. Cost is one extra HTTP call per FAILED
+  // save (acceptable; success path unchanged).
   const persist = async (next: HeatSourceYaml[]): Promise<boolean> => {
     // INSTRUCTION-236: strip DHW keys before save (HotWaterSettings is the
     // sole DHW editor; preserve T-236 invariants). Only sanitise when
@@ -175,6 +202,7 @@ export function HeatSourceSettings({
     // The frontend writes ONLY heat_sources. No dual-PATCH atomicity hazard.
     const result = await patch('heat_sources', sanitised)
     if (result !== null) {
+      setSaveError(null)
       lastSavedRef.current = sanitised
       // The ref mutation alone won't re-render; bump the tick so the
       // dirty/new badges re-compute after the snapshot updates.
@@ -184,6 +212,40 @@ export function HeatSourceSettings({
       setRemoveError(null)
       onRefetch()
       return true
+    }
+
+    // INSTRUCTION-241C Task 6 — failure path: sibling fetch to capture the
+    // backend's detail prose (e.g. duplicate-topic 400 from §D-6). Mirrors
+    // the wrapped-body shape that usePatchConfig.patch sends so the second
+    // request reproduces the first's failure deterministically.
+    try {
+      const resp = await fetch(apiUrl('api/config/heat_sources'), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: sanitised }),
+      })
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`
+        try {
+          const body = await resp.json()
+          if (typeof body?.detail === 'string') {
+            detail = body.detail
+          }
+        } catch {
+          // body not JSON; keep the HTTP status fallback.
+        }
+        setSaveError(detail)
+      } else {
+        // Race window — the second fetch succeeded where the first reported
+        // failure. Treat as transient and clear the error.
+        setSaveError(null)
+      }
+    } catch (e) {
+      setSaveError(
+        `Save failed — network error: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      )
     }
     return false
   }
@@ -260,16 +322,23 @@ export function HeatSourceSettings({
     <div className="space-y-6">
       <h2 className="text-lg font-bold text-[var(--text)]">Heat Sources</h2>
 
-      {removeError && (
+      {/* INSTRUCTION-241C Task 6 — combined error banner. saveError carries
+          the backend detail prose verbatim (e.g. duplicate-topic 400 with
+          conflicting source/slot pair named); removeError carries the
+          pending-unsaved-source guidance. Either dismisses the other. */}
+      {(saveError || removeError) && (
         <div
           role="alert"
           className="px-4 py-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/10 text-sm text-[var(--text)]"
         >
           <div className="flex items-start gap-2">
-            <span className="flex-1">{removeError}</span>
+            <span className="flex-1">{saveError || removeError}</span>
             <button
               type="button"
-              onClick={() => setRemoveError(null)}
+              onClick={() => {
+                setSaveError(null)
+                setRemoveError(null)
+              }}
               aria-label="Dismiss error"
               className="text-[var(--text-muted)] hover:text-[var(--text)] shrink-0"
             >
@@ -284,6 +353,7 @@ export function HeatSourceSettings({
           <SourceCard
             key={i}
             source={source}
+            sources={sources}
             index={i}
             isNew={isNew(i)}
             removable={sources.length > 1}
@@ -369,6 +439,10 @@ export function HeatSourceSettings({
 
 interface SourceCardProps {
   source: HeatSourceYaml
+  // INSTRUCTION-241C Task 2 — full sources array for placeholder collision
+  // detection. The card derives MQTT topic placeholders from source.type plus
+  // a name-derived disambiguation suffix when types collide (parent §D-5).
+  sources: HeatSourceYaml[]
   index: number
   isNew: boolean
   removable: boolean
@@ -387,6 +461,7 @@ interface SourceCardProps {
 
 function SourceCard({
   source: hs,
+  sources,
   index,
   isNew,
   removable,
@@ -1081,7 +1156,7 @@ function SourceCard({
                           },
                         })
                       }
-                      placeholder="heat_pump/flow_temp/set"
+                      placeholder={mqttControlPlaceholder(sources, index, 'flow_temp/set')}
                     />
                     <TopicField
                       label="Mode Topic"
@@ -1094,7 +1169,7 @@ function SourceCard({
                           },
                         })
                       }
-                      placeholder="heat_pump/mode/set"
+                      placeholder={mqttControlPlaceholder(sources, index, 'mode/set')}
                     />
                   </div>
                 ) : (
@@ -1155,7 +1230,7 @@ function SourceCard({
                               },
                             })
                           }
-                          placeholder="heat_pump/flow_temp/set"
+                          placeholder={mqttControlPlaceholder(sources, index, 'flow_temp/set')}
                         />
                         <EntityField
                           label="Mode Topic"
@@ -1168,7 +1243,7 @@ function SourceCard({
                               },
                             })
                           }
-                          placeholder="heat_pump/mode/set"
+                          placeholder={mqttControlPlaceholder(sources, index, 'mode/set')}
                         />
                       </div>
                     )}
@@ -1290,30 +1365,30 @@ function SourceCard({
                   <>
                     {(
                       [
-                        ['flow_temp', 'Flow Temperature', 'heat_pump/flow_temp'],
-                        ['power_input', 'Power Input', 'heat_pump/power'],
-                        ['cop', 'COP', 'heat_pump/cop'],
-                        ['heat_output', 'Heat Output', 'heat_pump/heat_output'],
-                        ['total_energy', 'Total Energy', 'heat_pump/total_energy'],
-                        ['return_temp', 'Return Temperature', 'heat_pump/return_temp'],
-                        ['flow_rate', 'Flow Rate', 'heat_pump/flow_rate'],
-                        ['delta_t', 'Delta-T', 'heat_pump/delta_t'],
+                        ['flow_temp', 'Flow Temperature'],
+                        ['power_input', 'Power Input'],
+                        ['cop', 'COP'],
+                        ['heat_output', 'Heat Output'],
+                        ['total_energy', 'Total Energy'],
+                        ['return_temp', 'Return Temperature'],
+                        ['flow_rate', 'Flow Rate'],
+                        ['delta_t', 'Delta-T'],
                       ] as const
-                    ).map(([key, label, placeholder]) => (
+                    ).map(([key, label]) => (
                       <TopicField
                         key={key}
                         label={label}
-                        value={hs.sensors?.[key] || ''}
+                        value={sensorEntity(hs.sensors?.[key])}
                         onChange={(v) => onSensorChange(key, v)}
-                        placeholder={placeholder}
+                        placeholder={mqttSensorPlaceholder(sources, index, key)}
                       />
                     ))}
                     {isNonHp && (
                       <TopicField
                         label="Pump power"
-                        value={hs.sensors?.pump_power ?? ''}
+                        value={sensorEntity(hs.sensors?.pump_power)}
                         onChange={(v) => onSensorChange('pump_power', v)}
-                        placeholder="boiler/pump/power"
+                        placeholder={mqttSensorPlaceholder(sources, index, 'pump_power')}
                       />
                     )}
                   </>
@@ -1321,83 +1396,83 @@ function SourceCard({
                   <>
                     <EntityField
                       label="Flow Temperature"
-                      value={hs.sensors?.flow_temp || ''}
-                      friendlyName={resolved[hs.sensors?.flow_temp || '']?.friendly_name}
-                      state={resolved[hs.sensors?.flow_temp || '']?.state}
-                      unit={resolved[hs.sensors?.flow_temp || '']?.unit}
+                      value={sensorEntity(hs.sensors?.flow_temp)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.flow_temp)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.flow_temp)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.flow_temp)]?.unit}
                       onChange={(v) => onSensorChange('flow_temp', v)}
                       placeholder="sensor.hp_flow_temp"
                     />
                     <EntityField
                       label="Power Input"
-                      value={hs.sensors?.power_input || ''}
-                      friendlyName={resolved[hs.sensors?.power_input || '']?.friendly_name}
-                      state={resolved[hs.sensors?.power_input || '']?.state}
-                      unit={resolved[hs.sensors?.power_input || '']?.unit}
+                      value={sensorEntity(hs.sensors?.power_input)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.power_input)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.power_input)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.power_input)]?.unit}
                       onChange={(v) => onSensorChange('power_input', v)}
                       placeholder="sensor.hp_power"
                     />
                     <EntityField
                       label="COP"
-                      value={hs.sensors?.cop || ''}
-                      friendlyName={resolved[hs.sensors?.cop || '']?.friendly_name}
-                      state={resolved[hs.sensors?.cop || '']?.state}
-                      unit={resolved[hs.sensors?.cop || '']?.unit}
+                      value={sensorEntity(hs.sensors?.cop)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.cop)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.cop)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.cop)]?.unit}
                       onChange={(v) => onSensorChange('cop', v)}
                       placeholder="sensor.hp_cop"
                     />
                     <EntityField
                       label="Heat Output"
-                      value={hs.sensors?.heat_output || ''}
-                      friendlyName={resolved[hs.sensors?.heat_output || '']?.friendly_name}
-                      state={resolved[hs.sensors?.heat_output || '']?.state}
-                      unit={resolved[hs.sensors?.heat_output || '']?.unit}
+                      value={sensorEntity(hs.sensors?.heat_output)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.heat_output)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.heat_output)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.heat_output)]?.unit}
                       onChange={(v) => onSensorChange('heat_output', v)}
                       placeholder="sensor.hp_heat_output"
                     />
                     <EntityField
                       label="Total Energy"
-                      value={hs.sensors?.total_energy || ''}
-                      friendlyName={resolved[hs.sensors?.total_energy || '']?.friendly_name}
-                      state={resolved[hs.sensors?.total_energy || '']?.state}
-                      unit={resolved[hs.sensors?.total_energy || '']?.unit}
+                      value={sensorEntity(hs.sensors?.total_energy)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.total_energy)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.total_energy)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.total_energy)]?.unit}
                       onChange={(v) => onSensorChange('total_energy', v)}
                       placeholder="sensor.hp_total_energy"
                     />
                     <EntityField
                       label="Return Temperature"
-                      value={hs.sensors?.return_temp || ''}
-                      friendlyName={resolved[hs.sensors?.return_temp || '']?.friendly_name}
-                      state={resolved[hs.sensors?.return_temp || '']?.state}
-                      unit={resolved[hs.sensors?.return_temp || '']?.unit}
+                      value={sensorEntity(hs.sensors?.return_temp)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.return_temp)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.return_temp)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.return_temp)]?.unit}
                       onChange={(v) => onSensorChange('return_temp', v)}
                       placeholder="sensor.hp_return_temp"
                     />
                     <EntityField
                       label="Flow Rate"
-                      value={hs.sensors?.flow_rate || ''}
-                      friendlyName={resolved[hs.sensors?.flow_rate || '']?.friendly_name}
-                      state={resolved[hs.sensors?.flow_rate || '']?.state}
-                      unit={resolved[hs.sensors?.flow_rate || '']?.unit}
+                      value={sensorEntity(hs.sensors?.flow_rate)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.flow_rate)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.flow_rate)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.flow_rate)]?.unit}
                       onChange={(v) => onSensorChange('flow_rate', v)}
                       placeholder="sensor.hp_flow_rate"
                     />
                     <EntityField
                       label="Delta-T"
-                      value={hs.sensors?.delta_t || ''}
-                      friendlyName={resolved[hs.sensors?.delta_t || '']?.friendly_name}
-                      state={resolved[hs.sensors?.delta_t || '']?.state}
-                      unit={resolved[hs.sensors?.delta_t || '']?.unit}
+                      value={sensorEntity(hs.sensors?.delta_t)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.delta_t)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.delta_t)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.delta_t)]?.unit}
                       onChange={(v) => onSensorChange('delta_t', v)}
                       placeholder="sensor.hp_delta_t"
                     />
                     {isNonHp && (
                       <EntityField
                         label="Pump power"
-                        value={hs.sensors?.pump_power ?? ''}
-                        friendlyName={resolved[hs.sensors?.pump_power ?? '']?.friendly_name}
-                        state={resolved[hs.sensors?.pump_power ?? '']?.state}
-                        unit={resolved[hs.sensors?.pump_power ?? '']?.unit}
+                        value={sensorEntity(hs.sensors?.pump_power)}
+                        friendlyName={resolved[sensorEntity(hs.sensors?.pump_power)]?.friendly_name}
+                        state={resolved[sensorEntity(hs.sensors?.pump_power)]?.state}
+                        unit={resolved[sensorEntity(hs.sensors?.pump_power)]?.unit}
                         onChange={(v) => onSensorChange('pump_power', v)}
                         placeholder="sensor.boiler_pump_power"
                       />

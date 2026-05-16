@@ -5,6 +5,7 @@ import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useEntityScan } from '../../hooks/useEntityScan'
 import { cn } from '../../lib/utils'
+import { mqttSensorPlaceholder } from '../../lib/mqtt-placeholders'
 import type {
   HeatSourceYaml, OutdoorYaml, SolarYaml, BatteryYaml, GridYaml,
   MqttConfig, MqttTopicInput, MqttTopicCandidate,
@@ -15,26 +16,44 @@ interface StepSensorsProps {
   onUpdate: (section: string, data: unknown) => void
 }
 
-// Core sensors — always visible in the wizard flow.
+// Core sensors — always visible in the wizard flow. INSTRUCTION-241B V2:
+// reduced to globals only; the per-source HP/boiler entries moved to
+// PER_SOURCE_MQTT_SENSOR_FIELDS and render under the tab strip.
 const MQTT_CORE_SENSOR_FIELDS = [
   { key: 'outdoor_temp', label: 'Outdoor Temperature', hint: 'recommended', helper: '' },
-  { key: 'hp_flow_temp', label: 'HP Flow Temperature', hint: 'recommended', helper: '' },
-  { key: 'hp_return_temp', label: 'HP Return Temperature', hint: 'optional', helper: '' },
+] as const
+
+// Additional sensors — collapsed by default. INSTRUCTION-241B V2:
+// hp_mode_state is system-level (parent §D-8); the other former entries
+// moved to PER_SOURCE_MQTT_SENSOR_FIELDS.
+const MQTT_ADDITIONAL_SENSOR_FIELDS = [
+  { key: 'hp_mode_state', label: 'HP Mode State', hint: 'optional', helper: '' },
+] as const
+
+// Per-source sensor topics — rendered under the tab strip in MqttSensors.
+// Each entry maps to `heat_sources[i].sensors[key]` as a MqttTopicInput object.
+const PER_SOURCE_MQTT_SENSOR_FIELDS = [
+  { key: 'flow_temp',    label: 'Flow Temperature',  hint: 'recommended', helperFor: '' },
+  { key: 'return_temp',  label: 'Return Temperature', hint: 'optional',   helperFor: '' },
   {
     key: 'flow_rate',
     label: 'Flow rate sensor',
     hint: 'optional',
-    helper:
-      'Live flow rate (L/min) improves COP calculation. Leave blank if your heat pump does not expose flow rate.',
+    helperFor:
+      'Live flow rate (L/min) improves COP calculation. Leave blank if this source does not expose flow rate.',
   },
-  { key: 'hp_power', label: 'HP Power Input', hint: 'recommended', helper: '' },
-] as const
-
-// Additional sensors — collapsed by default.
-const MQTT_ADDITIONAL_SENSOR_FIELDS = [
-  { key: 'hp_cop', label: 'HP COP', hint: 'optional', helper: '' },
-  { key: 'hp_heat_output', label: 'HP Heat Output', hint: 'optional', helper: '' },
-  { key: 'hp_mode_state', label: 'HP Mode State', hint: 'optional', helper: '' },
+  { key: 'power_input',  label: 'Power Input',  hint: 'recommended', helperFor: '' },
+  { key: 'cop',          label: 'COP',          hint: 'optional',    helperFor: '' },
+  { key: 'heat_output',  label: 'Heat Output',  hint: 'optional',    helperFor: '' },
+  { key: 'total_energy', label: 'Total Energy', hint: 'optional',    helperFor: '' },
+  { key: 'delta_t',      label: 'Delta-T',      hint: 'optional',    helperFor: '' },
+  {
+    key: 'pump_power',
+    label: 'Pump power',
+    hint: 'optional',
+    helperFor:
+      'Circulator pump electrical input — typically relevant only for boiler sources.',
+  },
 ] as const
 
 export function StepSensors({ config, onUpdate }: StepSensorsProps) {
@@ -44,6 +63,14 @@ export function StepSensors({ config, onUpdate }: StepSensorsProps) {
     return <MqttSensors config={config} onUpdate={onUpdate} />
   }
   return <HaSensors config={config} onUpdate={onUpdate} />
+}
+
+/** Narrowing helper: HA-side sensor slots store string entity IDs; the
+ * union with `MqttTopicInput` exists only so the MQTT path can store
+ * topic objects in the same field. HA components never see objects in
+ * practice — this helper preserves type safety without an `as` cast. */
+function sensorAsString(v: string | { topic: string } | undefined): string {
+  return typeof v === 'string' ? v : ''
 }
 
 /** HA path — supports per-source sensor tabs (INSTRUCTION-237A Task 5). */
@@ -209,7 +236,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           <EntityPicker
             slot="hp_flow_temp"
             label="Flow Temperature"
-            value={sensors.flow_temp || ''}
+            value={sensorAsString(sensors.flow_temp)}
             onChange={(v) => updateSensor('flow_temp', v)}
             candidates={candidates.hp_flow_temp || []}
             required
@@ -217,7 +244,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           <EntityPicker
             slot="hp_power"
             label="Power Input"
-            value={sensors.power_input || ''}
+            value={sensorAsString(sensors.power_input)}
             onChange={(v) => updateSensor('power_input', v)}
             candidates={candidates.hp_power || []}
             required
@@ -225,7 +252,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           <EntityPicker
             slot="hp_cop"
             label="COP Sensor"
-            value={sensors.cop || ''}
+            value={sensorAsString(sensors.cop)}
             onChange={(v) => updateSensor('cop', v)}
             candidates={candidates.hp_cop || []}
           />
@@ -246,14 +273,14 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
             <EntityPicker
               slot="hp_heat_output"
               label="Heat Output"
-              value={sensors.heat_output || ''}
+              value={sensorAsString(sensors.heat_output)}
               onChange={(v) => updateSensor('heat_output', v)}
               candidates={candidates.hp_heat_output || []}
             />
             <EntityPicker
               slot="hp_total_energy"
               label="Total Energy"
-              value={sensors.total_energy || ''}
+              value={sensorAsString(sensors.total_energy)}
               onChange={(v) => updateSensor('total_energy', v)}
               candidates={candidates.hp_total_energy || []}
             />
@@ -261,14 +288,14 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
               <EntityPicker
                 slot="hp_return_temp"
                 label="Return Temperature"
-                value={sensors.return_temp || ''}
+                value={sensorAsString(sensors.return_temp)}
                 onChange={(v) => updateSensor('return_temp', v)}
                 candidates={candidates.hp_return_temp || []}
               />
               <EntityPicker
                 slot="hp_delta_t"
                 label="Delta-T"
-                value={sensors.delta_t || ''}
+                value={sensorAsString(sensors.delta_t)}
                 onChange={(v) => updateSensor('delta_t', v)}
                 candidates={[]}
               />
@@ -277,7 +304,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
               <EntityPicker
                 slot="hp_flow_rate"
                 label="Flow rate sensor (optional)"
-                value={sensors.flow_rate || ''}
+                value={sensorAsString(sensors.flow_rate)}
                 onChange={(v) => updateSensor('flow_rate', v)}
                 candidates={candidates.hp_flow_rate || []}
               />
@@ -288,7 +315,7 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
             <EntityPicker
               slot="hp_water_heater"
               label="Water Heater Entity"
-              value={sensors.water_heater || ''}
+              value={sensorAsString(sensors.water_heater)}
               onChange={(v) => updateSensor('water_heater', v)}
               candidates={candidates.hp_water_heater || []}
             />
@@ -421,12 +448,35 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
   )
 }
 
-/** MQTT path — TopicPicker for each sensor field. */
+/** Narrowing helper for per-source MQTT sensor slots. The slot stores
+ * `MqttTopicInput | string | undefined`; the wizard only writes objects
+ * (post-migration) but defensive narrowing covers in-flight states. */
+function asTopicInput(
+  v: string | MqttTopicInput | undefined,
+): MqttTopicInput | undefined {
+  if (!v) return undefined
+  if (typeof v === 'string') return { topic: v, format: 'plain' }
+  return v
+}
+
+/** MQTT path — TopicPicker for each sensor field. INSTRUCTION-241B adds a
+ * per-source tab strip mirroring the HA path. */
 function MqttSensors({ config, onUpdate }: StepSensorsProps) {
   const mqtt: MqttConfig = (config.mqtt as MqttConfig) || { broker: '', port: 1883, inputs: {} }
   const inputs = mqtt.inputs || {}
   const [scanResults, setScanResults] = useState<MqttTopicCandidate[]>([])
   const [showAdditional, setShowAdditional] = useState(false)
+
+  // INSTRUCTION-241B Task 1 — per-source state for the tab strip. Plural-first
+  // read with singular fallback for the wizard's mid-edit state (before the
+  // singular→plural promotion has happened in this draft).
+  const heatSourcesArr: HeatSourceYaml[] = Array.isArray(config.heat_sources)
+    ? (config.heat_sources as HeatSourceYaml[])
+    : (config.heat_source ? [config.heat_source as HeatSourceYaml] : [])
+  const [activeTab, setActiveTab] = useState<number>(0)
+  const safeActive = Math.min(activeTab, Math.max(0, heatSourcesArr.length - 1))
+  const hs: HeatSourceYaml = heatSourcesArr[safeActive] ?? ({} as HeatSourceYaml)
+  const perSourceSensors = hs.sensors || {}
 
   const [hasSolar, setHasSolar] = useState(!!inputs.solar_production?.topic)
   const [hasBattery, setHasBattery] = useState(!!inputs.battery_soc?.topic)
@@ -441,6 +491,37 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
       delete newInputs[key]
     }
     onUpdate('mqtt', { ...mqtt, inputs: newInputs })
+  }
+
+  // INSTRUCTION-241B Task 1 — writes heat_sources[safeActive].sensors[key].
+  // F5(b) no-double-write invariant: this helper is the ONLY path the wizard
+  // uses to write heat-source sensor topics; `updateInput` continues to write
+  // mqtt.inputs[key] only for globals.
+  const updatePerSourceSensor = (
+    key: string,
+    topic: string,
+    format?: string,
+    jsonPath?: string,
+  ) => {
+    const nextEntry: MqttTopicInput | undefined = topic
+      ? {
+          topic,
+          format: (format || 'plain') as 'plain' | 'json',
+          ...(jsonPath ? { json_path: jsonPath } : {}),
+        }
+      : undefined
+    const nextSensors: Record<string, MqttTopicInput | string | undefined> = { ...perSourceSensors }
+    if (nextEntry) {
+      nextSensors[key] = nextEntry
+    } else {
+      delete nextSensors[key]
+    }
+    const updatedSource = { ...hs, sensors: nextSensors }
+    const nextSources =
+      heatSourcesArr.length > 0
+        ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
+        : [updatedSource]
+    onUpdate('heat_sources', nextSources)
   }
 
   const getInputTopic = (key: string): string => inputs[key]?.topic || ''
@@ -459,7 +540,39 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
 
       <TopicDiscoveryPanel mqtt={mqtt} onResults={setScanResults} />
 
-      {/* Core sensors */}
+      {/* INSTRUCTION-241B Task 2 — per-source tab strip. Mirrors the HA path's
+          tab strip at 237A Task 5. Renders only when 2+ sources are configured. */}
+      {heatSourcesArr.length >= 2 && (
+        <div
+          role="tablist"
+          aria-label="Heat source sensors tabs (MQTT)"
+          className="flex gap-2 border-b border-[var(--border)]"
+        >
+          {heatSourcesArr.map((src, i) => {
+            const tabLabel = src.name ?? src.type ?? `Source ${i + 1}`
+            const isActive = i === safeActive
+            return (
+              <button
+                key={i}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(i)}
+                className={cn(
+                  'px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors',
+                  isActive
+                    ? 'border-[var(--accent)] text-[var(--accent)]'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+                )}
+              >
+                {tabLabel}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Core sensors — globals only (outdoor_temp). Per-source HP/boiler
+          entries moved to the per-source block below. */}
       <div className="space-y-4">
         <h3 className="text-sm font-medium text-[var(--text)]">Core Sensors</h3>
         {MQTT_CORE_SENSOR_FIELDS.map(({ key, label, hint, helper }) => (
@@ -480,7 +593,44 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
         ))}
       </div>
 
-      {/* Additional sensors */}
+      {/* INSTRUCTION-241B Task 3 — per-source sensor topic pickers.
+          Each picker writes heat_sources[safeActive].sensors[key]. */}
+      <div>
+        <h3 className="text-sm font-medium text-[var(--text)] mb-3">
+          Heat Source Sensors
+          {heatSourcesArr.length >= 2 && (
+            <span className="ml-2 text-xs text-[var(--text-muted)]">
+              — editing source {safeActive + 1} of {heatSourcesArr.length}
+            </span>
+          )}
+        </h3>
+        <div className="space-y-4">
+          {PER_SOURCE_MQTT_SENSOR_FIELDS.map(({ key, label, hint, helperFor }) => {
+            const entry = asTopicInput(perSourceSensors[key as keyof typeof perSourceSensors])
+            return (
+              <div key={key}>
+                <TopicPicker
+                  label={`${label} (${hint})`}
+                  value={entry?.topic ?? ''}
+                  format={entry?.format}
+                  jsonPath={entry?.json_path}
+                  onChange={(topic, fmt, jp) => updatePerSourceSensor(key, topic, fmt, jp)}
+                  scanResults={scanResults}
+                  placeholder={mqttSensorPlaceholder(
+                    heatSourcesArr, safeActive, key, { singleSource: true },
+                  )}
+                  required={hint === 'recommended'}
+                />
+                {helperFor && (
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">{helperFor}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Additional sensors — system-level only (hp_mode_state per §D-8). */}
       <div>
         <button
           onClick={() => setShowAdditional(!showAdditional)}

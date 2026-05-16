@@ -198,18 +198,20 @@ export interface HeatSourceYaml {
     entity_id?: string
     max_speed_pct?: number
   }
+  // For HA driver: each slot stores a string entity_id.
+  // For MQTT driver: each slot stores a MqttTopicInput object (INSTRUCTION-241B).
   sensors?: {
-    flow_temp?: string
-    power_input?: string
-    heat_output?: string
-    total_energy?: string
-    cop?: string
-    delta_t?: string
-    return_temp?: string
-    flow_rate?: string
-    water_heater?: string
-    hot_water_boolean?: string
-    pump_power?: string
+    flow_temp?: string | MqttTopicInput
+    power_input?: string | MqttTopicInput
+    heat_output?: string | MqttTopicInput
+    total_energy?: string | MqttTopicInput
+    cop?: string | MqttTopicInput
+    delta_t?: string | MqttTopicInput
+    return_temp?: string | MqttTopicInput
+    flow_rate?: string | MqttTopicInput
+    water_heater?: string | MqttTopicInput
+    hot_water_boolean?: string | MqttTopicInput
+    pump_power?: string | MqttTopicInput
   }
 }
 

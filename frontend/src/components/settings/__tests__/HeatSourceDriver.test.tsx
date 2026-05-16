@@ -53,9 +53,11 @@ describe('HeatSourceSettings driver branching', () => {
     render(<HeatSourceSettings heatSource={baseHs} driver="mqtt" onRefetch={noop} />)
     // Expand sensors
     fireEvent.click(screen.getByText('Sensor Topics'))
-    // Should have TopicField inputs (identifiable by placeholder text)
+    // INSTRUCTION-241C — placeholders now come from `mqttSensorPlaceholder`
+    // which uses the slot key directly. Single-source legacy continuity:
+    // `heat_pump/<slot>` form preserved.
     expect(screen.getByPlaceholderText('heat_pump/flow_temp')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('heat_pump/power')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('heat_pump/power_input')).toBeInTheDocument()
   })
 
   it('HA driver: sensor section uses EntityField when expanded', () => {

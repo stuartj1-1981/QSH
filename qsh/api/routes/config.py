@@ -4,7 +4,7 @@ import copy
 import logging
 import os
 import yaml
-from typing import Callable
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
@@ -35,6 +35,62 @@ YAML_SEARCH_PATHS = [
 ]
 
 REDACTED_SENTINEL = "***REDACTED***"
+
+
+def _validate_no_duplicate_heat_source_topics(
+    sources: List[Dict[str, Any]],
+) -> Optional[str]:
+    """Return an error string if any sensor topic appears under two sources.
+
+    INSTRUCTION-241C §D-6: silent data fusion is the failure mode this guard
+    exists to prevent. After 241A lands, two sources subscribed to the same
+    MQTT topic produce a corrupted SensorData.heat_sources dict with one
+    entry overwriting the other on each payload. Hard reject at PATCH time.
+
+    Returns None if validation passes; an error message string if duplicates
+    detected. Error names the conflicting (source, slot) pair so the operator
+    can resolve unambiguously.
+
+    Note: same topic on DIFFERENT slots WITHIN a single source is allowed —
+    only one source claims it, so no fusion. Cross-source slot collision IS
+    rejected regardless of slot name (silently-fused source attribution).
+    """
+    seen: Dict[str, Tuple[str, str]] = {}  # topic -> (source_name, slot)
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        name = source.get("name", "<unnamed>")
+        sensors = source.get("sensors", {}) or {}
+        if not isinstance(sensors, dict):
+            continue
+        # Track topics added in THIS source's pass — same-source intra-slot
+        # duplication is allowed and must not poison the seen dict for the
+        # next source.
+        this_source_topics: Dict[str, str] = {}
+        for slot, value in sensors.items():
+            topic: Optional[str] = None
+            if isinstance(value, str):
+                topic = value.strip()
+            elif isinstance(value, dict):
+                raw_topic = value.get("topic", "")
+                topic = raw_topic.strip() if isinstance(raw_topic, str) else None
+            if not topic:
+                continue
+            if topic in seen:
+                other_name, other_slot = seen[topic]
+                return (
+                    f"Duplicate sensor topic '{topic}' assigned to both "
+                    f"({other_name}, {other_slot}) and ({name}, {slot}). "
+                    f"Per INSTRUCTION-241C §D-6 the same topic may not feed "
+                    f"two heat sources — silent data fusion."
+                )
+            this_source_topics[topic] = slot
+        # Merge this source's topics into the cross-source seen index AFTER
+        # the loop, so intra-source same-topic across slots is allowed but
+        # subsequent sources still get checked against this source's set.
+        for topic, slot in this_source_topics.items():
+            seen[topic] = (name, slot)
+    return None
 
 
 def _find_yaml_path() -> str:
@@ -346,6 +402,14 @@ def patch_config_section(section: str, body=Body(...)):
                 status_code=400,
                 detail="heat_sources[*].type is required and must be a string",
             )
+
+        # INSTRUCTION-241C Task 4: duplicate-topic guard. §D-6 silent data
+        # fusion — two sources subscribed to the same MQTT topic produce
+        # a corrupted SensorData.heat_sources dict; reject hard at PATCH
+        # time before persistence.
+        _dup_err = _validate_no_duplicate_heat_source_topics(guard_incoming)
+        if _dup_err is not None:
+            raise HTTPException(status_code=400, detail=_dup_err)
 
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml

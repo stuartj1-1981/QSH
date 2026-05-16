@@ -24,6 +24,7 @@ from .orchestrator import run_cycle, save_pipeline_state, restore_pipeline_state
 
 from .controllers import (
     BoostController,
+    HeatSourceSensorSelector,
     SensorController,
     ThermalController,
     EnergyController,
@@ -55,6 +56,7 @@ __all__ = [
     "restore_pipeline_state",
     "build_pipeline",
     "BoostController",
+    "HeatSourceSensorSelector",
     "SensorController",
     "ThermalController",
     "EnergyController",
@@ -347,6 +349,14 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             trv_offset_tracker=kw.get("trv_offset_tracker"),
             sysid=kw.get("sysid"),
         ),
+        # INSTRUCTION-241A — HeatSourceSensorSelector sits immediately after
+        # SensorController (which populates ctx.sensor_data, including the
+        # heat_sources dict copied from inputs). Selector routes the active
+        # source's reading into the canonical flat sensor_data.hp_* slots
+        # before any downstream controller reads them. ALL_MODES — must run
+        # transparently every cycle. Per parent §D-3 V2 the cascade output
+        # holds (bumpless-hold idiom) on heat_source_selector_bad_status.
+        HeatSourceSensorSelector(config=config),
         boost,
         ThermalController(
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),
