@@ -35,7 +35,7 @@ export function Layout({
 
       {/* Sidebar */}
       <div
-        className={`fixed lg:static z-40 h-full transition-transform lg:translate-x-0 ${
+        className={`fixed lg:static z-40 h-screen h-dvh lg:h-full transition-transform lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >

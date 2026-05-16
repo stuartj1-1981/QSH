@@ -317,3 +317,106 @@ describe('StepSensors — mandatory markers (INSTRUCTION-145)', () => {
     expect(prev!.className).toContain('text-[var(--red)]')
   })
 })
+
+/**
+ * INSTRUCTION-237A Task 7 — per-source sensor tabs on the HA path. The HA
+ * sensor structure naturally lives at heat_sources[i].sensors; the tab
+ * strip toggles which source's sensor mappings are visible and routes
+ * writes to the correct index.
+ */
+describe('StepSensors — per-source tabs (INSTRUCTION-237A)', () => {
+  it('renders no tab strip when only one heat source is configured', () => {
+    const config = {
+      driver: 'ha' as const,
+      heat_sources: [{ type: 'heat_pump' as const, name: 'Samsung HP' }],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+  })
+
+  it('renders tab strip with source names when two sources are configured', () => {
+    const config = {
+      driver: 'ha' as const,
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Samsung HP' },
+        { type: 'lpg_boiler' as const, name: 'Glowworm LPG' },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByRole('tablist')).toBeInTheDocument()
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs).toHaveLength(2)
+    expect(tabs[0]).toHaveTextContent('Samsung HP')
+    expect(tabs[1]).toHaveTextContent('Glowworm LPG')
+  })
+
+  it('tab switch routes display to the correct heat_sources index and writes plural', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'ha' as const,
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'Samsung HP', sensors: { flow_temp: 'sensor.s1_flow' } },
+        { type: 'lpg_boiler' as const, name: 'Glowworm LPG', sensors: { flow_temp: 'sensor.s2_flow' } },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+
+    // Default tab 0 — source 1's flow_temp shown.
+    expect(screen.getByText('sensor.s1_flow')).toBeInTheDocument()
+    expect(screen.queryByText('sensor.s2_flow')).toBeNull()
+
+    // Switch to tab 2.
+    const tabs = screen.getAllByRole('tab')
+    fireEvent.click(tabs[1])
+
+    // Now source 2's flow_temp is shown; source 1's gone.
+    expect(screen.getByText('sensor.s2_flow')).toBeInTheDocument()
+    expect(screen.queryByText('sensor.s1_flow')).toBeNull()
+
+    // Drive a write by clicking the X clear button on the visible picker —
+    // this triggers onChange('') on whatever sensor field is being cleared.
+    // We just need to assert the routed write targets heat_sources with
+    // index 1 cleared, index 0 unchanged.
+    onUpdate.mockClear()
+    const flowLabel = screen.getByText('Flow Temperature')
+    const pickerRoot = flowLabel.closest('.relative') as HTMLElement
+    // The X clear icon — picker renders it as an SVG when value is truthy.
+    const xIcon = pickerRoot.querySelector('button svg.lucide-x, button svg.lucide-X') as SVGElement | null
+    // Fallback: the X is rendered as a child of the trigger button when value
+    // is set. lucide-react renders it with class containing 'lucide'.
+    const xEl =
+      xIcon ?? (pickerRoot.querySelector('svg[class*="lucide"]:not(.lucide-search)') as SVGElement | null)
+    expect(xEl).not.toBeNull()
+    fireEvent.click(xEl!)
+
+    const heatSourcesCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(heatSourcesCalls.length).toBeGreaterThan(0)
+    const lastCall = heatSourcesCalls[heatSourcesCalls.length - 1]
+    const payload = lastCall[1] as Array<{ sensors?: { flow_temp?: string } }>
+    expect(payload[0].sensors?.flow_temp).toBe('sensor.s1_flow') // unchanged
+    // Index 1 cleared.
+    expect(payload[1].sensors?.flow_temp).toBeUndefined()
+    // Frontend writes plural only.
+    const singularCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_source')
+    expect(singularCalls).toHaveLength(0)
+  })
+
+  it('plural-first read on single-source path uses heat_sources[0] over heat_source', () => {
+    const config = {
+      driver: 'ha' as const,
+      // Stale singular has different sensors than plural[0].
+      heat_source: {
+        type: 'heat_pump' as const,
+        sensors: { flow_temp: 'sensor.STALE_singular' },
+      },
+      heat_sources: [
+        { type: 'heat_pump' as const, sensors: { flow_temp: 'sensor.PLURAL_winner' } },
+      ],
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    // The Flow Temperature EntityPicker's selected value displays in its
+    // trigger button. The plural[0] value wins.
+    expect(screen.getByText('sensor.PLURAL_winner')).toBeInTheDocument()
+    expect(screen.queryByText('sensor.STALE_singular')).toBeNull()
+  })
+})

@@ -2,6 +2,33 @@
 
 All notable changes to QSH are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1] — 2026-05-16
+
+### Added
+- Multi-heat-source configuration: configure two or more heat sources
+  (e.g. HP + gas/LPG/oil boiler) with per-source carbon factor and
+  dispatch rules, in both the Setup Wizard and Settings
+- BEIS carbon-factor defaults shown as placeholders for boiler types
+  (gas / LPG / oil)
+
+### Changed
+- Mobile sidebar: navigation list now scrolls independently while the
+  logo header and section footer stay pinned in place
+- Engineering page: RL training charts seed from the full history buffer
+  (up to 7 days) and chart titles reflect the actual rolling window
+  rather than a fixed 48 h claim
+- Wizard heat-source step rewritten to handle a list of sources rather
+  than a single source
+
+### Fixed
+- First-cycle history seed: historian seeding now completes before the
+  first cycle entry is appended, preventing the new cycle from being
+  dropped from the buffer
+- Wizard redirect: setup-mode routing returns users to the Setup Wizard
+  when configuration is incomplete on restart
+- Wizard deploy: empty `heat_sources` list now returns HTTP 400 with a
+  clear error rather than a generic validation failure
+
 ## [1.4.0] — 2026-05-15
 
 Major feature release.

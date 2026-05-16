@@ -304,7 +304,7 @@ function RlTrainingSection({
         <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
           RL TRAINING
           <HelpTip
-            text="Reinforcement-learning policy training metrics. Reward and Loss are 48 h windows. Blend is 7 d. Blend = 0 means pure deterministic control; blend = 1 means pure RL. Blend ramps up only after sufficient training samples and is clamped during shadow mode."
+            text="Reinforcement-learning policy training metrics. Each trace shows the rolling window of cycles currently held in memory — depth grows over time from startup onwards and tops out at the buffer capacity. Blend = 0 means pure deterministic control; blend = 1 means pure RL. Blend ramps up only after sufficient training samples and is clamped during shadow mode."
             size={12}
           />
         </h2>
@@ -316,25 +316,25 @@ function RlTrainingSection({
       </div>
 
       <TrendChart
-        title="RL Reward (48h)"
+        title="RL Reward"
         data={rewardData}
         lines={[{ key: 'rl_reward', label: 'Reward', color: 'var(--green)' }]}
 
       />
       <TrendChart
-        title="RL Loss (48h)"
+        title="RL Loss"
         data={lossData}
         lines={[{ key: 'rl_loss', label: 'Loss', color: 'var(--red, #ef4444)' }]}
 
       />
       <TrendChart
-        title="Blend Factor (7d)"
+        title="Blend Factor"
         data={blendData}
         lines={[{ key: 'rl_blend', label: 'Blend', color: 'var(--accent)' }]}
 
       />
       <TrendChart
-        title="Flow Comparison (48h)"
+        title="Flow Comparison"
         data={flowData}
         lines={[
           { key: 'det_flow', label: 'Deterministic', color: 'var(--blue)' },

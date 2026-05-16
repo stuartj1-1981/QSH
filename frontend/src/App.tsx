@@ -47,11 +47,14 @@ export default function App() {
     ? 'home' as Page
     : page
 
-  // First-run detection: redirect to wizard when the addon is in setup mode
-  // (placeholders still in qsh.yaml) or when /api/config has not yet wired
-  // up. Checks must be sequential — running them in parallel would let a
-  // transient "Config not yet loaded" reply during a normal boot route the
-  // user to the wizard even when setup_mode === false.
+  // First-run detection: route to wizard ONLY when the backend authoritatively
+  // says so. /api/status's `setup_mode` is the canonical signal. The
+  // /api/config "Config not yet loaded" check is a fallback for the case
+  // where /api/status itself is unreachable — it must NOT fire on a normal
+  // boot where /api/status returns 200 with setup_mode=false but
+  // /api/config's _config_ref has not yet been populated by the first
+  // pipeline cycle (INSTRUCTION-240 root cause; the backend reorder closes
+  // that window, this guard closes the class).
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -59,17 +62,21 @@ export default function App() {
         const statusResp = await fetch(apiUrl('api/status'))
         if (statusResp.ok) {
           const statusBody: unknown = await statusResp.json().catch(() => null)
-          if (
-            statusBody &&
-            typeof statusBody === 'object' &&
-            (statusBody as { setup_mode?: unknown }).setup_mode === true
-          ) {
-            if (!cancelled) setPage('wizard')
+          if (statusBody && typeof statusBody === 'object') {
+            const sm = (statusBody as { setup_mode?: unknown }).setup_mode
+            if (sm === true && !cancelled) setPage('wizard')
+            // If /api/status answered with a parseable JSON object, trust it.
+            // sm === false → home page. sm === undefined-but-status-OK → home
+            // page (older schema; conservative). Do NOT fall through to
+            // /api/config in either of those cases. A null / non-object body
+            // (rare: empty response, parse failure) does NOT terminate here
+            // and falls through to the /api/config fallback — the
+            // conservative branch documented at V1.5 finding 4.
             return
           }
         }
       } catch {
-        // fall through to /api/config fallback
+        // network error / fetch threw — fall through to /api/config fallback
       }
       try {
         const configResp = await fetch(apiUrl('api/config'))

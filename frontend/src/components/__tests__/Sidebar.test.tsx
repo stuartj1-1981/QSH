@@ -115,4 +115,21 @@ describe('Sidebar', () => {
       expect(activePage).toBe(normalPage)
     }
   })
+
+  it('nav region is scrollable (overflow-y-auto + min-h-0)', () => {
+    const { container } = render(<Sidebar {...baseProps} />)
+    const nav = container.querySelector('nav')
+    expect(nav).not.toBeNull()
+    expect(nav!.className).toContain('overflow-y-auto')
+    expect(nav!.className).toContain('min-h-0')
+    expect(nav!.className).toContain('flex-1')
+  })
+
+  it('logo header and footer wrapper do not shrink (shrink-0)', () => {
+    render(<Sidebar {...baseProps} />)
+    const header = screen.getByTestId('sidebar-header')
+    expect(header.className).toContain('shrink-0')
+    const footer = screen.getByTestId('sidebar-footer')
+    expect(footer.className).toContain('shrink-0')
+  })
 })

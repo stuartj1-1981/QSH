@@ -21,7 +21,7 @@ export function Sidebar({
   return (
     <div className="w-[220px] h-full flex flex-col bg-[var(--bg-card)] border-r border-[var(--border)]">
       {/* Logo */}
-      <div className="p-4 border-b border-[var(--border)] flex flex-col items-center">
+      <div data-testid="sidebar-header" className="shrink-0 p-4 border-b border-[var(--border)] flex flex-col items-center">
         <img
           src={`${import.meta.env.BASE_URL}logo.png`}
           alt="Quantum Swarm Heating"
@@ -30,7 +30,7 @@ export function Sidebar({
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-2 space-y-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-2 space-y-1">
         <NavItem
           icon={<Home size={18} />}
           label="Home"
@@ -119,7 +119,7 @@ export function Sidebar({
       </nav>
 
       {/* Footer controls */}
-      <div className="p-3 border-t border-[var(--border)] space-y-2">
+      <div data-testid="sidebar-footer" className="shrink-0 p-3 border-t border-[var(--border)] space-y-2">
         <button
           onClick={onToggleEngineering}
           className={cn(

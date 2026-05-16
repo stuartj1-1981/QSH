@@ -4,6 +4,7 @@ import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useEntityScan } from '../../hooks/useEntityScan'
+import { cn } from '../../lib/utils'
 import type {
   HeatSourceYaml, OutdoorYaml, SolarYaml, BatteryYaml, GridYaml,
   MqttConfig, MqttTopicInput, MqttTopicCandidate,
@@ -45,10 +46,18 @@ export function StepSensors({ config, onUpdate }: StepSensorsProps) {
   return <HaSensors config={config} onUpdate={onUpdate} />
 }
 
-/** HA path — unchanged from original. */
+/** HA path — supports per-source sensor tabs (INSTRUCTION-237A Task 5). */
 function HaSensors({ config, onUpdate }: StepSensorsProps) {
   const { candidates, loading, error, scan } = useEntityScan()
-  const hs: HeatSourceYaml = (config.heat_source as HeatSourceYaml) || {}
+  // Plural-first read with singular fallback (V1 G-3 fix). Wizard re-entry
+  // after a multi-source save must hydrate from heat_sources, not from a
+  // stale wrapped singular.
+  const heatSourcesArr: HeatSourceYaml[] = Array.isArray(config.heat_sources)
+    ? (config.heat_sources as HeatSourceYaml[])
+    : (config.heat_source ? [config.heat_source as HeatSourceYaml] : [])
+  const [activeTab, setActiveTab] = useState<number>(0)
+  const safeActive = Math.min(activeTab, Math.max(0, heatSourcesArr.length - 1))
+  const hs: HeatSourceYaml = heatSourcesArr[safeActive] ?? ({} as HeatSourceYaml)
   const outdoor: OutdoorYaml = (config.outdoor as OutdoorYaml) || {}
   const sensors = hs.sensors || {}
   const [showAdditionalHP, setShowAdditionalHP] = useState(false)
@@ -78,7 +87,14 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
 
   const updateSensor = (key: string, value: string) => {
     const newSensors = { ...sensors, [key]: value || undefined }
-    onUpdate('heat_source', { ...hs, sensors: newSensors })
+    // INSTRUCTION-237A: writes plural only. Server reconciles to singular
+    // on save when length === 1.
+    const updatedSource = { ...hs, sensors: newSensors }
+    const nextSources =
+      heatSourcesArr.length > 0
+        ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
+        : [updatedSource]
+    onUpdate('heat_sources', nextSources)
   }
 
   const updateOutdoor = (key: string, value: string) => {
@@ -151,6 +167,38 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           </span>
         )}
       </div>
+
+      {/* Per-source tab strip (INSTRUCTION-237A Task 5) — only renders when
+          two or more sources are configured. Below, the sensor mapping
+          operates on heat_sources[activeTab].sensors. */}
+      {heatSourcesArr.length >= 2 && (
+        <div
+          role="tablist"
+          aria-label="Heat source sensors tabs"
+          className="flex gap-2 border-b border-[var(--border)]"
+        >
+          {heatSourcesArr.map((src, i) => {
+            const tabLabel = src.name ?? src.type ?? `Source ${i + 1}`
+            const isActive = i === safeActive
+            return (
+              <button
+                key={i}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(i)}
+                className={cn(
+                  'px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors',
+                  isActive
+                    ? 'border-[var(--accent)] text-[var(--accent)]'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+                )}
+              >
+                {tabLabel}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Essential HP Sensors */}
       <div>
