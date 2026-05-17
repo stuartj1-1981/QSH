@@ -42,12 +42,15 @@ export function ReconciliationDashboard({
   return (
     <div className="p-4 bg-[var(--bg-card)] rounded-lg">
       <h3 className="font-semibold mb-3">
-        Predicted-vs-Actual Reconciliation (twin-prediction with conditional-residual correction)
+        Predicted-vs-Actual Reconciliation
+        <span className="block sm:inline sm:ml-1 text-sm font-normal text-[var(--text-muted)]">
+          (twin-prediction with conditional-residual correction)
+        </span>
       </h3>
       <select
         value={selectedController}
         onChange={(e) => onControllerChange(e.target.value)}
-        className="mb-3 px-2 py-1 bg-[var(--bg)] border border-[var(--border)] rounded"
+        className="mb-3 px-3 py-2 min-h-[44px] bg-[var(--bg)] border border-[var(--border)] rounded text-sm"
       >
         {controllers.map((c) => (
           <option key={c} value={c}>{c}</option>
@@ -56,31 +59,33 @@ export function ReconciliationDashboard({
       {loading && <div className="text-[var(--text-muted)]">Loading...</div>}
       {error && <div className="text-red-500" role="alert">{error}</div>}
       {!loading && !error && (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-[var(--text-muted)]">
-              <th className="text-left py-1">Room</th>
-              <th className="text-left py-1">Weather Class</th>
-              <th className="text-right py-1">Count</th>
-              <th className="text-right py-1">Mean |err|</th>
-              <th className="text-right py-1">p95 |err|</th>
-            </tr>
-          </thead>
-          <tbody>
-            {aggregated.map((row) => (
-              <tr
-                key={`${row.room}|${row.weather_class}`}
-                className="border-t border-[var(--border)]"
-              >
-                <td className="py-1">{row.room}</td>
-                <td className="py-1">{row.weather_class}</td>
-                <td className="py-1 text-right">{row.count}</td>
-                <td className="py-1 text-right">{row.mean.toFixed(2)}</td>
-                <td className="py-1 text-right">{row.p95.toFixed(2)}</td>
+        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+          <table className="w-full min-w-[420px] text-sm">
+            <thead>
+              <tr className="text-[var(--text-muted)]">
+                <th className="text-left py-1">Room</th>
+                <th className="text-left py-1">Weather Class</th>
+                <th className="text-right py-1">Count</th>
+                <th className="text-right py-1">Mean |err|</th>
+                <th className="text-right py-1">p95 |err|</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {aggregated.map((row) => (
+                <tr
+                  key={`${row.room}|${row.weather_class}`}
+                  className="border-t border-[var(--border)]"
+                >
+                  <td className="py-1">{row.room}</td>
+                  <td className="py-1">{row.weather_class}</td>
+                  <td className="py-1 text-right">{row.count}</td>
+                  <td className="py-1 text-right">{row.mean.toFixed(2)}</td>
+                  <td className="py-1 text-right">{row.p95.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

@@ -36,15 +36,26 @@ export function MasterEnableToggle({ value, onChange }: MasterEnableToggleProps)
   }, [value, onChange])
 
   return (
-    <div className="flex items-center gap-3 p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border)]">
-      <Power
-        size={24}
-        className={cn(
-          value ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]',
-        )}
-      />
-      <div className="flex-1">
-        <div className="font-semibold text-[var(--text)]">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border)] w-full sm:w-auto">
+      <div className="flex items-center gap-3 sm:contents">
+        <Power
+          size={24}
+          className={cn(
+            value ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]',
+          )}
+        />
+        {/* MOBILE-ONLY heading — paired with the sm:block heading in the
+            description block below. Keep both strings identical. If one is
+            edited, edit the other in the same commit. */}
+        <div className="font-semibold text-[var(--text)] sm:hidden">
+          Enable Forecast
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        {/* DESKTOP-ONLY heading — paired with the sm:hidden heading in the
+            icon row above. Keep both strings identical. If one is edited,
+            edit the other in the same commit. */}
+        <div className="font-semibold text-[var(--text)] hidden sm:block">
           Enable Forecast
         </div>
         <div className="text-sm text-[var(--text-muted)]">
@@ -62,7 +73,7 @@ export function MasterEnableToggle({ value, onChange }: MasterEnableToggleProps)
         onClick={handleToggle}
         disabled={busy}
         className={cn(
-          'px-4 py-2 rounded font-medium',
+          'px-4 py-2 min-h-[44px] min-w-[64px] rounded font-medium',
           value
             ? 'bg-[var(--accent)] text-white'
             : 'bg-[var(--bg)] text-[var(--text-muted)] border border-[var(--border)]',

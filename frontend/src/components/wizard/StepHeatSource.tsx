@@ -4,7 +4,10 @@ import { cn, formatInterval } from '../../lib/utils'
 import { MAX_HEAT_SOURCES } from '../../lib/constants'
 import { HelpTip } from '../HelpTip'
 import { SOURCE_SELECTION } from '../../lib/helpText'
-import type { HeatSourceYaml, QshConfigYaml, SourceSelectionYaml } from '../../types/config'
+import type { HeatSourceYaml, MqttTopicInput, QshConfigYaml, SourceSelectionYaml } from '../../types/config'
+import { isHeatPumpType } from '../../lib/heat-source-types'
+import { TopicPicker } from './TopicPicker'
+import { extractTopic, extractFormat, extractJsonPath } from '../../lib/mqttTopic'
 
 type WriteBudgetKey = 'flow_writes_per_hour' | 'mode_writes_per_hour'
 
@@ -14,7 +17,8 @@ interface StepHeatSourceProps {
 }
 
 const HEAT_SOURCES = [
-  { type: 'heat_pump', label: 'Heat Pump', icon: Droplets, desc: 'ASHP, GSHP, or hybrid' },
+  { type: 'heat_pump', label: 'Heat Pump', icon: Droplets, desc: 'Air-source (ASHP)' },
+  { type: 'gshp', label: 'Ground Source Heat Pump', icon: Droplets, desc: 'GSHP / brine-loop' },
   { type: 'gas_boiler', label: 'Gas Boiler', icon: Flame, desc: 'Natural gas' },
   { type: 'lpg_boiler', label: 'LPG Boiler', icon: Flame, desc: 'LPG-fired boiler' },
   { type: 'oil_boiler', label: 'Oil Boiler', icon: Fuel, desc: 'Oil-fired boiler' },
@@ -29,6 +33,7 @@ const FLOW_METHODS = [
 // BEIS conversion factors — used as type-aware carbon-factor defaults.
 const CARBON_FACTOR_DEFAULTS: Record<HeatSourceYaml['type'], number> = {
   heat_pump: 0.207,
+  gshp: 0.207,
   gas_boiler: 0.183,
   lpg_boiler: 0.214,
   oil_boiler: 0.247,
@@ -345,18 +350,18 @@ function SourceCard({
                   htmlFor={`source-${index}-efficiency`}
                   className="block text-sm font-medium text-[var(--text)] mb-1"
                 >
-                  {hs.type === 'heat_pump' ? 'Expected COP' : 'Efficiency'}
+                  {isHeatPumpType(hs.type) ? 'Expected COP' : 'Efficiency'}
                 </label>
                 <input
                   id={`source-${index}-efficiency`}
                   type="number"
                   step="0.1"
-                  value={hs.efficiency ?? (hs.type === 'heat_pump' ? 3.0 : 0.85)}
+                  value={hs.efficiency ?? (isHeatPumpType(hs.type) ? 3.0 : 0.85)}
                   onChange={(e) => onUpdate({ efficiency: parseFloat(e.target.value) || undefined })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
                 <p className="text-xs text-[var(--text-muted)] mt-1">
-                  {hs.type === 'heat_pump' ? 'Typical: 2.5-4.0' : 'Typical: 0.80-0.95'}
+                  {isHeatPumpType(hs.type) ? 'Typical: 2.5-4.0' : 'Typical: 0.80-0.95'}
                 </p>
               </div>
               <div>
@@ -382,7 +387,7 @@ function SourceCard({
           )}
 
           {/* Fuel cost — non-HP sources only */}
-          {hs.type && hs.type !== 'heat_pump' && (
+          {hs.type && !isHeatPumpType(hs.type) && (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
@@ -406,22 +411,50 @@ function SourceCard({
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
-              <div>
-                <label
-                  htmlFor={`source-${index}-fuel-cost-entity`}
-                  className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1"
-                >
-                  Fuel cost {isMqttDriver ? 'topic' : 'entity'} <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
-                </label>
-                <input
-                  id={`source-${index}-fuel-cost-entity`}
-                  type="text"
-                  value={hs.fuel_cost_entity ?? ''}
-                  onChange={(e) => onUpdate({ fuel_cost_entity: e.target.value || undefined })}
-                  placeholder={isMqttDriver ? 'qsh/sources/boiler/cost' : 'sensor.gas_unit_rate'}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-                />
-              </div>
+              {isMqttDriver ? (
+                <div>
+                  <div className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1">
+                    Fuel cost topic
+                    <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
+                  </div>
+                  <TopicPicker
+                    value={extractTopic(hs.fuel_cost_entity)}
+                    format={extractFormat(hs.fuel_cost_entity)}
+                    jsonPath={extractJsonPath(hs.fuel_cost_entity)}
+                    onChange={(topic, fmt, jp) => {
+                      if (!topic) {
+                        onUpdate({ fuel_cost_entity: undefined })
+                        return
+                      }
+                      const entry: MqttTopicInput = {
+                        topic,
+                        format: (fmt ?? 'plain') as 'plain' | 'json',
+                      }
+                      if (jp) entry.json_path = jp
+                      onUpdate({ fuel_cost_entity: entry })
+                    }}
+                    placeholder="qsh/sources/boiler/cost"
+                    scanResults={[]}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label
+                    htmlFor={`source-${index}-fuel-cost-entity`}
+                    className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1"
+                  >
+                    Fuel cost entity <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
+                  </label>
+                  <input
+                    id={`source-${index}-fuel-cost-entity`}
+                    type="text"
+                    value={typeof hs.fuel_cost_entity === 'string' ? hs.fuel_cost_entity : ''}
+                    onChange={(e) => onUpdate({ fuel_cost_entity: e.target.value || undefined })}
+                    placeholder="sensor.gas_unit_rate"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -448,22 +481,50 @@ function SourceCard({
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
-              <div>
-                <label
-                  htmlFor={`source-${index}-carbon-factor-entity`}
-                  className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1"
-                >
-                  Carbon factor {isMqttDriver ? 'topic' : 'entity'} <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
-                </label>
-                <input
-                  id={`source-${index}-carbon-factor-entity`}
-                  type="text"
-                  value={hs.carbon_factor_entity ?? ''}
-                  onChange={(e) => onUpdate({ carbon_factor_entity: e.target.value || undefined })}
-                  placeholder={isMqttDriver ? 'qsh/grid/co2_factor' : 'sensor.grid_carbon_intensity'}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-                />
-              </div>
+              {isMqttDriver ? (
+                <div>
+                  <div className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1">
+                    Carbon factor topic
+                    <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
+                  </div>
+                  <TopicPicker
+                    value={extractTopic(hs.carbon_factor_entity)}
+                    format={extractFormat(hs.carbon_factor_entity)}
+                    jsonPath={extractJsonPath(hs.carbon_factor_entity)}
+                    onChange={(topic, fmt, jp) => {
+                      if (!topic) {
+                        onUpdate({ carbon_factor_entity: undefined })
+                        return
+                      }
+                      const entry: MqttTopicInput = {
+                        topic,
+                        format: (fmt ?? 'plain') as 'plain' | 'json',
+                      }
+                      if (jp) entry.json_path = jp
+                      onUpdate({ carbon_factor_entity: entry })
+                    }}
+                    placeholder="qsh/grid/co2_factor"
+                    scanResults={[]}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label
+                    htmlFor={`source-${index}-carbon-factor-entity`}
+                    className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1"
+                  >
+                    Carbon factor entity <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
+                  </label>
+                  <input
+                    id={`source-${index}-carbon-factor-entity`}
+                    type="text"
+                    value={typeof hs.carbon_factor_entity === 'string' ? hs.carbon_factor_entity : ''}
+                    onChange={(e) => onUpdate({ carbon_factor_entity: e.target.value || undefined })}
+                    placeholder="sensor.grid_carbon_intensity"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -492,7 +553,7 @@ function SourceCard({
                 className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
               <p className="text-xs text-[var(--text-muted)] mt-1">
-                {hs.type === 'heat_pump'
+                {isHeatPumpType(hs.type)
                   ? 'Nameplate electrical input.'
                   : 'Nameplate fuel input.'}
               </p>
@@ -636,7 +697,7 @@ function SourceCard({
           )}
 
           {/* Pump control — boilers only; HPs drive their own pump */}
-          {hs.type && hs.type !== 'heat_pump' && (
+          {hs.type && !isHeatPumpType(hs.type) && (
             <div>
               <label className="block text-sm font-medium text-[var(--text)] mb-2">
                 Pump Control (optional)

@@ -6,6 +6,7 @@ import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useEntityScan } from '../../hooks/useEntityScan'
 import { cn } from '../../lib/utils'
 import { mqttSensorPlaceholder } from '../../lib/mqtt-placeholders'
+import { asTopicInput } from '../../lib/mqttTopic'
 import type {
   HeatSourceYaml, OutdoorYaml, SolarYaml, BatteryYaml, GridYaml,
   MqttConfig, MqttTopicInput, MqttTopicCandidate,
@@ -446,17 +447,6 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
       </div>
     </div>
   )
-}
-
-/** Narrowing helper for per-source MQTT sensor slots. The slot stores
- * `MqttTopicInput | string | undefined`; the wizard only writes objects
- * (post-migration) but defensive narrowing covers in-flight states. */
-function asTopicInput(
-  v: string | MqttTopicInput | undefined,
-): MqttTopicInput | undefined {
-  if (!v) return undefined
-  if (typeof v === 'string') return { topic: v, format: 'plain' }
-  return v
 }
 
 /** MQTT path — TopicPicker for each sensor field. INSTRUCTION-241B adds a

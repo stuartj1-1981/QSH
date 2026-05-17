@@ -30,7 +30,7 @@ export function AlarmsPanel({
             {liveAlarms.map((a) => (
               <li
                 key={`${a.alarm_id}-${a.timestamp}-${a.room ?? '_global'}`}
-                className="flex items-center gap-2 p-2 bg-yellow-500/10 border border-yellow-500/40 rounded"
+                className="flex items-center flex-wrap gap-2 p-2 bg-yellow-500/10 border border-yellow-500/40 rounded"
               >
                 <span className="text-xs px-2 py-0.5 bg-yellow-500 text-white rounded">
                   {a.severity}
@@ -56,7 +56,7 @@ export function AlarmsPanel({
             {historicalAlarms.map((a) => (
               <li
                 key={`${a.alarm_id}-${a.timestamp}-${a.room ?? '_global'}`}
-                className="flex items-center gap-2 py-1 border-t border-[var(--border)]"
+                className="flex items-center flex-wrap gap-2 py-1 border-t border-[var(--border)]"
               >
                 <span className="text-xs px-2 py-0.5 bg-yellow-500/40 text-yellow-700 dark:text-yellow-300 rounded">
                   {a.severity}

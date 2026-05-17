@@ -49,16 +49,35 @@ export function BlendEvolutionChart({
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
           <XAxis
             dataKey="time"
-            tickFormatter={(t) => new Date(t).toLocaleDateString()}
+            tickFormatter={(t) => {
+              const d = new Date(t)
+              return `${d.getDate()}/${d.getMonth() + 1}`
+            }}
             stroke="var(--text-muted)"
+            minTickGap={32}
+            tick={{ fontSize: 11 }}
           />
-          <YAxis domain={[0, 1]} stroke="var(--text-muted)" />
+          <YAxis
+            domain={[0, 1]}
+            stroke="var(--text-muted)"
+            width={32}
+            tick={{ fontSize: 11 }}
+          />
           <Tooltip
+            // labelFormatter PRESERVED VERBATIM from current code.
             labelFormatter={(t) => new Date(t).toLocaleString()}
+            // formatter PRESERVED VERBATIM — pre-existing 'blend_factor' → 'Forecast influence'
+            // label rename is not introduced by this instruction.
             formatter={(value, name) => [
               value,
               name === 'blend_factor' ? 'Forecast influence' : name,
             ]}
+            contentStyle={{
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+              fontSize: 12,
+            }}
           />
           <Line
             type="monotone"

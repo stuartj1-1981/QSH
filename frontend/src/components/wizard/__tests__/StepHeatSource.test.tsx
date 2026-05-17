@@ -447,3 +447,248 @@ describe('StepHeatSource — multi-source (INSTRUCTION-237A)', () => {
     expect(nameInput.value).toBe('Real source 1')
   })
 })
+
+describe('StepHeatSource — GSHP source type (INSTRUCTION-242)', () => {
+  it('offers Ground Source Heat Pump as a selectable source type', () => {
+    render(<StepHeatSource config={{}} onUpdate={vi.fn()} />)
+    expect(screen.getByText(/Ground Source Heat Pump/i)).toBeInTheDocument()
+  })
+
+  it('renders COP terminology for gshp source', () => {
+    render(
+      <StepHeatSource
+        config={{ heat_source: { type: 'gshp', name: 'GSHP' } }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/Expected COP/i)).toBeInTheDocument()
+  })
+
+  it('hides fuel cost block for gshp source', () => {
+    render(
+      <StepHeatSource
+        config={{ heat_source: { type: 'gshp', name: 'GSHP' } }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText(/Fuel cost/i)).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * INSTRUCTION-245 — MQTT driver renders TopicPicker for fuel_cost_entity
+ * and carbon_factor_entity (with JSON-payload checkbox + json_path input),
+ * round-trips MqttTopicInput objects through onUpdate, and falls back to
+ * the legacy plain `<input>` on the HA driver.
+ */
+describe('StepHeatSource — MQTT driver fuel cost / carbon factor topics (INSTRUCTION-245)', () => {
+  it('MQTT driver: fuel cost TopicPicker JSON-payload checkbox appears after typing a topic', () => {
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    // The fuel-cost TopicPicker's input has the placeholder
+    // 'qsh/sources/boiler/cost'. Type a topic — the JSON-payload checkbox
+    // is rendered when a manual (non-scan) topic is present.
+    const input = screen.getByPlaceholderText('qsh/sources/boiler/cost') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/sources/boiler/cost' } })
+    expect(screen.getByText('JSON payload')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: pre-existing MqttTopicInput on fuel_cost_entity round-trips through onUpdate', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: {
+            type: 'lpg_boiler',
+            name: 'Boiler',
+            fuel_cost_entity: {
+              topic: 'qsh/sources/boiler/cost',
+              format: 'json',
+              json_path: 'value.rate',
+            },
+          },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/sources/boiler/cost') as HTMLInputElement
+    expect(input.value).toBe('qsh/sources/boiler/cost')
+    // Change the topic — the dispatched section is heat_sources and the
+    // payload retains the json_path because manualJsonMode is preserved.
+    fireEvent.change(input, { target: { value: 'qsh/sources/boiler/new_cost' } })
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].fuel_cost_entity).toEqual({
+      topic: 'qsh/sources/boiler/new_cost',
+      format: 'json',
+      json_path: 'value.rate',
+    })
+  })
+
+  it('MQTT driver: ticking JSON checkbox + entering json_path writes the dict shape', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/sources/boiler/cost') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/sources/boiler/cost' } })
+    // Now tick the JSON-payload checkbox.
+    onUpdate.mockClear()
+    const checkbox = screen.getByLabelText('JSON payload') as HTMLInputElement
+    fireEvent.click(checkbox)
+    // After ticking, a json_path input becomes visible — type into it.
+    const pathInput = screen.getByPlaceholderText('json_path (e.g. temperature)') as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: 'value.rate' } })
+    // The final dispatched heat_sources payload contains the object form.
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].fuel_cost_entity).toEqual({
+      topic: 'qsh/sources/boiler/cost',
+      format: 'json',
+      json_path: 'value.rate',
+    })
+  })
+
+  it('HA driver: fuel cost field is a plain input (no JSON checkbox) and writes a bare string', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'ha',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    // HA branch uses the plain input with placeholder 'sensor.gas_unit_rate'.
+    const input = screen.getByPlaceholderText('sensor.gas_unit_rate') as HTMLInputElement
+    expect(input).toBeInTheDocument()
+    expect(screen.queryByText('JSON payload')).toBeNull()
+    fireEvent.change(input, { target: { value: 'sensor.lpg_unit_rate' } })
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].fuel_cost_entity).toBe('sensor.lpg_unit_rate')
+  })
+
+  it('MQTT driver: carbon factor TopicPicker JSON checkbox appears after typing a topic', () => {
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/grid/co2_factor') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/grid/co2_factor' } })
+    expect(screen.getByText('JSON payload')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: pre-existing MqttTopicInput on carbon_factor_entity round-trips through onUpdate', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: {
+            type: 'lpg_boiler',
+            name: 'Boiler',
+            carbon_factor_entity: {
+              topic: 'qsh/grid/co2_factor',
+              format: 'json',
+              json_path: 'value.kgco2_per_kwh',
+            },
+          },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/grid/co2_factor') as HTMLInputElement
+    expect(input.value).toBe('qsh/grid/co2_factor')
+    fireEvent.change(input, { target: { value: 'qsh/grid/co2_factor_v2' } })
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].carbon_factor_entity).toEqual({
+      topic: 'qsh/grid/co2_factor_v2',
+      format: 'json',
+      json_path: 'value.kgco2_per_kwh',
+    })
+  })
+
+  it('MQTT driver: carbon factor — ticking JSON + entering json_path writes dict shape', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/grid/co2_factor') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/grid/co2_factor' } })
+    // There are now two JSON-payload labels (one per topic). Find the carbon
+    // one by walking from the carbon input's container.
+    const carbonRoot = input.closest('div.relative')?.parentElement
+    expect(carbonRoot).not.toBeNull()
+    const carbonCheckbox = carbonRoot!.querySelector('input[type="checkbox"]') as HTMLInputElement
+    expect(carbonCheckbox).not.toBeNull()
+    onUpdate.mockClear()
+    fireEvent.click(carbonCheckbox)
+    const pathInput = carbonRoot!.querySelector(
+      'input[placeholder="json_path (e.g. temperature)"]',
+    ) as HTMLInputElement
+    expect(pathInput).not.toBeNull()
+    fireEvent.change(pathInput, { target: { value: 'value.kg' } })
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].carbon_factor_entity).toEqual({
+      topic: 'qsh/grid/co2_factor',
+      format: 'json',
+      json_path: 'value.kg',
+    })
+  })
+
+  it('HA driver: carbon factor field is a plain input (no JSON checkbox) and writes a bare string', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'ha',
+          heat_source: { type: 'lpg_boiler', name: 'Boiler' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const input = screen.getByPlaceholderText('sensor.grid_carbon_intensity') as HTMLInputElement
+    expect(input).toBeInTheDocument()
+    expect(screen.queryByText('JSON payload')).toBeNull()
+    fireEvent.change(input, { target: { value: 'sensor.octopus_carbon' } })
+    const hsCalls = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources')
+    expect(hsCalls.length).toBeGreaterThan(0)
+    const last = hsCalls[hsCalls.length - 1][1]
+    expect(last[0].carbon_factor_entity).toBe('sensor.octopus_carbon')
+  })
+
+})

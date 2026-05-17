@@ -885,3 +885,172 @@ describe('HeatSourceSettings — save-error banner (INSTRUCTION-241C Task 6)', (
     fetchSpy.mockRestore()
   })
 })
+
+describe('HeatSourceSettings — GSHP source type (INSTRUCTION-242)', () => {
+  it('renders COP label (not Efficiency) for gshp source', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'gshp', efficiency: 4.0 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByText(/^COP$/)).toBeInTheDocument()
+  })
+
+  it('does not render fuel cost block for gshp source (HP-class suppression)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'gshp', efficiency: 4.0 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // The carbon factor / fuel cost field labels are gated on isNonHp.
+    // For a gshp source isHeatPumpType is true → isNonHp is false → block hidden.
+    expect(screen.queryByText(/^Fuel cost/i)).toBeNull()
+  })
+
+  it('exposes gshp as a selectable source type in the type picker', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'heat_pump' }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // The type picker exposes each source-type literal with underscores
+    // converted to spaces. 'gshp' renders as 'gshp' verbatim.
+    expect(screen.getByRole('button', { name: 'gshp' })).toBeInTheDocument()
+  })
+})
+
+/**
+ * INSTRUCTION-245 — Settings Heat Source card renders TopicPicker for
+ * fuel_cost_entity and carbon_factor_entity on MQTT driver, round-trips
+ * MqttTopicInput objects through onChange, and retains the EntityField on
+ * the HA driver. Fields render only for non-HP source types (gas_boiler,
+ * lpg_boiler, oil_boiler) per existing isNonHp gate.
+ */
+describe('HeatSourceSettings — MQTT driver fuel cost / carbon factor topics (INSTRUCTION-245)', () => {
+  it('MQTT driver: fuel cost TopicPicker JSON-payload checkbox appears after typing a topic', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'lpg_boiler', name: 'Boiler' }}
+        driver="mqtt"
+        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/sources/boiler/cost') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/sources/boiler/cost' } })
+    expect(screen.getByText('JSON payload')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: pre-existing MqttTopicInput on fuel_cost_entity hydrates and saves the dict form', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{
+          type: 'lpg_boiler',
+          name: 'Boiler',
+          fuel_cost_entity: {
+            topic: 'qsh/sources/boiler/cost',
+            format: 'json',
+            json_path: 'value.rate',
+          },
+        }}
+        driver="mqtt"
+        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/sources/boiler/cost') as HTMLInputElement
+    expect(input.value).toBe('qsh/sources/boiler/cost')
+    // Dirty the card (any field) and save — the saved payload should retain
+    // the object shape on fuel_cost_entity.
+    fireEvent.change(screen.getByLabelText('Source 1 name'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+    await waitFor(() => {
+      expect(patch).toHaveBeenCalledWith('heat_sources', expect.any(Array))
+    })
+    const hsCall = patch.mock.calls.find((c) => c[0] === 'heat_sources')!
+    const sources = hsCall[1] as Array<{ fuel_cost_entity?: unknown }>
+    expect(sources[0].fuel_cost_entity).toEqual({
+      topic: 'qsh/sources/boiler/cost',
+      format: 'json',
+      json_path: 'value.rate',
+    })
+  })
+
+  it('HA driver: fuel cost field is a plain entity input (no JSON checkbox)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'lpg_boiler', name: 'Boiler' }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // EntityField uses the placeholder string passed through.
+    expect(screen.getByPlaceholderText('sensor.gas_unit_rate')).toBeInTheDocument()
+    expect(screen.queryByText('JSON payload')).toBeNull()
+  })
+
+  it('MQTT driver: carbon factor TopicPicker JSON checkbox appears after typing a topic', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'lpg_boiler', name: 'Boiler' }}
+        driver="mqtt"
+        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/grid/co2_factor') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'qsh/grid/co2_factor' } })
+    expect(screen.getByText('JSON payload')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: pre-existing MqttTopicInput on carbon_factor_entity hydrates and saves the dict form', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{
+          type: 'lpg_boiler',
+          name: 'Boiler',
+          carbon_factor_entity: {
+            topic: 'qsh/grid/co2_factor',
+            format: 'json',
+            json_path: 'value.kgco2_per_kwh',
+          },
+        }}
+        driver="mqtt"
+        mqtt={{ broker: 'mqtt.local', port: 1883, inputs: {} }}
+        onRefetch={noop}
+      />,
+    )
+    const input = screen.getByPlaceholderText('qsh/grid/co2_factor') as HTMLInputElement
+    expect(input.value).toBe('qsh/grid/co2_factor')
+    fireEvent.change(screen.getByLabelText('Source 1 name'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+    await waitFor(() => {
+      expect(patch).toHaveBeenCalledWith('heat_sources', expect.any(Array))
+    })
+    const hsCall = patch.mock.calls.find((c) => c[0] === 'heat_sources')!
+    const sources = hsCall[1] as Array<{ carbon_factor_entity?: unknown }>
+    expect(sources[0].carbon_factor_entity).toEqual({
+      topic: 'qsh/grid/co2_factor',
+      format: 'json',
+      json_path: 'value.kgco2_per_kwh',
+    })
+  })
+
+  it('HA driver: carbon factor field is a plain entity input (no JSON checkbox)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'lpg_boiler', name: 'Boiler' }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByPlaceholderText('sensor.grid_carbon_intensity')).toBeInTheDocument()
+    expect(screen.queryByText('JSON payload')).toBeNull()
+  })
+})
