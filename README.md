@@ -1,6 +1,6 @@
 # QSH — Quantum Swarm Heating
 
-Adaptive heat pump optimisation for multi-zone residential heating. Learns your building's thermal characteristics from passive observation and optimises flow temperature, zone control, and scheduling to reduce energy consumption.
+Adaptive heat source agnostic optimisation for multi-zone residential heating. Learns your building's thermal characteristics from passive observation and optimises flow temperature, zone control, and scheduling to reduce energy consumption.
 
 ## What It Does
 
@@ -17,7 +17,7 @@ Adaptive heat pump optimisation for multi-zone residential heating. Learns your 
 | **Home Assistant Add-on** | Home Assistant OS or Supervised. Heat pump and room sensors as HA entities. |
 | **MQTT Standalone** | Any MQTT broker (mosquitto, etc.). Sensors and HP control via MQTT topics. Docker host (Pi, NUC, server). |
 
-Designed for any heat source that exposes flow temperature setpoint and on/off control — either via Home Assistant entities or MQTT topics. Currently validated on Octopus Cosy 6 (via GraphQL). 
+Designed for any heat source that exposes flow temperature setpoint and on/off control — either via Home Assistant entities or MQTT topics.
 
 ## Quick Start
 
