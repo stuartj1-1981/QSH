@@ -11,12 +11,15 @@ import {
 } from '../../lib/mqtt-placeholders'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
+import { TopicPicker } from '../wizard/TopicPicker'
+import { extractTopic, extractFormat, extractJsonPath } from '../../lib/mqttTopic'
 import { HelpTip } from '../HelpTip'
 import { HEAT_SOURCE, SOURCE_SELECTION } from '../../lib/helpText'
-import type { HeatSourceYaml, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
+import type { HeatSourceYaml, MqttTopicInput, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
 import { WriteBudgetField } from './WriteBudgetField'
+import { isHeatPumpType } from '../../lib/heat-source-types'
 
 interface HeatSourceSettingsProps {
   heatSource: HeatSourceYaml
@@ -508,14 +511,14 @@ function SourceCard({
       hs.sensors?.flow_rate,
       hs.sensors?.delta_t,
       hs.sensors?.pump_power,
-      hs.fuel_cost_entity,
-      hs.carbon_factor_entity,
+      extractTopic(hs.fuel_cost_entity),
+      extractTopic(hs.carbon_factor_entity),
     ].filter(Boolean) as string[]
   }, [hs, driver])
   const { resolved } = useEntityResolve(entityIds, driver)
 
   const method = hs.flow_control?.method || 'ha_service'
-  const isNonHp = hs.type !== 'heat_pump'
+  const isNonHp = !isHeatPumpType(hs.type)
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
@@ -627,7 +630,7 @@ function SourceCard({
               Type <HelpTip text={HEAT_SOURCE.hpModel} size={12} />
             </label>
             <div className="flex gap-2 flex-wrap">
-              {(['heat_pump', 'gas_boiler', 'lpg_boiler', 'oil_boiler'] as const).map(
+              {(['heat_pump', 'gshp', 'gas_boiler', 'lpg_boiler', 'oil_boiler'] as const).map(
                 (t) => (
                   <button
                     key={t}
@@ -658,7 +661,7 @@ function SourceCard({
                 htmlFor={`source-${index}-efficiency`}
                 className="block text-xs font-medium text-[var(--text)] mb-1"
               >
-                {hs.type === 'heat_pump' ? 'COP' : 'Efficiency'}
+                {isHeatPumpType(hs.type) ? 'COP' : 'Efficiency'}
               </label>
               <input
                 id={`source-${index}-efficiency`}
@@ -949,25 +952,41 @@ function SourceCard({
                 />
               </div>
               {driver === 'mqtt' ? (
-                <TopicField
-                  label="Fuel cost topic"
-                  helpText={SOURCE_SELECTION.fuelCostEntity}
-                  value={hs.fuel_cost_entity ?? ''}
-                  onChange={(v) =>
-                    onChange({ fuel_cost_entity: v || undefined })
-                  }
-                  placeholder="qsh/sources/boiler/cost"
-                />
+                <div>
+                  <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
+                    Fuel cost topic
+                    <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
+                  </label>
+                  <TopicPicker
+                    value={extractTopic(hs.fuel_cost_entity)}
+                    format={extractFormat(hs.fuel_cost_entity)}
+                    jsonPath={extractJsonPath(hs.fuel_cost_entity)}
+                    onChange={(topic, fmt, jp) => {
+                      if (!topic) {
+                        onChange({ fuel_cost_entity: undefined })
+                        return
+                      }
+                      const entry: MqttTopicInput = {
+                        topic,
+                        format: (fmt ?? 'plain') as 'plain' | 'json',
+                      }
+                      if (jp) entry.json_path = jp
+                      onChange({ fuel_cost_entity: entry })
+                    }}
+                    placeholder="qsh/sources/boiler/cost"
+                    scanResults={[]}
+                  />
+                </div>
               ) : (
                 <EntityField
                   label="Fuel cost entity"
                   helpText={SOURCE_SELECTION.fuelCostEntity}
-                  value={hs.fuel_cost_entity ?? ''}
+                  value={extractTopic(hs.fuel_cost_entity)}
                   friendlyName={
-                    resolved[hs.fuel_cost_entity ?? '']?.friendly_name
+                    resolved[extractTopic(hs.fuel_cost_entity)]?.friendly_name
                   }
-                  state={resolved[hs.fuel_cost_entity ?? '']?.state}
-                  unit={resolved[hs.fuel_cost_entity ?? '']?.unit}
+                  state={resolved[extractTopic(hs.fuel_cost_entity)]?.state}
+                  unit={resolved[extractTopic(hs.fuel_cost_entity)]?.unit}
                   onChange={(v) =>
                     onChange({ fuel_cost_entity: v || undefined })
                   }
@@ -1007,23 +1026,40 @@ function SourceCard({
                 />
               </div>
               {driver === 'mqtt' ? (
-                <TopicField
-                  label="Carbon factor topic"
-                  value={hs.carbon_factor_entity ?? ''}
-                  onChange={(v) =>
-                    onChange({ carbon_factor_entity: v || undefined })
-                  }
-                  placeholder="qsh/grid/co2_factor"
-                />
+                <div>
+                  <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
+                    Carbon factor topic
+                    <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
+                  </label>
+                  <TopicPicker
+                    value={extractTopic(hs.carbon_factor_entity)}
+                    format={extractFormat(hs.carbon_factor_entity)}
+                    jsonPath={extractJsonPath(hs.carbon_factor_entity)}
+                    onChange={(topic, fmt, jp) => {
+                      if (!topic) {
+                        onChange({ carbon_factor_entity: undefined })
+                        return
+                      }
+                      const entry: MqttTopicInput = {
+                        topic,
+                        format: (fmt ?? 'plain') as 'plain' | 'json',
+                      }
+                      if (jp) entry.json_path = jp
+                      onChange({ carbon_factor_entity: entry })
+                    }}
+                    placeholder="qsh/grid/co2_factor"
+                    scanResults={[]}
+                  />
+                </div>
               ) : (
                 <EntityField
                   label="Carbon factor entity"
-                  value={hs.carbon_factor_entity ?? ''}
+                  value={extractTopic(hs.carbon_factor_entity)}
                   friendlyName={
-                    resolved[hs.carbon_factor_entity ?? '']?.friendly_name
+                    resolved[extractTopic(hs.carbon_factor_entity)]?.friendly_name
                   }
-                  state={resolved[hs.carbon_factor_entity ?? '']?.state}
-                  unit={resolved[hs.carbon_factor_entity ?? '']?.unit}
+                  state={resolved[extractTopic(hs.carbon_factor_entity)]?.state}
+                  unit={resolved[extractTopic(hs.carbon_factor_entity)]?.unit}
                   onChange={(v) =>
                     onChange({ carbon_factor_entity: v || undefined })
                   }

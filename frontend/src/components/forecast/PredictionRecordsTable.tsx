@@ -61,8 +61,9 @@ export function PredictionRecordsTable({ records }: PredictionRecordsTableProps)
   return (
     <div className="p-4 bg-[var(--bg-card)] rounded-lg">
       {Header}
-      <table className="w-full text-sm">
-        <thead>
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
           <tr className="text-[var(--text-muted)]">
             <th className="text-left py-1"></th>
             <th className="text-left py-1">Controller</th>
@@ -89,12 +90,12 @@ export function PredictionRecordsTable({ records }: PredictionRecordsTableProps)
                   <td className="py-1">{room}</td>
                   <td className="py-1 text-right">{record.predicted_value.toFixed(2)}</td>
                   <td className="py-1 text-right">{formatTimeFromNow(record.prediction_target_ts)}</td>
-                  <td className="py-1 truncate max-w-xs">{record.decision_taken}</td>
+                  <td className="py-1 truncate max-w-[220px]">{record.decision_taken}</td>
                 </tr>
                 {isExpanded && (
                   <tr>
                     <td colSpan={6} className="py-2 px-4 bg-[var(--bg)] text-xs">
-                      <pre className="whitespace-pre-wrap">
+                      <pre className="whitespace-pre-wrap break-all">
                         {JSON.stringify(record.decision_basis, null, 2)}
                       </pre>
                     </td>
@@ -105,6 +106,7 @@ export function PredictionRecordsTable({ records }: PredictionRecordsTableProps)
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

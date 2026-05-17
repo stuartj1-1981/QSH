@@ -45,7 +45,10 @@ describe('MasterEnableToggle', () => {
 
   it('renders new beta-ready header copy', () => {
     render(<MasterEnableToggle value={true} />)
-    expect(screen.getByText('Enable Forecast')).toBeInTheDocument()
+    // INSTRUCTION-243 Task 2: twin-element pattern — one mobile-only
+    // (sm:hidden) heading and one desktop-only (hidden sm:block) heading
+    // both render "Enable Forecast"; CSS hides one per viewport.
+    expect(screen.getAllByText('Enable Forecast').length).toBeGreaterThan(0)
     expect(screen.queryByText(/Master Enable/)).toBeNull()
     expect(screen.queryByText(/Forecast Extension/)).toBeNull()
   })

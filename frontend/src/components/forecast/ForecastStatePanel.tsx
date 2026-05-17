@@ -28,7 +28,7 @@ export function ForecastStatePanel({ state }: ForecastStatePanelProps) {
       <h3 className="font-semibold mb-3 flex items-center gap-2">
         <CloudSun size={18} /> Forecast State
       </h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-4">
         <div className="p-2 bg-[var(--bg)] rounded">
           <div className="text-xs text-[var(--text-muted)]">OAT rise 6h</div>
           <div className="font-semibold">{formatScalar(state.oat_rise_next_6h_c, '°C')}</div>

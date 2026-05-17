@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.4.3] — 2026-05-17
+
+### Added
+- GSHP (ground-source heat pump) as a heat source type, with full
+  wizard, settings, and telemetry support
+- Per-source energy and cost bucketing for multi-source installs
+- TopicPicker now supports fuel/carbon entity fields with JSON
+  payload extraction
+
+### Changed
+- Mobile-optimised forecast page (375px portrait)
+
 ## [1.4.2] — 2026-05-16
 
 ### Fixed

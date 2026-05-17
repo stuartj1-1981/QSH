@@ -47,52 +47,58 @@ export function CutoverGateStatusGrid({
       <div className="text-xs text-[var(--text-muted)] mb-2">
         Window: {data.window_cycles} cycles. Required hold: {data.cycles_required} cycles.
       </div>
-      {Object.entries(data.gates).map(([controller, scopes]) => (
-        <div key={controller} className="mb-4">
-          <h4 className="font-medium mb-2">{controller}</h4>
-          <div className="flex items-center gap-2 py-1 text-xs text-[var(--text-muted)] border-t border-[var(--border)]">
-            <span className="w-32"></span>
-            <span className="w-7 inline-flex items-center gap-0.5">
-              err <HelpTip size={11} text="Forecast accuracy: the controller's forecast prediction error stayed below the configured P95 threshold for the measurement window." />
-            </span>
-            <span className="w-7 inline-flex items-center gap-0.5">
-              cmf <HelpTip size={11} text="Comfort outcome: room temperatures stayed within bounds while the controller was being driven by forecast-influenced shadow decisions." />
-            </span>
-            <span className="w-7 inline-flex items-center gap-0.5">
-              cnf <HelpTip size={11} text="Composite confidence: the forecast composite confidence score — derived from weather classification, twin agreement, and prediction history — held above threshold for the window." />
-            </span>
-            <span className="w-7 inline-flex items-center gap-0.5">
-              twn <HelpTip size={11} text="Twin agreement: the digital twin's projection of how the controller would behave under forecast input matched what actually happened." />
-            </span>
-          </div>
-          {Object.entries(scopes).map(([scope, gate]) => (
-            <div
-              key={scope}
-              className="flex items-center gap-2 py-1 text-sm border-t border-[var(--border)]"
-            >
-              <span className="w-32 text-[var(--text-muted)]">{scope}</span>
-              <GateDot pass={gate.prediction_error_gate_pass} label="err" />
-              <GateDot pass={gate.comfort_gate_pass} label="cmf" />
-              <GateDot pass={gate.composite_confidence_gate_pass} label="cnf" />
-              <GateDot pass={gate.twin_gate_pass} label="twn" />
-              <span className="ml-2 text-[var(--text-muted)]">
-                {gate.cycles_holding} / {gate.cycles_required}
-              </span>
-              {gate.cutover_eligible && (
-                <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded">
-                  ELIGIBLE
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <div className="min-w-[480px]">
+          {Object.entries(data.gates).map(([controller, scopes]) => (
+            <div key={controller} className="mb-4">
+              <h4 className="font-medium mb-2">{controller}</h4>
+              <div className="flex items-center gap-2 py-1 text-xs text-[var(--text-muted)] border-t border-[var(--border)]">
+                <span className="w-32"></span>
+                <span className="w-7 inline-flex items-center gap-0.5">
+                  err <HelpTip size={11} text="Forecast accuracy: the controller's forecast prediction error stayed below the configured P95 threshold for the measurement window." />
                 </span>
-              )}
-              <span
-                className="ml-auto text-xs text-[var(--text-muted)] truncate max-w-md"
-                title={gate.rationale}
-              >
-                {gate.rationale}
-              </span>
+                <span className="w-7 inline-flex items-center gap-0.5">
+                  cmf <HelpTip size={11} text="Comfort outcome: room temperatures stayed within bounds while the controller was being driven by forecast-influenced shadow decisions." />
+                </span>
+                <span className="w-7 inline-flex items-center gap-0.5">
+                  cnf <HelpTip size={11} text="Composite confidence: the forecast composite confidence score — derived from weather classification, twin agreement, and prediction history — held above threshold for the window." />
+                </span>
+                <span className="w-7 inline-flex items-center gap-0.5">
+                  twn <HelpTip size={11} text="Twin agreement: the digital twin's projection of how the controller would behave under forecast input matched what actually happened." />
+                </span>
+              </div>
+              {Object.entries(scopes).map(([scope, gate]) => (
+                <div key={scope} className="border-t border-[var(--border)]">
+                  <div className="flex items-center gap-2 py-1 text-sm">
+                    <span className="w-32 text-[var(--text-muted)]">{scope}</span>
+                    <GateDot pass={gate.prediction_error_gate_pass} label="err" />
+                    <GateDot pass={gate.comfort_gate_pass} label="cmf" />
+                    <GateDot pass={gate.composite_confidence_gate_pass} label="cnf" />
+                    <GateDot pass={gate.twin_gate_pass} label="twn" />
+                    <span className="ml-2 text-[var(--text-muted)]">
+                      {gate.cycles_holding} / {gate.cycles_required}
+                    </span>
+                    {gate.cutover_eligible && (
+                      <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded">
+                        ELIGIBLE
+                      </span>
+                    )}
+                    <span
+                      className="ml-auto text-xs text-[var(--text-muted)] truncate max-w-md hidden sm:inline"
+                      title={gate.rationale}
+                    >
+                      {gate.rationale}
+                    </span>
+                  </div>
+                  <div className="sm:hidden pl-32 pr-2 pb-1 text-xs text-[var(--text-muted)]">
+                    {gate.rationale}
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
         </div>
-      ))}
+      </div>
     </div>
   )
 }

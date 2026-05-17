@@ -160,7 +160,7 @@ export interface AuxValidationErrorDetail {
 
 export interface HeatSourceYaml {
   name?: string
-  type: 'heat_pump' | 'gas_boiler' | 'oil_boiler' | 'lpg_boiler'
+  type: 'heat_pump' | 'gshp' | 'gas_boiler' | 'oil_boiler' | 'lpg_boiler'
   efficiency?: number
   min_output_kw?: number
   // INSTRUCTION-154C: nameplate rated capacity (kW). Heat pumps:
@@ -172,9 +172,13 @@ export interface HeatSourceYaml {
   flow_min_entity?: string
   flow_max_entity?: string
   fuel_cost_per_kwh?: number
-  fuel_cost_entity?: string
+  // Widened under INSTRUCTION-245 to mirror the per-source `sensors` slot
+  // shape (INSTRUCTION-241B): HA driver stores a string entity_id; MQTT
+  // driver stores a MqttTopicInput object with topic/format/json_path.
+  fuel_cost_entity?: string | MqttTopicInput
   carbon_factor?: number
-  carbon_factor_entity?: string
+  // Same widening; see comment above.
+  carbon_factor_entity?: string | MqttTopicInput
   flow_control?: {
     method?: 'ha_service' | 'mqtt' | 'entity'
     domain?: string

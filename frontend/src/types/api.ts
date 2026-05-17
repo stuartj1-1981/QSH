@@ -44,7 +44,7 @@ export interface HpState {
 // the UI layer from `type` alone — 1:1 derivable, so a `performance.kind`
 // discriminator is information redundancy per parent 117 V5.
 export interface HeatSourceState {
-  type: 'heat_pump' | 'gas_boiler' | 'lpg_boiler' | 'oil_boiler'
+  type: 'heat_pump' | 'gshp' | 'gas_boiler' | 'lpg_boiler' | 'oil_boiler'
   input_power_kw: number
   thermal_output_kw: number | null
   thermal_output_source: 'measured' | 'computed' | 'unknown'
