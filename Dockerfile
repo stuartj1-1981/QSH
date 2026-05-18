@@ -46,7 +46,7 @@ RUN pip install --no-cache-dir \
     && pip install --no-cache-dir \
         numpy==1.26.4 networkx requests pyyaml influxdb websocket-client \
         paho-mqtt aiomqtt fastapi==0.115.0 uvicorn[standard]==0.30.0 \
-        python-multipart
+        python-multipart scipy
 
 WORKDIR /app
 

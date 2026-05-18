@@ -153,6 +153,11 @@ class CycleSnapshot:
     active_source_thermal_output_source: str = "unknown"
     active_source_performance: Optional[Any] = None
     peak_thermal_demand_kw: float = 0.0
+    # INSTRUCTION-246 Task 4 Step 4d — provenance for input_power_kw.
+    # "live" (sensor reading) | "legacy" (pre-117A boiler-on-HP-slot) |
+    # "nameplate" (caps.rated_kw fallback) | "unknown" (128A future-strengthening
+    # sentinel — no information at all).
+    active_source_input_power_source: str = "unknown"
 
     # Tariff providers (INSTRUCTION-150C V5 E-M1).
     # tariff_providers_status: per-fuel snapshot of provider state (read off
@@ -244,6 +249,10 @@ def build_heat_source_payload(snap: "CycleSnapshot") -> Dict[str, Any]:
             else None
         ),
         "thermal_output_source": snap.active_source_thermal_output_source,
+        # INSTRUCTION-246 Task 4 Step 4d — provenance discriminator for
+        # input_power_kw. Pydantic HeatSourceState in routes/status.py
+        # declares it as a REQUIRED Literal of the four values.
+        "input_power_source": snap.active_source_input_power_source,
         "performance": {
             "value": round(perf_value, 3),
             "source": perf_source,
@@ -637,6 +646,14 @@ class SharedState:
             active_source_thermal_output_source=ctx.active_source_thermal_output_source,
             active_source_performance=ctx.active_source_performance,
             peak_thermal_demand_kw=ctx.peak_thermal_demand_kw,
+            # INSTRUCTION-246 Task 4 Step 4d — input-power provenance.
+            # Defence-in-depth getattr — pre-246 test contexts may lack the
+            # attribute (e.g. SimpleNamespace fixtures in
+            # qsh/api/tests/test_status_manual_field.py); fall back to the
+            # CycleSnapshot default ("unknown") to keep those green.
+            active_source_input_power_source=getattr(
+                ctx, "active_source_input_power_source", "unknown"
+            ),
             tariff_providers_status=_collect_tariff_providers_status(),
             available_provider_kinds=SUPPORTED_PROVIDER_KINDS,
             # INSTRUCTION-224D — per-emitter valve readings deep-copied from

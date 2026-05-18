@@ -49,4 +49,36 @@ describe('HeatSourceState type narrowing', () => {
     // unused-variable lint on the test scope.
     expect([badSource, badType]).toHaveLength(2)
   })
+
+  // INSTRUCTION-246 Task 8 Step 8a — input_power_source provenance literal.
+  it('accepts the four input_power_source literals', () => {
+    const live: HeatSourceState['input_power_source'] = 'live'
+    const legacy: HeatSourceState['input_power_source'] = 'legacy'
+    const nameplate: HeatSourceState['input_power_source'] = 'nameplate'
+    const unknown: HeatSourceState['input_power_source'] = 'unknown'
+    const absent: HeatSourceState['input_power_source'] = undefined  // Optional
+    expect([live, legacy, nameplate, unknown, absent]).toHaveLength(5)
+  })
+
+  it('rejects bogus input_power_source values at compile time', () => {
+    // @ts-expect-error invalid input_power_source literal rejected by Literal union
+    const bad: HeatSourceState['input_power_source'] = 'interpolated'
+    expect(bad).toBe('interpolated')
+  })
+
+  it('accepts a payload with input_power_source set', () => {
+    const boiler: HeatSourceState = {
+      type: 'lpg_boiler',
+      input_power_kw: 24,
+      thermal_output_kw: 20.4,
+      thermal_output_source: 'computed',
+      input_power_source: 'nameplate',
+      performance: { value: 0.85, source: 'config' },
+      flow_temp: 55,
+      return_temp: 40,
+      delta_t: 15,
+      flow_rate: 10,
+    }
+    expect(boiler.input_power_source).toBe('nameplate')
+  })
 })

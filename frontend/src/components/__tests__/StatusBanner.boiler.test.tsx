@@ -81,6 +81,33 @@ describe('StatusBanner — boiler install', () => {
     expect(bannerText).not.toMatch(/≈/)
     expect(container.querySelector('[title]')).toBeNull()
   })
+
+  // INSTRUCTION-246 Task 8 Step 8b — flame-tile input_power_kw render.
+
+  it('renders configured input power on the flame tile (live sensor)', () => {
+    // boilerSource() defaults input_power_kw to 12 → "12.0 kW in" on the tile.
+    render(<StatusBanner {...baseProps} heatSource={boilerSource()} />)
+    expect(screen.getByText(/12\.0 kW in/)).toBeDefined()
+  })
+
+  it('renders nameplate-derived input power for an LPG boiler', () => {
+    // Simulates a payload built from heat_sources[0].rated_kw: 24 — no live
+    // sensor. Backend resolver populates input_power_kw from caps.rated_kw
+    // with input_power_source="nameplate"; the UI renders the same regardless
+    // of provenance.
+    render(
+      <StatusBanner
+        {...baseProps}
+        heatSource={boilerSource({
+          type: 'lpg_boiler',
+          input_power_kw: 24,
+          thermal_output_kw: 20.4,
+          input_power_source: 'nameplate',
+        })}
+      />,
+    )
+    expect(screen.getByText(/24\.0 kW in/)).toBeDefined()
+  })
 })
 
 describe('StatusBanner — heat pump install', () => {

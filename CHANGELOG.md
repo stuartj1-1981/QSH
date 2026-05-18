@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.4.4] — 2026-05-18
+
+### Added
+- Boiler input power readings flow through Home Assistant and MQTT
+  drivers for per-source energy tracking on gas boiler installs
+
+### Changed
+- Counterfactual recommendations engine now active in production
+  (Docker image grows ~30–40 MB on both arches to bundle scipy)
+
+### Fixed
+- Mode arbiter no longer forces continuous HP run when demand is
+  below the heat pump's minimum modulation point — eliminates
+  night-time overshoot of comfort targets
+- Mode write readback alarm threshold now scales with the configured
+  debounce window instead of firing prematurely on tight write
+  budgets
+
 ## [1.4.3] — 2026-05-17
 
 ### Added

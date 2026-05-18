@@ -1207,6 +1207,24 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         for name, result in fetch_all_heat_source_statuses(config).items()
     }
 
+    # INSTRUCTION-246 Task 6 — read the boiler input-power slot via the
+    # existing fetch_source_raw_values() helper (lines 1089–1123). The helper
+    # already declares the boiler_power_input slot and returns None for any
+    # entity that is absent / unavailable / non-numeric.
+    source_raw = fetch_source_raw_values(config)
+    boiler_raw = source_raw.get("boiler_power_input")
+    if boiler_raw is None:
+        data.boiler_power = None
+        data.has_live_boiler_power = False
+    else:
+        boiler_kw = safe_float(boiler_raw, None)
+        if boiler_kw is None:
+            data.boiler_power = None
+            data.has_live_boiler_power = False
+        else:
+            data.boiler_power = float(boiler_kw)
+            data.has_live_boiler_power = True
+
     energy_data = fetch_energy_data(config)
     data.battery_soc = energy_data["battery_soc"]
     data.solar_production = energy_data["solar_production"]
