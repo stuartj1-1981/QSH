@@ -36,6 +36,14 @@ class HeatSourceState(BaseModel):
     input_power_kw: float
     thermal_output_kw: Optional[float]
     thermal_output_source: Literal["measured", "computed", "unknown"]
+    # INSTRUCTION-246 Task 10 — provenance discriminator for input_power_kw.
+    # REQUIRED (not Optional) on the backend so a resolver bug emitting a
+    # value outside this Literal set fails at FastAPI serialisation rather
+    # than silently dropping the field. Frontend TS type at
+    # frontend/src/types/api.ts:46 declares this Optional for old-server
+    # forward-compat — backend strict + frontend forgiving is intentional
+    # and matches the existing _Performance shape asymmetry.
+    input_power_source: Literal["live", "legacy", "nameplate", "unknown"]
     performance: _Performance
     flow_temp: float
     return_temp: float

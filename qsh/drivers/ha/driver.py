@@ -404,6 +404,10 @@ class HADriver:
             hp_cop=sensor_data.hp_cop,
             delta_t=sensor_data.delta_t,
             flow_rate=sensor_data.flow_rate,
+            # INSTRUCTION-246 — boiler input power, defaults to None /
+            # has_live_boiler_power=False on installs that don't have the
+            # entity configured.
+            boiler_power_input=sensor_data.boiler_power,
             # Refrigerant / Modbus
             evaporator_temp=_evaporator_temp,
             suction_pressure_kpa=_suction_pressure,
@@ -442,6 +446,7 @@ class HADriver:
             has_live_power=sensor_data.has_live_power,
             has_live_return_temp=sensor_data.has_live_return_temp,
             has_live_flow_rate=sensor_data.has_live_flow_rate,
+            has_live_boiler_power=sensor_data.has_live_boiler_power,
             has_live_hot_water=getattr(sensor_data, "has_live_hot_water", True),
             has_solar=getattr(sensor_data, "has_solar", False),
             has_battery=getattr(sensor_data, "has_battery", False),

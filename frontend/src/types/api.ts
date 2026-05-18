@@ -48,6 +48,13 @@ export interface HeatSourceState {
   input_power_kw: number
   thermal_output_kw: number | null
   thermal_output_source: 'measured' | 'computed' | 'unknown'
+  // INSTRUCTION-246 Task 8 Step 8a — provenance for input_power_kw.
+  // Optional on the frontend (forward-compat against old servers that have
+  // not yet shipped V3); the backend pydantic model declares it REQUIRED so
+  // a backend bug emitting a value outside this Literal set fails at
+  // serialisation. The asymmetry (backend strict + frontend forgiving) is
+  // intentional and matches the existing performance.source shape.
+  input_power_source?: 'live' | 'legacy' | 'nameplate' | 'unknown'
   performance: { value: number; source: 'live' | 'config' }
   flow_temp: number
   return_temp: number

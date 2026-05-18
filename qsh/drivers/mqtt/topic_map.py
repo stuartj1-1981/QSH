@@ -483,6 +483,10 @@ SYSTEM_INPUT_FIELDS = {
     "grid_power": "grid_power",
     "battery_soc": "battery_soc",
     "flow_rate": "flow_rate",
+    # INSTRUCTION-246 Task 7 — boiler fuel-input kW. Routed generically by
+    # the driver (qsh/drivers/mqtt/driver.py:535) via SYSTEM_INPUT_FIELDS
+    # iteration; the capability flag below pairs with it.
+    "boiler_power_input": "boiler_power_input",
 }
 
 # System-level fields whose payload is a raw string (boolean/enum), NOT a number.
@@ -507,6 +511,9 @@ CAPABILITY_FIELDS = {
     "flow_rate": "has_live_flow_rate",
     "solar_production": "has_solar",
     "battery_soc": "has_battery",
+    # INSTRUCTION-246 Task 7 — pairs with boiler_power_input above. Driver
+    # iterates CAPABILITY_FIELDS at qsh/drivers/mqtt/driver.py:632-633.
+    "boiler_power_input": "has_live_boiler_power",
 }
 
 

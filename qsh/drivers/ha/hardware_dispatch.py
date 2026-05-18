@@ -12,10 +12,53 @@ Control methods:
 """
 
 import logging
+import math
 from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 
 
-READBACK_MISMATCH_ALARM_THRESHOLD = 5  # consecutive cycles where observed != optimal before operator alarm
+# Lower bound on the readback mismatch alarm threshold. Preserves
+# pre-INSTRUCTION-249 behaviour as a floor; the effective threshold is
+# the larger of this constant and a write-budget-derived value.
+READBACK_MISMATCH_FLOOR_CYCLES = 5
+
+# Pipeline cycle interval in seconds. Source of truth: HADriver
+# constructor at qsh/drivers/ha/driver.py:122
+# (self._cycle_interval = config.get("cycle_interval", 30)). If the
+# cycle interval is ever made per-install-tunable beyond the default,
+# plumb the value through here from the driver rather than leaving the
+# constant.
+PIPELINE_CYCLE_SECONDS = 30.0
+
+# Safety margin (cycles) added on top of the debounce-derived wait.
+# Sized for typical R290 compressor cold-start response: 90-180 s from
+# command receipt to observable power draw crossing the 0.1 kW threshold
+# in hardware_dispatch's observed_mode classifier. 6 cycles = 180 s
+# covers the upper end of normal response.
+READBACK_SAFETY_MARGIN_CYCLES = 6
+
+# Legacy alias retained for downstream consumers that imported the
+# pre-INSTRUCTION-249 name (qsh/pipeline/controllers/hardware_controller.py,
+# qsh/pipeline/context.py, qsh/api/state.py). Those modules use this name
+# only as a default for fields/initial state; the live alarm threshold
+# is now derived per-debouncer via _derive_readback_threshold() called
+# inside apply_hardware_control(). Binding to the floor preserves their
+# behaviour at the legacy value.
+READBACK_MISMATCH_ALARM_THRESHOLD = READBACK_MISMATCH_FLOOR_CYCLES
+
+
+def _derive_readback_threshold(mode_debounce_time_s: float) -> int:
+    """Compute the readback mismatch alarm threshold (in cycles) for a
+    given mode-write debounce time.
+
+    Logic: the operator alarm must not fire before the debouncer has
+    permitted the corresponding mode-write to land AND the HP has had
+    time to respond observably. Threshold is at least
+    ceil(mode_debounce_time / cycle_time) + safety_margin, floored at
+    READBACK_MISMATCH_FLOOR_CYCLES.
+    """
+    debounce_cycles = int(math.ceil(mode_debounce_time_s / PIPELINE_CYCLE_SECONDS))
+    derived = debounce_cycles + READBACK_SAFETY_MARGIN_CYCLES
+    return max(derived, READBACK_MISMATCH_FLOOR_CYCLES)
 
 
 # ========================================================================
@@ -450,17 +493,37 @@ def apply_hardware_control(
     # a real outage. Log severity still uses should_update_mode to distinguish
     # "we just tried and it didn't stick" (WARNING) from "quiescent mismatch"
     # (INFO), and ERROR is raised on threshold crossing.
+    #
+    # INSTRUCTION-249 Task 1: the alarm threshold is derived per-debouncer
+    # from mode_debounce_time so it scales with the configured write budget.
+    # The legacy hardcoded 5-cycle threshold fired before the debouncer
+    # could even permit the next mode-write at any mode_writes_per_hour in
+    # [3,6], rendering the alarm meaningless on tight write budgets.
+    readback_threshold = _derive_readback_threshold(debouncer.mode_debounce_time)
+    if not getattr(debouncer, "_readback_threshold_logged", False):
+        logging.info(
+            "Readback mismatch ERROR threshold = %d cycles (%.0fs) "
+            "(mode_debounce_time=%.0fs, safety_margin=%d cycles, "
+            "floor=%d cycles)",
+            readback_threshold,
+            readback_threshold * PIPELINE_CYCLE_SECONDS,
+            debouncer.mode_debounce_time,
+            READBACK_SAFETY_MARGIN_CYCLES,
+            READBACK_MISMATCH_FLOOR_CYCLES,
+        )
+        debouncer._readback_threshold_logged = True
+
     new_mismatch_count = prev_mismatch_count
     if hp_power_kw is not None and optimal_mode is not None:
         observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
         if observed_mode != optimal_mode:
             new_mismatch_count = prev_mismatch_count + 1
-            if new_mismatch_count >= READBACK_MISMATCH_ALARM_THRESHOLD:
+            if new_mismatch_count >= readback_threshold:
                 logging.error(
                     "Mode readback mismatch persisted for %d cycles "
                     "(threshold %d) — HP not responding to commanded '%s'. "
                     "Check Octopus API status and HP connectivity.",
-                    new_mismatch_count, READBACK_MISMATCH_ALARM_THRESHOLD, optimal_mode,
+                    new_mismatch_count, readback_threshold, optimal_mode,
                 )
             elif should_update_mode:
                 logging.warning(
