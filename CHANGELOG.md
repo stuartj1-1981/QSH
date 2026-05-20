@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [1.4.5] — 2026-05-20
+
+### Added
+- Home page: "Effective X.X°C — N of M rooms overridden" sub-line
+  appears beneath the "At Comfort" badge during comfort-schedule
+  windows, when one or more rooms have diverged from the commanded
+  comfort target.
+- Settings page surfaces the last permanent telemetry-push failure
+  with the server's rejection reason, instead of only showing that
+  a push failed.
+- Source selection now considers the active tariff window when
+  choosing between configured heat sources.
+
+### Changed
+- Hot water source detection unified across heating modes for more
+  consistent behaviour on Home Assistant installs.
+- Live page updates render faster — eliminated a per-cycle render
+  cascade across the Live subtree.
+- Schedule resolvers now treat times as explicit timezone-aware
+  values, eliminating DST-transition ambiguity.
+
+### Fixed
+- Comfort schedules now propagate correctly to all rooms on MQTT
+  installs, even when individual rooms have persisted thermostat
+  targets. Rooms with a deliberate per-room override continue to
+  be respected.
+- Tooltips no longer clip at the right or bottom screen edges.
+
 ## [1.4.4] — 2026-05-18
 
 ### Added

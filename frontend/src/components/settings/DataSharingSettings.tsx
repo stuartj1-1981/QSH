@@ -1,7 +1,8 @@
 // Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
 import { useState, useEffect } from 'react'
-import { Save, Loader2, BarChart3 } from 'lucide-react'
+import { Save, Loader2, BarChart3, AlertCircle } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
+import { useStatus } from '../../hooks/useStatus'
 import { UK_REGIONS } from '../../lib/regions'
 import { cn } from '../../lib/utils'
 import type { TelemetryYaml, Driver } from '../../types/config'
@@ -49,6 +50,9 @@ export function DataSharingSettings({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const { patch, saving, error } = usePatchConfig()
+  // INSTRUCTION-255: read last permanent telemetry failure for diagnostics.
+  const { data: status } = useStatus()
+  const lastFailure = status?.telemetry_last_permanent_failure ?? null
 
   const save = async () => {
     setValidationError(null)
@@ -255,6 +259,30 @@ export function DataSharingSettings({
       >
         Read the full privacy policy
       </a>
+
+      {/* INSTRUCTION-255: last permanent telemetry-push failure diagnostic.
+          Visible only when the backend has a recorded failure; cleared on
+          the next successful push. */}
+      {lastFailure && (
+        <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-2">
+          <div className="flex items-center gap-3">
+            <AlertCircle size={20} className="text-[var(--text-muted)]" />
+            <span className="text-sm font-semibold text-[var(--text)]">
+              Last telemetry push failure
+            </span>
+          </div>
+          <p className="text-sm text-[var(--text)]">
+            Status: {lastFailure.status_code} — {lastFailure.detail}
+          </p>
+          <p className="text-xs text-[var(--text-muted)]">
+            Date dropped: {lastFailure.date ?? 'unknown'} · Observed:{' '}
+            {new Date(lastFailure.timestamp * 1000).toLocaleString()}
+          </p>
+          <p className="text-xs text-[var(--text-muted)] italic">
+            This will clear automatically on the next successful telemetry push.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

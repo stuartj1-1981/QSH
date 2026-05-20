@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...signal_bus import InputBlock, OutputBlock
 from ...events import EventKind, EventSpec, get_annunciator
+from ...occupancy.comfort_schedule import get_comfort_schedule_store
 from .client import MQTTClient, MQTTClientConfig
 from ..resolve import ResolvedValue, deep_get, _validate_range
 from ..hot_water_payloads import classify_hot_water_payload
@@ -892,6 +893,28 @@ class MQTTDriver:
             )
             self._comfort_startup_logged = True
 
+        # INSTRUCTION-257 — Comfort-schedule-aware active comfort baseline.
+        # The per-room override gate below must compare each room's resolved
+        # comfort against the value the system is ACTIVELY targeting this
+        # cycle, not the base configured comfort. When the global comfort
+        # schedule is active, its resolved value is what the pipeline will
+        # set ctx.target_temp to in sensor_controller._setup_room_targets.
+        # Comparing against the base would emit overrides for every room
+        # whose persisted pid_target_internal happens to differ from base —
+        # silently masking the schedule for those rooms.
+        #
+        # External MQTT writes (room_comfort_rv.source == "external") still
+        # win unconditionally below. This baseline change only affects the
+        # implicit "internal value differs from base" branch.
+        #
+        # Coherence: ComfortScheduleStore.resolve is deterministic on its
+        # timestamp argument. Passing `now` (which is also InputBlock.timestamp)
+        # pins this resolve to the same instant the orchestrator-emitted
+        # ctx.timestamp drives the sensor_controller resolve, eliminating
+        # schedule-boundary races between the two callers within a cycle.
+        _cs_temp = get_comfort_schedule_store().resolve(timestamp=now)
+        active_comfort = _cs_temp if _cs_temp is not None else comfort_temp_rv.value
+
         # ── Per-room away and comfort_temp from control topics ──
         per_zone_away: Dict[str, float] = {}
         per_room_comfort: Dict[str, float] = {}
@@ -914,19 +937,22 @@ class MQTTDriver:
                 per_zone_away[room_slug] = room_days_rv.value
 
             # Per-room comfort override: MQTT cache → room's pid_target_internal
-            # → system comfort_temp (as default). Emitted into the overrides
+            # → schedule-active comfort (as default). Emitted into the overrides
             # map only when the resolved value is external OR differs from
-            # the system comfort; otherwise the base target is already correct.
+            # the schedule-active comfort; otherwise the base target is already
+            # correct. INSTRUCTION-257 — baseline is `active_comfort`, NOT
+            # `comfort_temp_rv.value`, so persisted per-room values matching
+            # the base do not silently override an active schedule.
             room_comfort_rv = self._resolve_mqtt_control(
                 cache,
                 f"control/{room_slug}/comfort_temp",
                 f"room_internals.{room_slug}.pid_target_internal",
-                default=comfort_temp_rv.value,
+                default=active_comfort,
                 validate=lambda s: _validate_range(s, 10.0, 30.0),
             )
             if (
                 room_comfort_rv.source == "external"
-                or room_comfort_rv.value != comfort_temp_rv.value
+                or room_comfort_rv.value != active_comfort
             ):
                 per_room_comfort[room_slug] = room_comfort_rv.value
 

@@ -8,6 +8,11 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ..state import shared_state
+from qsh.utils import (
+    get_local_tz,
+    get_local_tz_source,
+    is_rl_temporal_feature_migration_first_boot,
+)
 
 router = APIRouter()
 
@@ -60,5 +65,12 @@ def health_check():
         "cycle_number": snap.cycle_number,
         "api_version": "0.1.0",
         "addon_version": _ADDON_VERSION,
+        # INSTRUCTION-252 — operator triage surface for "schedule is off by an
+        # hour" reports. local_timezone is the resolved IANA name; source names
+        # which step of the precedence chain won (supervisor/config/env/default).
+        # rl_temporal_feature_migration is True only on the first boot post-fix.
+        "local_timezone": str(get_local_tz()),
+        "local_timezone_source": get_local_tz_source(),
+        "rl_temporal_feature_migration": is_rl_temporal_feature_migration_first_boot(),
         "driver": driver,
     }

@@ -20,6 +20,16 @@ from qsh.tariff import (
 )
 
 
+# INSTRUCTION-257 — threshold for "this room's effective target meaningfully
+# diverges from the commanded comfort temperature." 0.3°C sits comfortably
+# below the human visual perception threshold for indoor temperature (~0.5°C)
+# and above the noise floor of a typical room sensor (±0.1°C). Single source
+# of truth for the Home page divergence sub-line; the frontend reads the
+# pre-computed rooms_overridden_count field rather than re-applying this
+# threshold.
+COMFORT_DIVERGENCE_THRESHOLD_C: float = 0.3
+
+
 @dataclass
 class ControlSource:
     """Describes the source of a resolved control value for the frontend."""
@@ -56,6 +66,17 @@ class CycleSnapshot:
     # Comfort schedule
     comfort_schedule_active: bool = False
     comfort_temp_active: float = 21.0
+    # INSTRUCTION-257 — mean of post-override per-room targets. Diverges from
+    # comfort_temp_active when per-room overrides (MQTT, persistent zones,
+    # away mode, setback, recovery) modify individual room targets away from
+    # the commanded comfort. Drives the Home page divergence gate.
+    comfort_temp_effective: float = 21.0
+    # INSTRUCTION-257 — count of rooms whose effective target diverges from
+    # comfort_temp_active by at least COMFORT_DIVERGENCE_THRESHOLD_C. Drives
+    # the Home page sub-line "Effective X.X°C — N of M rooms overridden."
+    # Backend-computed so the frontend does not need to recompute from
+    # status.rooms (which is absent on legacy snapshots).
+    rooms_overridden_count: int = 0
 
     # Recovery & capacity metrics
     recovery_time_hours: float = 0.0
@@ -321,6 +342,35 @@ def serialise_tariff_providers_status(
     dataclasses) emits the documented field shape."""
     from dataclasses import asdict
     return {fuel: asdict(status) for fuel, status in statuses.items()}
+
+
+def _comfort_effective_fields(ctx) -> Dict[str, Any]:
+    """Return the two INSTRUCTION-257 snapshot fields as a dict.
+
+    `comfort_temp_effective`: mean of post-override per-room targets.
+    `rooms_overridden_count`: rooms whose effective target diverges from
+    `comfort_temp_active` by at least COMFORT_DIVERGENCE_THRESHOLD_C.
+
+    Returns sensible fallbacks (mean → comfort_temp_active, count → 0)
+    when `ctx.room_targets` is absent, not a dict, or empty. The defensive
+    isinstance check is required because test harnesses use MagicMock for
+    ctx, whose attribute access returns a truthy MagicMock — a plain
+    truthy-or-empty check would divide by zero.
+    """
+    room_targets = getattr(ctx, "room_targets", None)
+    if not isinstance(room_targets, dict) or not room_targets:
+        return {
+            "comfort_temp_effective": ctx.comfort_temp_active,
+            "rooms_overridden_count": 0,
+        }
+    total = float(sum(room_targets.values()))
+    return {
+        "comfort_temp_effective": total / len(room_targets),
+        "rooms_overridden_count": sum(
+            1 for v in room_targets.values()
+            if abs(v - ctx.comfort_temp_active) >= COMFORT_DIVERGENCE_THRESHOLD_C
+        ),
+    }
 
 
 def _resolve_snapshot_hp_cop(ctx) -> Optional[float]:
@@ -639,6 +689,13 @@ class SharedState:
             away_days=ctx.inputs.away_days if ctx.inputs else 0.0,
             comfort_schedule_active=ctx.comfort_schedule_active,
             comfort_temp_active=ctx.comfort_temp_active,
+            # INSTRUCTION-257 — mean of post-override per-room targets, plus
+            # the per-room divergence count that drives the Home page sub-line.
+            # `ctx.room_targets` is the final effective per-room target dict
+            # after the full override stack (per-room comfort, persistent
+            # zones, away, setback, recovery). Computed in a single helper to
+            # avoid duplicating the empty-/non-dict guard.
+            **_comfort_effective_fields(ctx),
             active_source_type=ctx.active_source_type,
             source_caps=ctx.source_caps,
             active_source_input_power_kw=ctx.active_source_input_power_kw,

@@ -1,9 +1,11 @@
 // Performance: not in 30s WS render path — React.memo not required.
 // OccupancyTimeline is only rendered from Away.tsx which fetches its own history
 // data and does not subscribe to useLive().
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import type { HistoryPoint } from '../hooks/useHistory'
 import { formatTimeRange } from '../lib/utils'
+import { computePopoverCoords, type PopoverCoords } from '../lib/popover'
 
 interface OccupancyTimelineProps {
   roomHistory: Record<string, HistoryPoint[]>
@@ -14,7 +16,9 @@ interface TooltipState {
   room: string
   state: string
   range: string
-  xPct: number // horizontal position (0-100) within the strip row
+  anchorX: number      // viewport-space X for popover centring
+  triggerTop: number   // viewport-space top of the row band
+  triggerBottom: number // viewport-space bottom of the row band
 }
 
 const OCC_COLORS: Record<string, string> = {
@@ -27,24 +31,35 @@ const OCC_COLORS: Record<string, string> = {
 const MIN_SEGMENT_SECONDS = 60
 
 /**
- * Compute the horizontal position of the mouse within the strip row as a
- * percentage (0-100). Defensive against e.currentTarget being null — React
- * may clear synthetic-event fields after the handler returns, and even if
- * this helper is always called synchronously, a cheap guard costs nothing.
+ * Capture the viewport-space anchor for the tooltip in a single
+ * getBoundingClientRect read. All synthetic-event reads happen synchronously
+ * inside the mouse handler so React never re-examines the event after the
+ * handler returns (INSTRUCTION-103 invariant).
  */
-function computeXPct(e: React.MouseEvent<HTMLDivElement>): number {
+function captureAnchor(e: React.MouseEvent<HTMLDivElement>): { anchorX: number; triggerTop: number; triggerBottom: number } | null {
   const target = e.currentTarget
-  if (!target) return 50  // Fallback — centre the tooltip over the strip.
+  if (!target) return null
   const row = target.parentElement
-  if (!row) return 50
-  const rect = row.getBoundingClientRect()
-  if (rect.width === 0) return 50
-  return Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100))
+  if (!row) return null
+  const r = row.getBoundingClientRect()
+  return { anchorX: e.clientX, triggerTop: r.top, triggerBottom: r.bottom }
 }
 
 export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps) {
   const rooms = Object.keys(roomHistory)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [coords, setCoords] = useState<PopoverCoords | null>(null)
+
+  const measureTooltip = useCallback((node: HTMLDivElement | null) => {
+    if (!node || !tooltip) return
+    setCoords(
+      computePopoverCoords(
+        { triggerTop: tooltip.triggerTop, triggerBottom: tooltip.triggerBottom, anchorX: tooltip.anchorX },
+        { width: node.offsetWidth, height: node.offsetHeight },
+      ),
+    )
+  }, [tooltip])
+
   if (rooms.length === 0) return null
 
   // Find global time range
@@ -73,11 +88,12 @@ export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps
               <span className="text-xs text-[var(--text-muted)] w-24 truncate capitalize">
                 {displayName}
               </span>
-              {/* Strip wrapper: positions the tooltip; overflow stays VISIBLE here so the
-                  tooltip can render above the strip. */}
+              {/* Strip wrapper: positions the strip itself. Tooltip is portaled to
+                  document.body so this no longer needs to be a positioning context
+                  for the tooltip. */}
               <div className="flex-1 relative">
                 {/* Segments container: overflow-hidden so the rounded corners clip the
-                    coloured fills. Tooltip is NOT a child — would be clipped. */}
+                    coloured fills. */}
                 <div className="h-6 rounded overflow-hidden flex">
                   {segments.map((seg, i) => {
                     const width = ((seg.end - seg.start) / range) * 100
@@ -95,39 +111,28 @@ export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps
                         title={`${displayName} — ${seg.state} ${range_str}`}
                         className="h-full min-w-[1px] cursor-default"
                         onMouseEnter={(e) => {
-                          // Capture xPct synchronously — e.currentTarget is valid here because
+                          // Capture anchor synchronously — e.currentTarget is valid here because
                           // we are inside the event handler. Passing a plain object (not an
                           // updater) means React never re-reads the event after this function
                           // returns. This is the crash fix from INSTRUCTION-103.
-                          const xPct = computeXPct(e)
+                          const anchor = captureAnchor(e)
+                          if (!anchor) return
                           setTooltip({
                             room: displayName,
                             state: seg.state,
                             range: range_str,
-                            xPct,
+                            ...anchor,
                           })
+                          setCoords(null)
                         }}
-                        onMouseLeave={() => setTooltip(null)}
+                        onMouseLeave={() => {
+                          setTooltip(null)
+                          setCoords(null)
+                        }}
                       />
                     )
                   })}
                 </div>
-                {/* Tooltip is a sibling, not a child, of the clipping container. */}
-                {tooltip && tooltip.room === displayName && (
-                  <div
-                    className="absolute -top-10 z-10 pointer-events-none px-2 py-1 rounded shadow-lg text-xs whitespace-nowrap
-                               bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text)]"
-                    style={{
-                      left: `${tooltip.xPct}%`,
-                      transform: 'translateX(-50%)',
-                    }}
-                  >
-                    <div className="font-medium capitalize">{tooltip.room}</div>
-                    <div className="text-[var(--text-muted)]">
-                      {tooltip.state} · {tooltip.range}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           )
@@ -141,6 +146,26 @@ export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps
           </div>
         ))}
       </div>
+      {tooltip && createPortal(
+        <div
+          ref={measureTooltip}
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: coords?.top ?? 0,
+            left: coords?.left ?? 0,
+            visibility: coords ? 'visible' : 'hidden',
+          }}
+          className="z-[60] pointer-events-none px-2 py-1 rounded shadow-lg text-xs whitespace-nowrap
+                     bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text)]"
+        >
+          <div className="font-medium capitalize">{tooltip.room}</div>
+          <div className="text-[var(--text-muted)]">
+            {tooltip.state} · {tooltip.range}
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

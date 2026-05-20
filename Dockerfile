@@ -33,6 +33,11 @@ RUN npm run build
 # --- Stage 2: runtime ---
 FROM python:3.12-slim AS runtime
 
+# INSTRUCTION-252 — pin container clock to UTC so any incidental naive
+# datetime.now() callers (e.g. RL checkpoint timestamps) produce deterministic
+# UTC ISO strings. Schedule resolvers no longer depend on this for correctness.
+ENV TZ=UTC
+
 # Docker sets TARGETARCH automatically when invoked via buildx.
 # Supported values: amd64, arm64.
 ARG TARGETARCH
