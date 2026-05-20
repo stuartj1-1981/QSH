@@ -3,7 +3,7 @@ import type { RefObject } from 'react'
 import { BuildingEngine } from '../lib/buildingEngine'
 import type { BuildingLiveData, BuildingViewMode } from '../lib/buildingTypes'
 import { useBuildingLayout } from '../hooks/useBuildingLayout'
-import { useLive } from '../hooks/useLive'
+import { useLiveData } from '../hooks/useLive'
 import type { CycleMessage, RoomState } from '../types/api'
 import type { RoomEnvelopeYaml, FaceValue } from '../types/config'
 import { normaliseFaceRefs } from '../types/config'
@@ -108,7 +108,7 @@ function EnvelopeList({ envelope }: { envelope: RoomEnvelopeYaml }) {
 
 export function Building3DView({ engineRef, dark = true }: Building3DViewProps) {
   const { layout, rooms, layoutRooms } = useBuildingLayout()
-  const { data: live } = useLive()
+  const { data: live } = useLiveData()
   const [viewMode, setViewMode] = useState<BuildingViewMode>('3d')
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
 

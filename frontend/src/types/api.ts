@@ -240,6 +240,13 @@ export interface StatusResponse {
   comfort_temp: number
   comfort_schedule_active?: boolean
   comfort_temp_active?: number
+  // INSTRUCTION-257 — mean of post-override per-room targets and count of
+  // rooms diverging from comfort_temp_active by >= COMFORT_DIVERGENCE_THRESHOLD_C
+  // (0.3°C, single-sourced backend-side). Optional during the rollout window;
+  // pre-257 snapshots will not carry these fields, so the Home page tolerates
+  // their absence by treating the count as 0 (no divergence sub-line shown).
+  comfort_temp_effective?: number
+  rooms_overridden_count?: number
   optimal_flow: number
   applied_flow: number
   optimal_mode: string
@@ -285,6 +292,15 @@ export interface StatusResponse {
   forecast_predicted_decisions?: Record<string, Record<string, PredictionRecord>>
   twin_calibration_drift?: Record<string, boolean>
   active_alarms?: AlarmEvent[]
+  // INSTRUCTION-255: most recent permanent telemetry-push failure for the
+  // Settings → Data Sharing diagnostic block. `null` when no failure has
+  // been recorded (or has been cleared by a subsequent successful push).
+  telemetry_last_permanent_failure?: {
+    timestamp: number
+    status_code: number
+    detail: string
+    date: string | null
+  } | null
 }
 
 export interface RoomsResponse {
@@ -308,6 +324,8 @@ export interface CycleMessage {
     comfort_temp: number
     comfort_schedule_active?: boolean
     comfort_temp_active?: number
+    comfort_temp_effective?: number
+    rooms_overridden_count?: number
     optimal_flow: number
     applied_flow: number
     optimal_mode: string

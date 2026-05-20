@@ -13,6 +13,7 @@ from ...utils import safe_float
 from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
 from ..resolve import resolve_value, deep_get
 from ..hot_water_payloads import classify_hot_water_payload
+from ...hw_enable import resolve_hw_entity_ids
 from ...events import EventKind, EventSpec, get_annunciator
 
 
@@ -1232,8 +1233,9 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.has_solar = energy_data["has_solar"]
     data.has_battery = energy_data["has_battery"]
 
-    water_heater_entity = config["entities"].get("water_heater")
-    hw_boolean_entity = config["entities"].get("hot_water_boolean")
+    _hw_ids = resolve_hw_entity_ids(config)
+    water_heater_entity = _hw_ids["water_heater"]
+    hw_boolean_entity = _hw_ids["hot_water_boolean"]
 
     wh_value: Optional[bool] = None
     wh_live: bool = False

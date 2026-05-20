@@ -1,5 +1,7 @@
-import { memo, useState, useCallback, useRef } from 'react'
+import { memo, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import type { HistoryPoint } from '../hooks/useHistory'
+import { computePopoverCoords, type PopoverCoords } from '../lib/popover'
 
 interface OperatingStateTimelineProps {
   data: HistoryPoint[]
@@ -54,12 +56,18 @@ const MIN_LABEL_WIDTH_PCT = 8
 
 interface TooltipState {
   visible: boolean
-  x: number
-  y: number
+  anchorX: number
+  triggerTop: number
+  triggerBottom: number
   state: string
   startTime: string
   endTime: string
   duration: string
+}
+
+const EMPTY_TOOLTIP: TooltipState = {
+  visible: false, anchorX: 0, triggerTop: 0, triggerBottom: 0,
+  state: '', startTime: '', endTime: '', duration: '',
 }
 
 function formatTimestamp(epoch: number): string {
@@ -74,40 +82,42 @@ function formatDuration(seconds: number): string {
 }
 
 export const OperatingStateTimeline = memo(function OperatingStateTimeline({ data, hours }: OperatingStateTimelineProps) {
-  const barRef = useRef<HTMLDivElement>(null)
-  const [tooltip, setTooltip] = useState<TooltipState>({ visible: false, x: 0, y: 0, state: '', startTime: '', endTime: '', duration: '' })
+  const [tooltip, setTooltip] = useState<TooltipState>(EMPTY_TOOLTIP)
+  const [coords, setCoords] = useState<PopoverCoords | null>(null)
 
-  const handleMouseEnter = useCallback((seg: { start: number; end: number; state: string }, e: React.MouseEvent) => {
-    const rect = barRef.current?.getBoundingClientRect()
-    if (!rect) return
+  const setFromEvent = useCallback((seg: { start: number; end: number; state: string }, e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.currentTarget
+    if (!target) return
+    const bar = target.parentElement
+    if (!bar) return
+    const r = bar.getBoundingClientRect()
     setTooltip({
       visible: true,
-      x: e.clientX - rect.left,
-      y: 0,
+      anchorX: e.clientX,
+      triggerTop: r.top,
+      triggerBottom: r.bottom,
       state: seg.state,
       startTime: formatTimestamp(seg.start),
       endTime: formatTimestamp(seg.end),
       duration: formatDuration(seg.end - seg.start),
     })
-  }, [])
-
-  const handleMouseMove = useCallback((seg: { start: number; end: number; state: string }, e: React.MouseEvent) => {
-    const rect = barRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setTooltip({
-      visible: true,
-      x: e.clientX - rect.left,
-      y: 0,
-      state: seg.state,
-      startTime: formatTimestamp(seg.start),
-      endTime: formatTimestamp(seg.end),
-      duration: formatDuration(seg.end - seg.start),
-    })
+    setCoords(null)
   }, [])
 
   const handleMouseLeave = useCallback(() => {
     setTooltip(prev => ({ ...prev, visible: false }))
+    setCoords(null)
   }, [])
+
+  const measureTooltip = useCallback((node: HTMLDivElement | null) => {
+    if (!node || !tooltip.visible) return
+    setCoords(
+      computePopoverCoords(
+        { triggerTop: tooltip.triggerTop, triggerBottom: tooltip.triggerBottom, anchorX: tooltip.anchorX },
+        { width: node.offsetWidth, height: node.offsetHeight },
+      ),
+    )
+  }, [tooltip])
 
   if (data.length === 0) {
     return (
@@ -144,7 +154,7 @@ export const OperatingStateTimeline = memo(function OperatingStateTimeline({ dat
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 mb-4">
       <h3 className="text-sm font-semibold mb-2">Operating State ({hours}h)</h3>
-      <div ref={barRef} className="relative">
+      <div className="relative">
         <div className="h-7 rounded-md overflow-hidden flex">
           {segments.map((seg, i) => {
             const widthPct = ((seg.end - seg.start) / range) * 100
@@ -153,8 +163,8 @@ export const OperatingStateTimeline = memo(function OperatingStateTimeline({ dat
                 key={i}
                 style={{ width: `${widthPct}%`, backgroundColor: getStateColor(seg.state) }}
                 className="h-full min-w-[1px] relative"
-                onMouseEnter={(e) => handleMouseEnter(seg, e)}
-                onMouseMove={(e) => handleMouseMove(seg, e)}
+                onMouseEnter={(e) => setFromEvent(seg, e)}
+                onMouseMove={(e) => setFromEvent(seg, e)}
                 onMouseLeave={handleMouseLeave}
               >
                 {widthPct >= MIN_LABEL_WIDTH_PCT && (
@@ -166,15 +176,6 @@ export const OperatingStateTimeline = memo(function OperatingStateTimeline({ dat
             )
           })}
         </div>
-        {tooltip.visible && (
-          <div
-            className="absolute z-50 pointer-events-none rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-lg px-3 py-2 whitespace-nowrap"
-            style={{ left: tooltip.x, bottom: '100%', transform: 'translateX(-50%)', marginBottom: 4 }}
-          >
-            <div className="text-xs font-semibold text-[var(--text)]">{tooltip.state}</div>
-            <div className="text-xs text-[var(--text-muted)]">{tooltip.startTime} – {tooltip.endTime} ({tooltip.duration})</div>
-          </div>
-        )}
       </div>
       <div className="flex flex-wrap gap-3 mt-2">
         {uniqueStates.map(state => (
@@ -187,6 +188,23 @@ export const OperatingStateTimeline = memo(function OperatingStateTimeline({ dat
           </div>
         ))}
       </div>
+      {tooltip.visible && createPortal(
+        <div
+          ref={measureTooltip}
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: coords?.top ?? 0,
+            left: coords?.left ?? 0,
+            visibility: coords ? 'visible' : 'hidden',
+          }}
+          className="z-[60] pointer-events-none rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-lg px-3 py-2 whitespace-nowrap"
+        >
+          <div className="text-xs font-semibold text-[var(--text)]">{tooltip.state}</div>
+          <div className="text-xs text-[var(--text-muted)]">{tooltip.startTime} – {tooltip.endTime} ({tooltip.duration})</div>
+        </div>,
+        document.body,
+      )}
     </div>
   )
 })

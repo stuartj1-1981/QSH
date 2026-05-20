@@ -15,7 +15,7 @@ import { LiveView } from './pages/LiveView'
 import { Scop } from './pages/Scop'
 import { Forecast } from './pages/Forecast'
 import { Valves } from './pages/Valves'
-import { useLive } from './hooks/useLive'
+import { useLiveConnection } from './hooks/useLive'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
@@ -40,7 +40,7 @@ export default function App() {
     localStorage.setItem('qsh-engineering', String(engineering))
   }, [engineering])
 
-  const { disconnectedSince } = useLive()
+  const { disconnectedSince } = useLiveConnection()
 
   // Guard: if engineering toggle is off and current page is engineering-only, show home
   const activePage = !engineering && (ENGINEERING_PAGES as readonly string[]).includes(page)

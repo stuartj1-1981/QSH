@@ -1,11 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { HelpCircle, X } from 'lucide-react'
+import { computePopoverCoords, type PopoverCoords } from '../lib/popover'
 
-const POPOVER_WIDTH = 224           // matches Tailwind w-56
-const VIEWPORT_MARGIN = 8           // px gutter from viewport edges
-const VERTICAL_GAP = 8              // px gap between trigger and popover
-const VERTICAL_FLIP_THRESHOLD = 160 // px below which we flip default 'above' to 'below'
+const POPOVER_WIDTH = 224 // matches Tailwind w-56
 
 interface HelpTipProps {
   text: string
@@ -15,7 +13,7 @@ interface HelpTipProps {
 
 export function HelpTip({ text, size = 14, className }: HelpTipProps) {
   const [open, setOpen] = useState(false)
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
+  const [coords, setCoords] = useState<PopoverCoords | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
@@ -34,20 +32,12 @@ export function HelpTip({ text, size = 14, className }: HelpTipProps) {
     popRef.current = node
     if (!node || !btnRef.current) return
     const rect = btnRef.current.getBoundingClientRect()
-    const popHeight = node.offsetHeight
-    const placement = rect.top >= VERTICAL_FLIP_THRESHOLD ? 'above' : 'below'
-    const top = placement === 'above'
-      ? rect.top - popHeight - VERTICAL_GAP
-      : rect.bottom + VERTICAL_GAP
-    const triggerCenterX = rect.left + rect.width / 2
-    let left = triggerCenterX - POPOVER_WIDTH / 2
-    const maxLeft = window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN
-    if (maxLeft < VIEWPORT_MARGIN) {
-      left = VIEWPORT_MARGIN
-    } else {
-      left = Math.min(Math.max(left, VIEWPORT_MARGIN), maxLeft)
-    }
-    setCoords({ top, left })
+    setCoords(
+      computePopoverCoords(
+        { triggerTop: rect.top, triggerBottom: rect.bottom, anchorX: rect.left + rect.width / 2 },
+        { width: POPOVER_WIDTH, height: node.offsetHeight },
+      ),
+    )
   }, [])
 
   useEffect(() => {

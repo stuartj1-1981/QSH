@@ -20,6 +20,7 @@ import { Wifi, WifiOff, Plane, Home as HomeIcon, Info } from 'lucide-react'
 import { useAwayState, useSetAway } from '../hooks/useAway'
 import { apiUrl } from '../lib/api'
 import { buildEntityMap } from '../hooks/entityMap'
+import { formatTemp } from '../lib/utils'
 
 type Page = 'home' | 'rooms' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian'
 
@@ -151,6 +152,20 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const minLoadPct = status?.min_load_pct ?? initial?.min_load_pct ?? 0
   const comfortScheduleActive = status?.comfort_schedule_active ?? initial?.comfort_schedule_active ?? false
   const comfortTempActive = status?.comfort_temp_active ?? initial?.comfort_temp_active ?? comfortTemp
+  // INSTRUCTION-257 — effective per-room target divergence display. Both
+  // fields are optional (legacy snapshots lack them); the gate falls back
+  // to "no divergence" when either field is missing.
+  const comfortTempEffective = status?.comfort_temp_effective ?? initial?.comfort_temp_effective ?? null
+  const roomsOverriddenCount = status?.rooms_overridden_count ?? initial?.rooms_overridden_count ?? 0
+  // Prefer the live rooms dict (canonical when WebSocket is connected); fall
+  // back to the REST snapshot's rooms_total count when only the initial
+  // fetch has populated.
+  const totalRoomsCount = rooms ? Object.keys(rooms).length : (initial?.rooms_total ?? 0)
+  const showComfortDivergence = (
+    comfortScheduleActive
+    && comfortTempEffective != null
+    && roomsOverriddenCount > 0
+  )
   const hpActive = live?.status?.applied_mode === 'heat'
   const optimalMode = status?.optimal_mode ?? initial?.optimal_mode
 
@@ -300,6 +315,18 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         onComfortTempChange={handleComfortTempChange}
         onControlModeChange={handleControlModeChange}
       />
+
+      {/* INSTRUCTION-257 — effective comfort divergence sub-line. Surfaces
+          when the comfort schedule is active and per-room overrides have
+          pulled the effective house target away from the commanded value. */}
+      {showComfortDivergence && (
+        <div
+          data-testid="comfort-divergence-line"
+          className="-mt-2 mb-4 ml-4 text-xs text-[var(--text-muted)]"
+        >
+          Effective {formatTemp(comfortTempEffective)} — {roomsOverriddenCount} of {totalRoomsCount} rooms overridden
+        </div>
+      )}
 
       {/* Flow limits — min/max flow temperature steppers */}
       <FlowLimits

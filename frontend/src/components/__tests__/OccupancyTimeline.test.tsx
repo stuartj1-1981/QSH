@@ -21,7 +21,7 @@ describe('OccupancyTimeline', () => {
     expect(segments.length).toBe(2)
   })
 
-  it('shows a React tooltip with state and arrow separator on mouseEnter', () => {
+  it('portals a tooltip with state and mid-dot separator on mouseEnter', () => {
     const t0 = Date.UTC(2026, 3, 15, 8, 0, 0) / 1000
     const t1 = Date.UTC(2026, 3, 15, 10, 30, 0) / 1000
     const t2 = Date.UTC(2026, 3, 15, 14, 0, 0) / 1000
@@ -39,19 +39,16 @@ describe('OccupancyTimeline', () => {
     const firstSegment = segments[0] as HTMLElement
     fireEvent.mouseEnter(firstSegment)
 
-    // The rendered tooltip content contains the state and the arrow.
-    const text = container.textContent ?? ''
-    expect(text).toMatch(/occupied|unoccupied/)
-    expect(text).toContain('\u2192')
-
-    // Guard against regression — the tooltip must be rendered with a left style
-    // (synchronous capture of xPct succeeded). If the handler threw, the
-    // tooltip element would not be in the DOM.
-    const tooltipEl = container.querySelector('[style*="left:"]')
+    const tooltipEl = document.body.querySelector('[role="tooltip"]')
     expect(tooltipEl).not.toBeNull()
+    expect(tooltipEl?.textContent ?? '').toMatch(/occupied|unoccupied/)
+    expect(tooltipEl?.textContent ?? '').toContain('·') // mid-dot
+
+    // Portal escape: tooltip is NOT a descendant of the test render container.
+    expect(container.contains(tooltipEl)).toBe(false)
   })
 
-  it('hides the React tooltip on mouseLeave', () => {
+  it('removes the portaled tooltip on mouseLeave', () => {
     const t0 = Date.UTC(2026, 3, 15, 8, 0, 0) / 1000
     const t1 = Date.UTC(2026, 3, 15, 10, 30, 0) / 1000
     const t2 = Date.UTC(2026, 3, 15, 14, 0, 0) / 1000
@@ -67,16 +64,10 @@ describe('OccupancyTimeline', () => {
     const segments = container.querySelectorAll('[title]')
     const firstSegment = segments[0] as HTMLElement
     fireEvent.mouseEnter(firstSegment)
-
-    // Arrow should be visible inside some rendered element.
-    const dotSeparator = '\u00b7'
-    expect(container.textContent).toContain(dotSeparator)
+    expect(document.body.querySelector('[role="tooltip"]')).not.toBeNull()
 
     fireEvent.mouseLeave(firstSegment)
-    // After mouseLeave, no rendered tooltip should contain the mid-dot separator
-    // (the arrow can still appear in the underlying title attribute, but the
-    // React tooltip uses the mid-dot and is removed).
-    expect(container.textContent).not.toContain(dotSeparator)
+    expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
   })
 
   it('keeps a title attribute on every segment for screen-reader accessibility', () => {
@@ -97,7 +88,7 @@ describe('OccupancyTimeline', () => {
     const titles = Array.from(segments).map(s => s.getAttribute('title') ?? '')
     expect(titles.some(t => t.includes('living room'))).toBe(true)
     expect(titles.some(t => t.includes('occupied'))).toBe(true)
-    expect(titles.some(t => t.includes('\u2192'))).toBe(true)
+    expect(titles.some(t => t.includes('→'))).toBe(true)
   })
 
   it('renders nothing when roomHistory is empty', () => {

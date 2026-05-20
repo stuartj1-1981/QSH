@@ -82,6 +82,17 @@ def get_status():
             telemetry_revoked = bool(snap.telemetry_revoked)
     else:
         telemetry_revoked = bool(snap.telemetry_revoked)
+
+    # INSTRUCTION-255: surface last permanent telemetry failure for diagnostics.
+    # Same wiring shape as telemetry_revoked above — reuse the resolved
+    # telemetry reference. Best-effort: getter exceptions degrade to None
+    # rather than 500ing the whole route.
+    telemetry_last_failure: Optional[dict] = None
+    if telemetry is not None and hasattr(telemetry, "get_last_permanent_failure"):
+        try:
+            telemetry_last_failure = telemetry.get_last_permanent_failure()
+        except Exception:
+            telemetry_last_failure = None
     return {
         "timestamp": snap.timestamp,
         "cycle_number": snap.cycle_number,
@@ -93,6 +104,8 @@ def get_status():
         "comfort_temp": snap.comfort_temp,
         "comfort_schedule_active": snap.comfort_schedule_active,
         "comfort_temp_active": snap.comfort_temp_active,
+        "comfort_temp_effective": snap.comfort_temp_effective,
+        "rooms_overridden_count": snap.rooms_overridden_count,
         "optimal_flow": round(snap.optimal_flow, 1),
         "applied_flow": round(snap.applied_flow, 1),
         "optimal_mode": snap.optimal_mode,
@@ -164,6 +177,8 @@ def get_status():
         "control_method": HOUSE_CONFIG.get("control_method", "unknown"),
         # INSTRUCTION-193 Task 4: telemetry revocation flag.
         "telemetry_revoked": telemetry_revoked,
+        # INSTRUCTION-255: last permanent telemetry-push failure diagnostic.
+        "telemetry_last_permanent_failure": telemetry_last_failure,
     }
 
 

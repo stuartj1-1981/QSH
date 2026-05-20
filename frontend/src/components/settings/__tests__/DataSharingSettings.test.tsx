@@ -1,16 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { DataSharingSettings } from '../DataSharingSettings'
+import type { StatusResponse } from '../../../types/api'
 
 const mockPatch = vi.fn()
 vi.mock('../../../hooks/useConfig', () => ({
   usePatchConfig: () => ({ patch: mockPatch, saving: false, error: null }),
 }))
 
+// INSTRUCTION-255: DataSharingSettings now reads useStatus() to surface the
+// last permanent telemetry-push failure. Tests inject a configurable status
+// payload via this mock.
+let mockStatus: Partial<StatusResponse> | null = null
+vi.mock('../../../hooks/useStatus', () => ({
+  useStatus: () => ({ data: mockStatus, error: null }),
+}))
+
 describe('DataSharingSettings', () => {
   beforeEach(() => {
     mockPatch.mockReset()
     mockPatch.mockResolvedValue({ updated: 'test', restart_required: true, message: 'ok' })
+    mockStatus = null
   })
 
   it('renders with no telemetry config — toggle OFF, region hidden, disclaimer unchecked', () => {
@@ -132,5 +142,48 @@ describe('DataSharingSettings', () => {
     )
     fireEvent.click(screen.getByText('Show details'))
     expect(screen.getByText('Status: Not yet registered')).toBeInTheDocument()
+  })
+
+  // -------------------------------------------------------------------------
+  // INSTRUCTION-255 — last-permanent-failure diagnostic block
+  // -------------------------------------------------------------------------
+
+  it('does not render last-failure block when field is null', () => {
+    mockStatus = { telemetry_last_permanent_failure: null }
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    expect(screen.queryByText('Last telemetry push failure')).toBeNull()
+  })
+
+  it('renders last-failure block with status code and detail when field is present', () => {
+    mockStatus = {
+      telemetry_last_permanent_failure: {
+        timestamp: 1779265902.558,
+        status_code: 400,
+        detail: 'heat_sources[0].name invalid: leading underscore reserved',
+        date: '2026-05-20',
+      },
+    }
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByText('Last telemetry push failure')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Status: 400 — heat_sources\[0\]\.name invalid/),
+    ).toBeInTheDocument()
+  })
+
+  it('renders timestamp as a human-readable date', () => {
+    const ts = 1779265902.558 // 20 May 2026 ~08:31:42 UTC
+    mockStatus = {
+      telemetry_last_permanent_failure: {
+        timestamp: ts,
+        status_code: 422,
+        detail: 'schema_version 2 required',
+        date: '2026-05-20',
+      },
+    }
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    const rendered = new Date(ts * 1000).toLocaleString()
+    // The rendered string lives inside a sibling text node alongside the
+    // 'Date dropped' prefix; locate by substring rather than exact match.
+    expect(screen.getByText(new RegExp(rendered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument()
   })
 })

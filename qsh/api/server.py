@@ -136,6 +136,13 @@ def start_api_server():
     """
     app = create_app()
 
+    # INSTRUCTION-252 — resolve the local TZ synchronously here so the first
+    # pipeline cycle's wall-clock interpreters do not pay the Supervisor
+    # connect/read timeout. Runs in the main thread before the API daemon
+    # thread launches and before the pipeline cycle loop in main.py starts.
+    from qsh.utils import prewarm_local_tz
+    prewarm_local_tz()
+
     def _run():
         uvicorn.run(
             app,

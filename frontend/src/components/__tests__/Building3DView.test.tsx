@@ -70,6 +70,20 @@ vi.mock('../../hooks/useBuildingLayout', () => ({
 const mockUseLive = vi.fn()
 vi.mock('../../hooks/useLive', () => ({
   useLive: () => mockUseLive(),
+  // INSTRUCTION-250: Building3DView now subscribes to useLiveData() rather
+  // than useLive(). Project mockUseLive's return shape onto the split hook
+  // so existing test fixtures continue to drive the same data path.
+  useLiveData: () => {
+    const r = mockUseLive()
+    return { data: r.data, lastUpdate: r.lastUpdate }
+  },
+  useLiveConnection: () => {
+    const r = mockUseLive()
+    return {
+      isConnected: r.isConnected,
+      disconnectedSince: r.disconnectedSince ?? null,
+    }
+  },
 }))
 
 describe('Building3DView', () => {
