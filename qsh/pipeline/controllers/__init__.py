@@ -45,6 +45,7 @@ from .shadow_controller import ShadowController
 from .cost_controller import CostController
 from .historian_controller import HistorianController
 from .tariff_optimiser import TariffOptimiserController
+from .allostatic_load_controller import AllostaticLoadController
 
 __all__ = [
     "BoostController",
@@ -70,4 +71,5 @@ __all__ = [
     "CostController",
     "HistorianController",
     "TariffOptimiserController",
+    "AllostaticLoadController",
 ]
