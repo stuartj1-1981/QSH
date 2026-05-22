@@ -152,20 +152,26 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const minLoadPct = status?.min_load_pct ?? initial?.min_load_pct ?? 0
   const comfortScheduleActive = status?.comfort_schedule_active ?? initial?.comfort_schedule_active ?? false
   const comfortTempActive = status?.comfort_temp_active ?? initial?.comfort_temp_active ?? comfortTemp
-  // INSTRUCTION-257 — effective per-room target divergence display. Both
-  // fields are optional (legacy snapshots lack them); the gate falls back
-  // to "no divergence" when either field is missing.
+  // INSTRUCTION-265 — schedule diagnostic sub-line state. Effective field is
+  // optional on legacy snapshots; null collapses to the "all rooms at target"
+  // branch. Tooltip surfaces only when divergence is present.
   const comfortTempEffective = status?.comfort_temp_effective ?? initial?.comfort_temp_effective ?? null
   const roomsOverriddenCount = status?.rooms_overridden_count ?? initial?.rooms_overridden_count ?? 0
   // Prefer the live rooms dict (canonical when WebSocket is connected); fall
   // back to the REST snapshot's rooms_total count when only the initial
   // fetch has populated.
   const totalRoomsCount = rooms ? Object.keys(rooms).length : (initial?.rooms_total ?? 0)
-  const showComfortDivergence = (
-    comfortScheduleActive
-    && comfortTempEffective != null
-    && roomsOverriddenCount > 0
-  )
+  const hasComfortDivergence = comfortTempEffective != null && roomsOverriddenCount > 0
+  const comfortStatusLabel = comfortScheduleActive
+    ? (hasComfortDivergence
+      ? `Schedule: ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
+      : `Schedule: ${formatTemp(comfortTempActive)} — all rooms at target`)
+    : (hasComfortDivergence
+      ? `No schedule active — Comfort ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
+      : `No schedule active — Comfort ${formatTemp(comfortTempActive)}`)
+  const comfortStatusTitle = hasComfortDivergence
+    ? 'Per-room overrides (cached MQTT comfort messages, persistent-zone TRV setpoints, away mode, or recovery setback) are pulling some rooms away from the schedule-commanded value. The schedule is firing — the rooms are not following it.'
+    : undefined
   const hpActive = live?.status?.applied_mode === 'heat'
   const optimalMode = status?.optimal_mode ?? initial?.optimal_mode
 
@@ -316,17 +322,17 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         onControlModeChange={handleControlModeChange}
       />
 
-      {/* INSTRUCTION-257 — effective comfort divergence sub-line. Surfaces
-          when the comfort schedule is active and per-room overrides have
-          pulled the effective house target away from the commanded value. */}
-      {showComfortDivergence && (
-        <div
-          data-testid="comfort-divergence-line"
-          className="-mt-2 mb-4 ml-4 text-xs text-[var(--text-muted)]"
-        >
-          Effective {formatTemp(comfortTempEffective)} — {roomsOverriddenCount} of {totalRoomsCount} rooms overridden
-        </div>
-      )}
+      {/* INSTRUCTION-265 — schedule diagnostic sub-line. Always rendered to
+          make schedule-active vs schedule-inactive state explicit and to
+          surface per-room divergence when per-room overrides clobber the
+          schedule. */}
+      <div
+        data-testid="comfort-status-line"
+        className="-mt-2 mb-4 ml-4 text-xs text-[var(--text-muted)]"
+        title={comfortStatusTitle}
+      >
+        {comfortStatusLabel}
+      </div>
 
       {/* Flow limits — min/max flow temperature steppers */}
       <FlowLimits

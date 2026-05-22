@@ -47,6 +47,8 @@ from .controllers import (
     HistorianController,
     TariffOptimiserController,
     AllostaticLoadController,
+    CompositeConfidenceController,
+    SwarmTelemetryController,
 )
 
 __all__ = [
@@ -80,6 +82,8 @@ __all__ = [
     "HistorianController",
     "TariffOptimiserController",
     "AllostaticLoadController",
+    "CompositeConfidenceController",
+    "SwarmTelemetryController",
 ]
 
 
@@ -446,5 +450,20 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         HistorianController(
             room_control_state=kw.get("room_control_state"),
         ),
+        # INSTRUCTION-264 V3 — CompositeConfidenceController writes
+        # ctx.composite_confidence per cycle for State V1 §6.3. Position
+        # contract: AFTER SensorController + RLController + HistorianController,
+        # BEFORE SwarmTelemetryController. Always-on regardless of swarm
+        # enablement; the conditional SwarmTelemetryController appended below
+        # consumes the ctx field via the StatePacket builder.
+        CompositeConfidenceController(config=config),
     ]
+
+    # INSTRUCTION-263A V5 Task 7 — SwarmTelemetryController appended AFTER
+    # HistorianController when SwarmRuntime is supplied by the orchestrator.
+    # No runtime ⇒ no append ⇒ bit-identical pre-263A behaviour.
+    swarm_runtime = kw.get("swarm_runtime")
+    if swarm_runtime is not None:
+        controllers.append(SwarmTelemetryController(runtime=swarm_runtime))
+
     return controllers, aux_controller
