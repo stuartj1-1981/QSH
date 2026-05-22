@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [1.4.7] — 2026-05-22
+
+### Added
+- New fleet telemetry pipeline: a persistent local queue and HTTP
+  publisher that emit regular state snapshots (every 15 minutes)
+  and event-driven disturbance reports. When enabled, the previous
+  daily-batch telemetry path is gated off so an install runs
+  exactly one of the two.
+- Daily parameter outbound and inbound prior cache wired in as
+  foundation for cross-install learning. Inbound values surface
+  with explicit freshness state so consumers can distinguish
+  fresh data from cached fallbacks.
+- Composite confidence indicator computed every cycle, combining
+  how well the system has learned this building's thermal
+  characteristics (per-room maturity) with how many sensors are
+  currently reporting fresh readings. Included in outbound
+  telemetry.
+
+### Changed
+- Home page schedule status display rewritten. The sub-line now
+  always renders when a comfort schedule is active and clearly
+  distinguishes four states: schedule active and converged,
+  schedule active with rooms diverging from target, schedule
+  inactive, and schedule active with every room individually
+  overridden. Replaces the previous divergence-only sub-line,
+  which could be mistaken for the schedule not firing at all when
+  every room had a manual override.
+
 ## [1.4.6] — 2026-05-22
 
 ### Added
