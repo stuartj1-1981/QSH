@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [1.4.6] — 2026-05-22
+
+### Added
+- Allostatic load surface: cumulative thermal-stress indicator
+  tracking how hard the heating system is working over time.
+  Visible in the historian and surfaced via the API; raises an
+  alarm when sustained load exceeds threshold.
+- Source selection now consults a per-fuel rate map when scoring
+  configured heat sources — pricing for each fuel type is
+  considered independently rather than via a single composite
+  rate.
+- Hot water configuration values defined in your YAML config now
+  flow through to runtime, so HW behaviour is configurable
+  end-to-end without code changes.
+
+### Changed
+- Energy controller updated to consume the per-fuel rate map for
+  source scoring decisions.
+- Cascade and flow controllers now consider sustained allostatic
+  load when choosing setpoints, behaving more conservatively under
+  prolonged stress.
+
 ## [1.4.5] — 2026-05-20
 
 ### Added

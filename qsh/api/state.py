@@ -210,6 +210,16 @@ class CycleSnapshot:
     twin_calibration_drift: Dict[str, bool] = field(default_factory=dict)
     active_alarms: List[Dict[str, Any]] = field(default_factory=list)
 
+    # INSTRUCTION-261 Task 8 — allostatic-load surface (Bucket 8.1).
+    # Forwarded as-is from ctx.allostatic_load_snapshot. Design A applies the
+    # "__system__" sentinel inside AllostaticLoadRegistry.snapshot(); the
+    # str-keyed shape is JSON-safe and is the StatePacket-extras carrier per
+    # Quantum-Swarm-Packet-Spec-V1-State.md §6.3 (no spec amendment required).
+    # Shape: {controller_name: {room_id_or_system_sentinel: {load_24h,
+    # load_7d, load_28d, accumulated_cycles, saturation_active}}}.
+    # Empty dict before AllostaticLoadController has run.
+    allostatic_load: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
+
     # INSTRUCTION-225C — operator MANUAL/AUTO override map for direct-TRV rooms.
     # Outer key: room. Inner: {mode, position_pct, set_by, set_at, hardware_type}.
     # Populated from qsh.manual_state for every room in configured_direct_rooms.
@@ -723,6 +733,11 @@ class SharedState:
                 ).items()
             },
             manual_state=manual_map,
+            # INSTRUCTION-261 Task 8 — forward as-is. Design A sentinel
+            # already applied inside AllostaticLoadRegistry.snapshot();
+            # defence-in-depth getattr for pre-261 SimpleNamespace test
+            # fixtures.
+            allostatic_load=dict(getattr(ctx, "allostatic_load_snapshot", {}) or {}),
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──
@@ -804,12 +819,38 @@ class SharedState:
             active_name = ctx.active_source
             source_states = ctx.inputs.source_states if ctx.inputs else {}
 
+            from qsh.tariff import fuel_for_source as _fuel_for_source
+
             sources_list = []
             for src in heat_sources:
                 name = src.get("name", "")
                 score = source_scores.get(name, 0.0)
                 eff = src.get("efficiency", 1.0)
-                fuel_cost = src.get("fuel_cost_per_kwh", 0.0)
+
+                # INSTRUCTION-260: prefer the live per-fuel rate from
+                # ctx.fuel_rates, populated by EnergyController. Fall back to the
+                # static config field for installs that don't have a TariffProvider
+                # configured for this source's fuel (rare; legacy or test fixtures).
+                # Defence-in-depth isinstance check — test contexts may use
+                # MagicMock where ctx.fuel_rates returns a non-dict; treat as empty.
+                src_type = src.get("type", "")
+                try:
+                    _src_fuel = _fuel_for_source(src_type)
+                except KeyError:
+                    _src_fuel = None
+                _ctx_fuel_rates = getattr(ctx, "fuel_rates", None)
+                if not isinstance(_ctx_fuel_rates, dict):
+                    _ctx_fuel_rates = {}
+                _live_rate = (
+                    _ctx_fuel_rates.get(_src_fuel, 0.0) if _src_fuel is not None else 0.0
+                )
+                if not isinstance(_live_rate, (int, float)):
+                    _live_rate = 0.0
+                fuel_cost = (
+                    _live_rate if _live_rate > 0.0
+                    else src.get("fuel_cost_per_kwh", 0.0)
+                )
+
                 carbon = src.get("carbon_factor", 0.0)
 
                 # Determine status
@@ -824,7 +865,7 @@ class SharedState:
 
                 sources_list.append({
                     "name": name,
-                    "type": src.get("type", ""),
+                    "type": src_type,
                     "status": status,
                     "efficiency": round(eff, 2),
                     "fuel_cost_per_kwh": round(fuel_cost, 4),

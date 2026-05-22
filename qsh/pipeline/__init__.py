@@ -46,6 +46,7 @@ from .controllers import (
     CostController,
     HistorianController,
     TariffOptimiserController,
+    AllostaticLoadController,
 )
 
 __all__ = [
@@ -78,6 +79,7 @@ __all__ = [
     "CostController",
     "HistorianController",
     "TariffOptimiserController",
+    "AllostaticLoadController",
 ]
 
 
@@ -307,6 +309,12 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
     from .controllers.flow_controller import validate_flow_limits
     validate_flow_limits(config)
 
+    # INSTRUCTION-261 Task 5 — orchestrator-owned allostatic-load registry.
+    # Constructed once per pipeline; injected into AllostaticLoadController
+    # at position immediately before HistorianController.
+    from ..allostatic_load import AllostaticLoadRegistry
+    allostatic_registry = AllostaticLoadRegistry()
+
     valve = ValveController(
         room_control_state=kw.get("room_control_state"),
         apply_dissipation_fn=kw.get("apply_dissipation_fn"),
@@ -431,6 +439,10 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             fixed_setpoints=kw.get("fixed_setpoints"),
         ),
         CostController(),
+        AllostaticLoadController(
+            registry=allostatic_registry,
+            config=config,
+        ),
         HistorianController(
             room_control_state=kw.get("room_control_state"),
         ),
