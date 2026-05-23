@@ -22,6 +22,7 @@ interface StepSensorsProps {
 // PER_SOURCE_MQTT_SENSOR_FIELDS and render under the tab strip.
 const MQTT_CORE_SENSOR_FIELDS = [
   { key: 'outdoor_temp', label: 'Outdoor Temperature', hint: 'recommended', helper: '' },
+  { key: 'forecast', label: 'Weather Forecast Topic', hint: 'optional', helper: 'Required when forecast_extension_master_enable is true. Subscribed at {topic_prefix}/<this value>.' },
 ] as const
 
 // Additional sensors — collapsed by default. INSTRUCTION-241B V2:
