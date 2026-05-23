@@ -893,6 +893,18 @@ def validate_config(req: WizardValidateRequest):
                 warnings.append("No outdoor temperature topic — OAT will default to 5°C")
             if not inputs.get("hp_power"):
                 warnings.append("No power sensor topic — observed_mode unavailable")
+            if cfg.get("forecast_extension_master_enable", False):
+                forecast_topic = (
+                    mqtt_cfg.get("inputs", {}).get("forecast", {}).get("topic", "")
+                )
+                if not forecast_topic or not str(forecast_topic).strip():
+                    warnings.append(
+                        "forecast_extension_master_enable is True but no MQTT forecast "
+                        "topic is configured. Set the Weather Forecast Topic field "
+                        "below (writes to mqtt.inputs.forecast.topic), or disable the "
+                        "master enable. See docs/mqtt-forecast-publisher.md for "
+                        "publisher requirements."
+                    )
         else:
             hs = cfg.get("heat_source", {})
             sensors = hs.get("sensors", {})
