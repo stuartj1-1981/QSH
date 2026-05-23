@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [1.4.8] — 2026-05-23
+
+### Added
+- Weather Forecast Topic field in the MQTT wizard sensors
+  step, so installs using an external MQTT-based forecast
+  publisher can configure the topic in the wizard rather than
+  hand-editing YAML.
+- One-shot first-payload confirmation event for the MQTT
+  forecast provider — when the first valid forecast payload
+  arrives, an operator-visible event records the summary, so
+  commissioning is observable.
+
+### Fixed
+- Forecast commissioning interlock: the system now warns at
+  startup if the weather-forecast feature is enabled but no
+  provider is configured, instead of silently doing nothing.
+  Catches a silent-failure mode on MQTT installs where the
+  forecast feature was switched on but the source topic was
+  never set. The CLI validator and the wizard validation now
+  surface the same warning so the problem is caught at
+  config-write time as well as runtime.
+
 ## [1.4.7] — 2026-05-22
 
 ### Added
