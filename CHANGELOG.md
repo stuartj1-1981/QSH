@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.4.9] — 2026-05-24
+
+### Added
+- Comfort-temperature writeback round-trip verification: after a
+  setpoint write the value is read back from the bus and a mismatch
+  raises an operator-surface event rather than failing silently.
+- Comfort-schedule diagnostic surface on the Home page: shows the
+  cause of the current setpoint (schedule slot, default fallback,
+  manual override, away mode) with tooltip explanations and glossary.
+
+### Changed
+- Forecast commissioning interlock startup WARNING reformatted from
+  dot-notation to inline YAML blocks for readability when operators
+  paste it into their configuration.
+
+### Fixed
+- Octopus public gas-rate endpoints no longer send Basic-Auth. The
+  public endpoints reject Basic-Auth and were occasionally returning
+  401, breaking gas-rate refresh on installs without an Octopus
+  account configured.
+
 ## [1.4.8] — 2026-05-23
 
 ### Added
