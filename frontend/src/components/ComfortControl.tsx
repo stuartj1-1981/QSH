@@ -10,6 +10,9 @@ interface ComfortControlProps {
   awayDays?: number
   comfortScheduleActive?: boolean
   comfortTempActive?: number
+  writebackUnverified?: boolean
+  writebackUnverifiedCycles?: number
+  engineering?: boolean
   onComfortTempChange: (value: number) => void
   onControlModeChange: (enabled: boolean) => void
 }
@@ -22,6 +25,9 @@ export const ComfortControl = memo(function ComfortControl({
   awayDays,
   comfortScheduleActive,
   comfortTempActive,
+  writebackUnverified,
+  writebackUnverifiedCycles,
+  engineering,
   onComfortTempChange,
   onControlModeChange,
 }: ComfortControlProps) {
@@ -84,6 +90,14 @@ export const ComfortControl = memo(function ComfortControl({
               {comfortScheduleActive && !awayActive && (
                 <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-500/15 text-blue-500 whitespace-nowrap">
                   Scheduled {comfortTempActive != null ? `${comfortTempActive.toFixed(1)}°` : ''}
+                </span>
+              )}
+              {writebackUnverified === true && (engineering === true || (writebackUnverifiedCycles ?? 0) >= 2) && (
+                <span
+                  className="ml-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-500 whitespace-nowrap"
+                  title="The most recent comfort-temperature change did not show up on the next-cycle read from the MQTT broker within 60 seconds. The stepper change may not have propagated. Check the HA add-on log for COMFORT.writeback_unverified events."
+                >
+                  Writeback unverified
                 </span>
               )}
             </div>

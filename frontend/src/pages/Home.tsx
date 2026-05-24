@@ -124,6 +124,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
     return () => clearTimeout(timer)
   }, [optimisticControlEnabled])
 
+  const [writebackUnverifiedCycles, setWritebackUnverifiedCycles] = useState(0)
+
   const comfortTemp = status?.comfort_temp ?? initial?.comfort_temp ?? 21.0
   const appliedFlow = status?.applied_flow ?? initial?.applied_flow ?? 0
   const appliedMode = status?.applied_mode ?? initial?.applied_mode ?? 'off'
@@ -157,21 +159,51 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   // branch. Tooltip surfaces only when divergence is present.
   const comfortTempEffective = status?.comfort_temp_effective ?? initial?.comfort_temp_effective ?? null
   const roomsOverriddenCount = status?.rooms_overridden_count ?? initial?.rooms_overridden_count ?? 0
+  const targetTempFallbackActive = status?.target_temp_fallback_active ?? initial?.target_temp_fallback_active ?? false
+  const comfortTempWritebackUnverified = status?.comfort_temp_writeback_unverified ?? initial?.comfort_temp_writeback_unverified ?? false
+
+  useEffect(() => {
+    if (comfortTempWritebackUnverified) {
+      setWritebackUnverifiedCycles(c => c + 1)
+    } else {
+      setWritebackUnverifiedCycles(0)
+    }
+  }, [comfortTempWritebackUnverified, cycleNumber])
+
   // Prefer the live rooms dict (canonical when WebSocket is connected); fall
   // back to the REST snapshot's rooms_total count when only the initial
   // fetch has populated.
   const totalRoomsCount = rooms ? Object.keys(rooms).length : (initial?.rooms_total ?? 0)
   const hasComfortDivergence = comfortTempEffective != null && roomsOverriddenCount > 0
-  const comfortStatusLabel = comfortScheduleActive
-    ? (hasComfortDivergence
-      ? `Schedule: ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
-      : `Schedule: ${formatTemp(comfortTempActive)} — all rooms at target`)
-    : (hasComfortDivergence
-      ? `No schedule active — Comfort ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
-      : `No schedule active — Comfort ${formatTemp(comfortTempActive)}`)
-  const comfortStatusTitle = hasComfortDivergence
-    ? 'Per-room overrides (cached MQTT comfort messages, persistent-zone TRV setpoints, away mode, or recovery setback) are pulling some rooms away from the schedule-commanded value. The schedule is firing — the rooms are not following it.'
-    : undefined
+  // INSTRUCTION-267 — when the fallback fires, comfortTempActive carries the
+  // config `comfort_temp` value (typically 20.0) rather than an operator-commanded
+  // value. The display string treats it as "the default the system is currently
+  // using", which is the semantically correct framing for the fallback case even
+  // though the variable name still reads as "active commanded value". This is
+  // the V1 LOW-1 disposition: accept the field-name semantic stretch and
+  // document it here rather than introducing a parallel `configComfortTemp` hydration.
+  const comfortStatusLabel = targetTempFallbackActive
+    ? `No comfort temperature set — using default ${formatTemp(comfortTempActive)}. Set it via the Comfort stepper above.`
+    : comfortScheduleActive
+      ? (hasComfortDivergence
+        ? `Schedule: ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
+        : `Schedule: ${formatTemp(comfortTempActive)} — all rooms at target`)
+      : (hasComfortDivergence
+        ? `No schedule active — Comfort ${formatTemp(comfortTempActive)} · Effective ${formatTemp(comfortTempEffective)} (${roomsOverriddenCount} of ${totalRoomsCount} rooms overridden)`
+        : `No schedule active — Comfort ${formatTemp(comfortTempActive)}`)
+  const comfortStatusTitle = targetTempFallbackActive
+    ? 'No comfort temperature is currently set on this install. The upstream driver path (HA input_number, MQTT control/comfort_temp topic, or equivalent) is not delivering a value, so the pipeline is using its configured default. Set a comfort temperature using the Comfort stepper above to clear this state.'
+    : hasComfortDivergence
+      ? 'Per-room overrides are pulling some rooms away from the schedule-commanded value. Possible sources:\n\n' +
+        '  • Cached MQTT comfort messages on retained topics (control/<room>/comfort_temp)\n' +
+        '  • Persistent-zone TRV setpoints (zones listed in persistent_zones config)\n' +
+        '  • Away mode (whole-house or per-zone)\n' +
+        '  • Occupancy-schedule setback — rooms flagged unoccupied by the schedule are lowered by SetbackCalculator (qsh/occupancy/setback.py)\n' +
+        '  • Away-exit recovery ramp — rooms transitioning from unoccupied to occupied are gradually raised by RecoveryScheduler (qsh/occupancy/recovery.py)\n' +
+        '  • Per-room zone offsets — fixed_setpoints config (room offsets baked into compute_base_target)\n' +
+        '  • Sensor-driven setback — when occupancy sensors disagree with the schedule, the sensor merge re-applies setback per-room\n\n' +
+        'The schedule is firing — the rooms are not following it. Threshold for counting a room as "overridden" is 0.3 °C deviation from the schedule-commanded value.'
+      : undefined
   const hpActive = live?.status?.applied_mode === 'heat'
   const optimalMode = status?.optimal_mode ?? initial?.optimal_mode
 
@@ -318,6 +350,9 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         awayDays={awayData?.whole_house?.days_remaining ?? awayData?.whole_house?.days}
         comfortScheduleActive={comfortScheduleActive}
         comfortTempActive={comfortTempActive}
+        writebackUnverified={comfortTempWritebackUnverified}
+        writebackUnverifiedCycles={writebackUnverifiedCycles}
+        engineering={engineering}
         onComfortTempChange={handleComfortTempChange}
         onControlModeChange={handleControlModeChange}
       />

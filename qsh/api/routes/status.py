@@ -106,6 +106,8 @@ def get_status():
         "comfort_temp_active": snap.comfort_temp_active,
         "comfort_temp_effective": snap.comfort_temp_effective,
         "rooms_overridden_count": snap.rooms_overridden_count,
+        "target_temp_fallback_active": snap.target_temp_fallback_active,
+        "comfort_temp_writeback_unverified": snap.comfort_temp_writeback_unverified,
         "optimal_flow": round(snap.optimal_flow, 1),
         "applied_flow": round(snap.applied_flow, 1),
         "optimal_mode": snap.optimal_mode,
