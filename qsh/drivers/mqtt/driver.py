@@ -12,6 +12,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...signal_bus import InputBlock, OutputBlock
+from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
 from ...occupancy.comfort_schedule import get_comfort_schedule_store
 from .client import MQTTClient, MQTTClientConfig
@@ -56,7 +57,26 @@ def _register_mqtt_events() -> None:
         payload_fields=(),
         default_level=logging.WARNING,
     ))
+    # INSTRUCTION-268 — comfort-temp writeback round-trip verification events.
+    ann.register(EventSpec(
+        name="COMFORT.writeback_unverified",
+        kind=EventKind.LATCHED,
+        payload_fields=("wrote", "read", "source", "topic", "elapsed_s", "client_unavailable"),
+        latch_key=("topic",),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="COMFORT.writeback_internal_fallback",
+        kind=EventKind.OCCURRED,
+        payload_fields=("wrote", "read", "elapsed_s", "internal_key"),
+        default_level=logging.INFO,
+    ))
 
+
+# INSTRUCTION-268 — writeback round-trip verification tolerance.
+# Duplicated from qsh.api.routes.control to avoid a cross-layer import
+# (driver should not import from API routes).
+WRITEBACK_TOLERANCE_C: float = 0.05
 
 # Tracks availability topics whose payloads have been warned about, to avoid
 # log-spam when an upstream publisher keeps sending ambiguous values.
@@ -224,6 +244,11 @@ class MQTTDriver:
         # the resolved comfort temp came from the MQTT cache or the internal
         # fallback (pid_target_internal).
         self._comfort_startup_logged: bool = False
+
+        # INSTRUCTION-268 — set True when writeback deadline expires without
+        # broker-sourced confirmation. Surfaced on CycleSnapshot via
+        # state.py's getattr chain.
+        self.comfort_temp_writeback_unverified: bool = False
 
         # INSTRUCTION-231B V2 — tracks the emitter stem of the most-recent
         # fresh-winning candidate per room for multi-emitter valve_position
@@ -398,6 +423,60 @@ class MQTTDriver:
             external_id=full_topic if entry is not None else None,
             external_raw=None,
         )
+
+    def _verify_pending_writeback(self, comfort_temp_rv, now: float) -> None:
+        """INSTRUCTION-268 — write-and-readback verification for comfort_temp.
+
+        Three-outcome decision tree:
+          1. Matched + external source   -> clear pending, exit latch.
+          2. Matched + internal source    -> clear pending, log fallback.
+          3. Deadline expired, no match   -> enter latch, set unverified flag.
+
+        If no pending writeback exists, this is a no-op.
+        """
+        pw = shared_state.get_pending_writeback("comfort_temp")
+        if pw is None:
+            return
+
+        _register_mqtt_events()
+        ann = get_annunciator()
+
+        matched = abs(comfort_temp_rv.value - pw.value) <= WRITEBACK_TOLERANCE_C
+        is_external = comfort_temp_rv.source == "external"
+        expired = now >= pw.deadline
+
+        if matched and is_external:
+            # Outcome 1: broker echoed the write back. Round-trip confirmed.
+            shared_state.clear_pending_writeback("comfort_temp")
+            ann.exited("COMFORT.writeback_unverified", topic=pw.key)
+            self.comfort_temp_writeback_unverified = False
+        elif matched and not is_external:
+            # Outcome 2: value matches but came from internal fallback, not
+            # the broker. Clear pending (the value is correct) but log that
+            # the broker path was not the source.
+            shared_state.clear_pending_writeback("comfort_temp")
+            ann.occurred(
+                "COMFORT.writeback_internal_fallback",
+                wrote=round(float(pw.value), 1),
+                read=round(float(comfort_temp_rv.value), 1),
+                elapsed_s=round(now - pw.written_at, 1),
+                internal_key="pid_target_internal",
+            )
+        elif expired:
+            # Outcome 3: deadline expired without a broker-sourced match.
+            # Terminal hard-failure transition.
+            ann.entered(
+                "COMFORT.writeback_unverified",
+                wrote=round(float(pw.value), 1),
+                read=round(float(comfort_temp_rv.value), 1),
+                source=comfort_temp_rv.source,
+                topic=pw.key,
+                elapsed_s=round(now - pw.written_at, 1),
+                client_unavailable=pw.client_unavailable,
+            )
+            self.comfort_temp_writeback_unverified = True
+            shared_state.clear_pending_writeback("comfort_temp")
+        # else: no match yet, within deadline — do nothing, check next cycle.
 
     def _log_multi_source_advisory(self) -> None:
         """Log once at setup when multiple topics map to the same sq_key.
@@ -882,6 +961,9 @@ class MQTTDriver:
             validate=lambda s: _validate_range(s, 10.0, 30.0),
         )
         self._last_resolved["comfort_temp"] = comfort_temp_rv
+
+        # INSTRUCTION-268 — write-and-readback verification.
+        self._verify_pending_writeback(comfort_temp_rv, now)
 
         # One-time startup audit (INSTRUCTION-105).  If source="internal" and
         # value is 20.0 when the user set something else, the persistence bug

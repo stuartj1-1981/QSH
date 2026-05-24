@@ -76,6 +76,7 @@ function makeLiveData(opts: {
   comfortTempEffective: number | null
   roomsOverriddenCount: number
   roomCount: number
+  targetTempFallbackActive?: boolean
 }): CycleMessage {
   const rooms: Record<string, { temp: number; target: number; valve: number; occupancy: string; status: string; facing: number }> = {}
   for (let i = 0; i < opts.roomCount; i++) {
@@ -99,6 +100,7 @@ function makeLiveData(opts: {
       comfort_temp_active: opts.comfortTempActive,
       comfort_temp_effective: opts.comfortTempEffective,
       rooms_overridden_count: opts.roomsOverriddenCount,
+      target_temp_fallback_active: opts.targetTempFallbackActive ?? false,
       optimal_flow: 35,
       applied_flow: 35,
       optimal_mode: 'heat',
@@ -219,5 +221,60 @@ describe('Home schedule diagnostic sub-line (INSTRUCTION-265)', () => {
     expect(line.textContent).toContain('all rooms at target')
     expect(line.textContent).not.toContain('Effective')
     expect(line.getAttribute('title')).toBeNull()
+  })
+
+  it('renders fallback-active branch — shows "No comfort temperature set" regardless of schedule state', () => {
+    mockLiveData = makeLiveData({
+      comfortScheduleActive: true,
+      comfortTempActive: 20,
+      comfortTempEffective: null,
+      roomsOverriddenCount: 0,
+      roomCount: 1,
+      targetTempFallbackActive: true,
+    })
+    render(<Home engineering={false} />)
+
+    const line = screen.getByTestId('comfort-status-line')
+    expect(line.textContent).toContain('No comfort temperature set — using default 20.0°')
+    expect(line.textContent).toContain('Set it via the Comfort stepper')
+    expect(line.getAttribute('title')).toContain('upstream driver path')
+  })
+
+  it('fallback-active overrides divergence — divergence sub-line never appears when fallback active', () => {
+    mockLiveData = makeLiveData({
+      comfortScheduleActive: false,
+      comfortTempActive: 20,
+      comfortTempEffective: 18,
+      roomsOverriddenCount: 3,
+      roomCount: 5,
+      targetTempFallbackActive: true,
+    })
+    render(<Home engineering={false} />)
+
+    const line = screen.getByTestId('comfort-status-line')
+    expect(line.textContent).not.toContain('Effective')
+    expect(line.textContent).toContain('No comfort temperature set')
+  })
+
+  it('tooltip cause list — divergence tooltip names all seven override classes', () => {
+    mockLiveData = makeLiveData({
+      comfortScheduleActive: true,
+      comfortTempActive: 25,
+      comfortTempEffective: 19.8,
+      roomsOverriddenCount: 14,
+      roomCount: 14,
+      targetTempFallbackActive: false,
+    })
+    render(<Home engineering={false} />)
+
+    const line = screen.getByTestId('comfort-status-line')
+    const title = line.getAttribute('title')
+    expect(title).toContain('Cached MQTT')
+    expect(title).toContain('Persistent-zone')
+    expect(title).toContain('Away mode')
+    expect(title).toContain('Occupancy-schedule setback')
+    expect(title).toContain('Away-exit recovery ramp')
+    expect(title).toContain('fixed_setpoints')
+    expect(title).toContain('Sensor-driven setback')
   })
 })

@@ -77,6 +77,17 @@ class CycleSnapshot:
     # Backend-computed so the frontend does not need to recompute from
     # status.rooms (which is absent on legacy snapshots).
     rooms_overridden_count: int = 0
+    # INSTRUCTION-267 — True when sensor_controller.py:174 fallback fired this
+    # cycle (no inputs.target_temp from driver). Parallel mirror of the LATCHED
+    # SENSOR.target_temp_missing event; kept as a direct ctx field for pattern
+    # consistency with the sibling comfort-schedule snapshot fields above.
+    target_temp_fallback_active: bool = False
+    # INSTRUCTION-268 — set True by the MQTT driver when the LATCHED
+    # COMFORT.writeback_unverified event is entered (writeback deadline expired
+    # without a broker-sourced match). Field name reads naturally as "not yet
+    # verified" but the field is set True only on terminal hard-failure
+    # transition (V1 LOW-2 disposition: rename rejected on cost-vs-benefit).
+    comfort_temp_writeback_unverified: bool = False
 
     # Recovery & capacity metrics
     recovery_time_hours: float = 0.0
@@ -410,6 +421,22 @@ def _resolve_snapshot_hp_cop(ctx) -> Optional[float]:
     return ctx.live_cop if ctx.live_cop else ctx.inputs.hp_cop
 
 
+@dataclass
+class PendingWriteback:
+    """Record of a control-topic writeback awaiting next-cycle readback confirmation.
+
+    Overwrite semantics: rapid stepper use overwrites the prior pending record
+    (singleton dict-by-key). Transient mismatches between successive writes
+    do not fire events — they fall through the "no match yet, within deadline"
+    branch of the three-outcome decision tree (Task 3). INSTRUCTION-268 §1.4(i).
+    """
+    key: str
+    value: float
+    written_at: float
+    deadline: float
+    client_unavailable: bool = False
+
+
 class SharedState:
     """Thread-safe container for the latest cycle snapshot.
 
@@ -429,6 +456,7 @@ class SharedState:
         self._driver_ref = None        # INSTRUCTION-225C: IODriver, set by main.py post-create_driver
         self._telemetry_ref = None     # INSTRUCTION-193 Task 4: TelemetryService for is_revoked()
         self._debouncer_ref = None     # Reference to ControlDebouncer (set after pipeline build)
+        self._pending_writebacks: Dict[str, 'PendingWriteback'] = {}
         self._migration_pending: bool = False
         self._driver_status: str = "pending"        # "pending" | "connected" | "error"
         self._driver_error: Optional[str] = None    # Human-readable error message
@@ -699,6 +727,12 @@ class SharedState:
             away_days=ctx.inputs.away_days if ctx.inputs else 0.0,
             comfort_schedule_active=ctx.comfort_schedule_active,
             comfort_temp_active=ctx.comfort_temp_active,
+            target_temp_fallback_active=ctx.target_temp_fallback_active,
+            comfort_temp_writeback_unverified=getattr(
+                getattr(ctx, "driver", None),
+                "comfort_temp_writeback_unverified",
+                False,
+            ),
             # INSTRUCTION-257 — mean of post-override per-room targets, plus
             # the per-room divergence count that drives the Home page sub-line.
             # `ctx.room_targets` is the final effective per-room target dict
@@ -1064,6 +1098,19 @@ class SharedState:
         registers the debouncer — API routes must handle the None case."""
         with self._lock:
             return self._debouncer_ref
+
+    # INSTRUCTION-268 — pending writeback lifecycle for comfort-temp round-trip.
+    def set_pending_writeback(self, pw: 'PendingWriteback') -> None:
+        with self._lock:
+            self._pending_writebacks[pw.key] = pw
+
+    def get_pending_writeback(self, key: str) -> 'Optional[PendingWriteback]':
+        with self._lock:
+            return self._pending_writebacks.get(key)
+
+    def clear_pending_writeback(self, key: str) -> None:
+        with self._lock:
+            self._pending_writebacks.pop(key, None)
 
     def set_migration_pending(self, value: bool) -> None:
         with self._lock:

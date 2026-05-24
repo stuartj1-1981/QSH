@@ -13,7 +13,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..state import shared_state
+from ..state import shared_state, PendingWriteback
 from .config import read_modify_write
 from qsh.occupancy.comfort_schedule import get_comfort_schedule_store
 
@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/control", tags=["control"])
 
 HA_TIMEOUT = 5
+
+# INSTRUCTION-268 — writeback round-trip verification constants.
+WRITEBACK_TOLERANCE_C: float = 0.05
+WRITEBACK_DEADLINE_S: float = 60.0
 
 
 def _get_ha_headers():
@@ -584,12 +588,19 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
 
     This ensures Web UX changes are reflected on the MQTT bus for
     external subscribers (Task 5 — E4).
+
+    INSTRUCTION-268: after a successful or attempted publish, records a
+    PendingWriteback on shared_state so the MQTT driver's next read_inputs
+    cycle can verify the round-trip.
     """
     config = shared_state.get_config()
     if config is None:
         return
 
     driver = config.get("driver", "ha")
+    written_at = time.time()
+    client_unavailable = False
+    topic = None
 
     if driver == "mqtt":
         # Direct MQTT driver — publish to control topic via shared client ref
@@ -599,7 +610,16 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
             client = shared_state.get_mqtt_client()
             if client:
                 client.publish(topic, payload, retain=True, qos=1)
-                logger.debug("MQTT write-back: %s = %s", topic, payload)
+                logger.info(
+                    "MQTT write-back: topic=%s payload=%s retain=True qos=1 written_at=%.3f",
+                    topic, payload, written_at,
+                )
+            else:
+                client_unavailable = True
+                logger.warning(
+                    "MQTT write-back skipped for %s: MQTT client not yet available",
+                    control_key,
+                )
         except Exception as e:
             logger.warning("MQTT write-back failed for %s: %s", control_key, e)
     elif driver == "ha" and config.get("control_method") == "mqtt":
@@ -613,8 +633,23 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
                 "publish",
                 {"topic": topic, "payload": payload, "retain": True},
             )
+            logger.info(
+                "MQTT write-back (via HA): topic=%s payload=%s retain=True written_at=%.3f",
+                topic, payload, written_at,
+            )
         except Exception as e:
             logger.warning("MQTT write-back (via HA) failed for %s: %s", control_key, e)
+    else:
+        # Neither MQTT driver nor HA+MQTT control method — no MQTT involved.
+        return
+
+    shared_state.set_pending_writeback(PendingWriteback(
+        key=control_key,
+        value=float(payload),
+        written_at=written_at,
+        deadline=written_at + WRITEBACK_DEADLINE_S,
+        client_unavailable=client_unavailable,
+    ))
 
 
 # ── Shoulder threshold (hp_min_output_kw) ────────────────────────────

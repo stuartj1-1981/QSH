@@ -247,6 +247,10 @@ export interface StatusResponse {
   // their absence by treating the count as 0 (no divergence sub-line shown).
   comfort_temp_effective?: number
   rooms_overridden_count?: number
+  // INSTRUCTION-267 — True when the pipeline's fallback at sensor_controller.py:174 fired this cycle (no inputs.target_temp from driver). Drives the "no comfort temperature set" sub-line branch.
+  target_temp_fallback_active?: boolean
+  // INSTRUCTION-268 — True when the most recent MQTT comfort-temp writeback did not match the next-cycle readback within WRITEBACK_DEADLINE_S (60s) AND a broker-sourced readback never matched. Drives the ComfortControl "writeback unverified" pill. Source=internal matches (INSTRUCTION-105 disk fallback) emit an OCCURRED event but do not set this field.
+  comfort_temp_writeback_unverified?: boolean
   optimal_flow: number
   applied_flow: number
   optimal_mode: string
@@ -326,6 +330,8 @@ export interface CycleMessage {
     comfort_temp_active?: number
     comfort_temp_effective?: number
     rooms_overridden_count?: number
+    target_temp_fallback_active?: boolean
+    comfort_temp_writeback_unverified?: boolean
     optimal_flow: number
     applied_flow: number
     optimal_mode: string

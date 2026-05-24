@@ -64,4 +64,38 @@ describe('ComfortControl schedule indicator', () => {
     render(<ComfortControl {...baseProps} />)
     expect(screen.getByText('20.0°')).toBeDefined()
   })
+
+  it('renders writeback-unverified pill when unverified true and cycles >= 2', () => {
+    render(
+      <ComfortControl
+        {...baseProps}
+        writebackUnverified={true}
+        writebackUnverifiedCycles={3}
+        engineering={false}
+      />
+    )
+    expect(screen.getByText('Writeback unverified')).toBeDefined()
+  })
+
+  it('hides writeback-unverified pill when cycles < 2 and not engineering', () => {
+    const { rerender } = render(
+      <ComfortControl
+        {...baseProps}
+        writebackUnverified={true}
+        writebackUnverifiedCycles={1}
+        engineering={false}
+      />
+    )
+    expect(screen.queryByText('Writeback unverified')).toBeNull()
+
+    rerender(
+      <ComfortControl
+        {...baseProps}
+        writebackUnverified={true}
+        writebackUnverifiedCycles={1}
+        engineering={true}
+      />
+    )
+    expect(screen.getByText('Writeback unverified')).toBeDefined()
+  })
 })
