@@ -1,6 +1,6 @@
 # QSH MQTT Conformance Schema
 
-**Version 1.** Specifies the contract a field MQTT installation must satisfy to integrate with the QSH (Quantum Swarm Heating) supervisory control system. Field installations not satisfying this contract must either reconfigure their broker / publishers to match, or run a translation gateway in front of their broker.
+**Version 1.1.** Specifies the contract a field MQTT installation must satisfy to integrate with the QSH (Quantum Swarm Heating) supervisory control system. Field installations not satisfying this contract must either reconfigure their broker / publishers to match, or run a translation gateway in front of their broker.
 
 **Audience.** Anyone integrating an MQTT broker with QSH — typically the heat-pump or heating-system installer, or a gateway author building a translation layer between an existing broker topology and a QSH-conformant view.
 
@@ -33,9 +33,21 @@ This specification documents what the QSH MQTT driver requires. It is descriptiv
 
 ### 2.1 Prefix
 
-Every QSH MQTT topic is qualified by a configurable prefix. The prefix is set in the QSH YAML config at `mqtt.topic_prefix`. If unset or empty, no prefix is applied — bare topics are used. The driver applies the prefix at config-load time, not at publish/subscribe time, so this is a static binding decided per-installation.
+The QSH MQTT driver supports a configurable topic prefix set at `mqtt.topic_prefix` in YAML. The prefix is also surfaced via the MQTT Broker step of the QSH setup wizard — the UI field writes the same YAML key. The driver applies the prefix at config-load time, not at publish/subscribe time, so this is a static binding decided per-installation.
 
-Conventional prefix value: `qsh` (no leading slash, no trailing slash). MQTT brokers MAY require namespace isolation between QSH and other tenants on the same broker — the prefix is the mechanism. Multi-instance QSH deployments on one broker MUST use distinct prefixes (`qsh/site1`, `qsh/site2`, etc.) — distinct prefixes produce distinct subscribe sets in the driver and avoid cross-talk.
+**User-mapped topics — `mqtt.inputs`, `mqtt.outputs`, `heat_sources[].sensors`, `room_mqtt_topics`.** These are passed through the driver's prefix helper. If `topic_prefix` is set, the driver prepends `<prefix>/` to every topic in these blocks before subscribing or publishing. If `topic_prefix` is unset or empty, the configured topic is used verbatim — bare paths are subscribed / published as written. So an input mapping `room_temp: zigbee2mqtt/lr_temp` with `topic_prefix: qsh` results in QSH subscribing to `qsh/zigbee2mqtt/lr_temp`; with `topic_prefix` unset, QSH subscribes to bare `zigbee2mqtt/lr_temp`. This applies symmetrically to inputs and outputs.
+
+**QSH-owned diagnostic topics — LWT, notifications, shadow mirrors.** These are at fixed paths the driver constructs internally. They respect the configured prefix WHEN SET, but they fall back to the literal string `qsh` when `topic_prefix` is unset rather than going prefix-less:
+
+- LWT: `<prefix>/status` if prefix set; `qsh/status` if not.
+- Notifications: `<prefix>/notifications` if prefix set; `qsh/notifications` if not.
+- Shadow mirrors: `<prefix>/shadow/*` if prefix set; `qsh/shadow/*` if not.
+
+This means a broker subscribed to `qsh/#` will always observe QSH-installation traffic on these three paths regardless of the YAML `topic_prefix` setting. It also explains a common observation: with `topic_prefix` unset, user-mapped sensor topics appear at their bare configured paths while QSH-owned publishes (LWT, notifications, shadow) appear under `qsh/...` — the asymmetry is the hardcoded fallback, not a driver heuristic about input vs output.
+
+**`mqtt.topic_prefix` vs `mqtt.client_id`.** These are independent settings that share the same default value `qsh`, which can cause confusion. `topic_prefix` governs the topic-path namespace as described above. `client_id` is the MQTT client identifier passed to the Paho client — it appears in the broker's session tracking, persistent-session resumption, will-message routing, and ACL lookup. Changing one does not affect the other. The UI fields "Topic prefix" and "ClientID" in the QSH MQTT Broker setup step write `mqtt.topic_prefix` and `mqtt.client_id` respectively.
+
+Conventional prefix value: `qsh` (no leading slash, no trailing slash). MQTT brokers MAY require namespace isolation between QSH and other tenants on the same broker — the prefix is the mechanism. Multi-instance QSH deployments on one broker MUST use distinct prefixes (`qsh/site1`, `qsh/site2`, etc.) — distinct prefixes produce distinct subscribe sets in the driver and avoid cross-talk. Multi-instance deployments SHOULD also use distinct `client_id` values to avoid broker session collisions.
 
 The "current prefix" referenced below is whatever the configurer set. Examples in this document use `qsh`.
 
@@ -794,3 +806,4 @@ In this configuration, the gas boiler is treated as the primary heat source. Fue
 | Version | Change |
 |---------|--------|
 | 1 | Initial release. |
+| 1.1 | §2.1 Prefix amended. Clarified that the prefix applies uniformly to user-mapped topics (`mqtt.inputs`, `mqtt.outputs`, `heat_sources[].sensors`, `room_mqtt_topics`) but that QSH-owned diagnostic topics (LWT, notifications, shadow mirrors) fall back to the literal string `qsh` when `topic_prefix` is unset rather than going prefix-less. Added note distinguishing `topic_prefix` from `client_id` (independent settings sharing the same `qsh` default — a common source of confusion). |
