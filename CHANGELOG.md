@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.4.10] — 2026-05-25
+
+### Fixed
+- Summer mode exit predicate decoupled from pre-charge
+  `upcoming_cold` flag, which was tripping on routine UK diurnal
+  forecast swings and exiting summer mode within minutes of every
+  entry on warm days. Exit condition 3 now uses an absolute-minimum
+  predicate on the 12-hour forecast minimum against a new
+  configurable threshold `summer.exit_forecast_min_c` (default 8°C).
+
 ## [1.4.9] — 2026-05-24
 
 ### Added
