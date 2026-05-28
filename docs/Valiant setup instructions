@@ -1,0 +1,19 @@
+### Vaillant aroTHERM / aroTHERM plus (sensoCOMFORT VRC 720 or VRC 700)
+
+QSH controls a Vaillant aroTHERM by writing the unit's `Min Flow Temperature Setpoint` parameter directly via the standard `mypyllant-component` Home Assistant integration. For this to behave as a direct flow-temperature command, the unit's own weather-compensation logic must be disabled so it does not fight QSH's commands. The owner makes three settings at the sensoCOMFORT (or VRC 700) controller, one time, before connecting QSH:
+
+1. **Outdoor Temperature switch-off threshold → 25 °C**
+   *Menu → Settings → Installer level → enter code `00` → Installation configuration → Circuit 1 → OT Switch-off threshold.*
+   Disables the unit's own decision to stop heating based on outdoor temperature. QSH owns that decision via the existing `AntifrostOverrideController` and shoulder / summer mode logic.
+
+2. **Zone Room-temperature modulation → `active` or `inactive` (NOT `expanded`)**
+   *Menu → Settings → Installer level → code `00` → Installation configuration → Circuit → Roomtemp.mod.*
+   Prevents the controller's room-influence logic from overriding QSH's flow-temp command.
+
+3. **Weather-compensation curve slope → 0.1**
+   *At the heating circuit menu.*
+   Effectively disables the unit's WC curve so flow temperature defaults to whatever `Min Flow Temperature Setpoint` is currently set to. This is the mechanism that converts `min_flow_temp` into a direct flow-temp command surface.
+
+**DHW remains owner-controlled.** QSH does NOT schedule, command setpoint, or control DHW priority. The unit's own DHW logic — sensoCOMFORT time programs, anti-legionella schedule, charging hysteresis — continues to operate exactly as it does today. QSH observes when DHW priority is active (via the existing `classify_hot_water_payload` path) and pauses heating commands accordingly. Do NOT change the DHW cylinder charging hysteresis; leave it at whatever value the installer commissioned.
+
+After the three controller settings above, complete QSH setup as normal:
