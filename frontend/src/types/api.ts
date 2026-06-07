@@ -93,9 +93,6 @@ export interface ScopResponse {
   scop?: number | null
   thermal_kwh?: number
   electrical_kwh?: number
-  data_quality?: {
-    deploy_date_in_window: boolean
-  }
 }
 
 // INSTRUCTION-150E: Tariff Provider Abstraction (frontend types).
@@ -549,6 +546,86 @@ export interface BalancingResponse {
   imbalanced_count: number
   total_observations: number
   error?: string
+}
+
+// INSTRUCTION-288B: quarantine read surface over the swarm publisher's
+// latest_quarantine() accessor (QS-INSTRUCTION-007 unit-reader half).
+export interface QuarantineStatus {
+  quarantined: boolean
+  reason: string | null
+  contact: string | null
+}
+
+// INSTRUCTION-289B: swarm unit read surface — shapes mirror 289A's four GET
+// routes (qsh/api/routes/swarm.py) exactly; every field is the contract.
+export interface SwarmStatus {
+  enabled: boolean
+  unit_id: string | null
+  cohort_id: string | null
+  subscribe_enabled: boolean
+  endpoint: string | null
+  queue: Record<string, number>
+  pending: number
+}
+
+// Provenance dict per received-prior family — permissive but typed (not `any`).
+export type SwarmPriorEntry = Record<string, unknown>
+
+export interface SwarmPriors {
+  families: Record<string, SwarmPriorEntry>
+  family_names: string[]
+  last_etag: string | null
+  count: number
+}
+
+export interface SwarmDivergenceRow {
+  room: string
+  u_shadow: number | null
+  u_live: number | null
+  u_delta: number | null
+  c_shadow: number | null
+  c_live: number | null
+  c_delta: number | null
+  solar_shadow: number | null
+  solar_live: number | null
+  solar_delta: number | null
+}
+
+export interface SwarmDivergence {
+  rooms: SwarmDivergenceRow[]
+  counterfactual_summary: string | null
+}
+
+export type SwarmGateState = 'UNKNOWN' | 'CLOSED' | 'OPEN'
+
+export interface SwarmGates {
+  gates: Record<string, SwarmGateState>
+}
+
+// INSTRUCTION-294A/294B: freshness-checked GLOBAL gate + master live-enable.
+// Mirrors GET /api/swarm/global (qsh/api/routes/swarm.py). global_gate is the
+// FRESH state — a read aged past max_age collapses to UNKNOWN server-side.
+export interface SwarmGlobal {
+  global_gate: SwarmGateState // OPEN | CLOSED | UNKNOWN (fresh; stale → UNKNOWN)
+  live_enabled: boolean // operator intent
+  live_active: boolean // intent ∧ fresh-OPEN — actual consumption state
+  can_enable: boolean // backend = (fresh global_gate === 'OPEN')
+}
+
+// INSTRUCTION-296A/296B: per-channel swarm consumption status. Mirrors
+// GET /api/swarm/channels (qsh/api/routes/swarm.py::get_channels). The frontend
+// derives the traffic-light tile colour from gate × data × wired × live_active.
+export type SwarmChannelData = 'fresh' | 'stale' | 'none'
+
+export interface SwarmChannel {
+  gate: SwarmGateState
+  family: string | null
+  data: SwarmChannelData
+  wired: boolean
+}
+
+export interface SwarmChannels {
+  channels: Record<string, SwarmChannel>
 }
 
 // INSTRUCTION-192: pre-write configuration snapshot mechanism.

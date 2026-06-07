@@ -69,12 +69,6 @@ export function Scop() {
     ch.data?.available === false &&
     hw.data?.available === false
 
-  const deployBannerVisible = Boolean(
-    combined.data?.data_quality?.deploy_date_in_window ||
-      ch.data?.data_quality?.deploy_date_in_window ||
-      hw.data?.data_quality?.deploy_date_in_window,
-  )
-
   if (allUnavailable) {
     return (
       <div className="p-4 lg:p-6 space-y-4">
@@ -94,13 +88,6 @@ export function Scop() {
       <PageHeader />
 
       <WindowPicker selected={window} onSelect={setWindow} />
-
-      {deployBannerVisible && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-400">
-          Window spans the 191A deploy date — CH SCOP may be biased downward by
-          pre-deploy DHW cycles.
-        </div>
-      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <ScopCard
@@ -231,10 +218,7 @@ function CardSparkline({
   if (mode === 'ch') {
     return <ScopSparkline measurement="qsh_system" window={window} disabled={disabled} hwActive="false" />
   }
-  // mode === 'hw' — retained on qsh_dhw for backwards compatibility with the
-  // existing HW kWh integration path (INSTRUCTION-191A). Could be switched to
-  // qsh_system + hwActive='true' in a follow-up; out of scope here.
-  return <ScopSparkline measurement="qsh_dhw" window={window} disabled={disabled} />
+  return <ScopSparkline measurement="qsh_system" window={window} disabled={disabled} hwActive="true" />
 }
 
 function ScopSparkline({
@@ -243,7 +227,7 @@ function ScopSparkline({
   disabled,
   hwActive,
 }: {
-  measurement: 'qsh_system' | 'qsh_dhw'
+  measurement: 'qsh_system'
   window: ScopWindow
   disabled: boolean
   hwActive?: 'true' | 'false'

@@ -17,7 +17,11 @@ from ...events import EventKind, EventSpec, get_annunciator
 from ...occupancy.comfort_schedule import get_comfort_schedule_store
 from .client import MQTTClient, MQTTClientConfig
 from ..resolve import ResolvedValue, deep_get, _validate_range
-from ..hot_water_payloads import classify_hot_water_payload
+from ..hot_water_payloads import (
+    classify_hot_water_payload,
+    resolve_hot_water_active,
+    HW_STALE_HOLD_DEFAULT_S,
+)
 from .topic_map import (
     CAPABILITY_FIELDS,
     SYSTEM_INPUT_FIELDS,
@@ -69,6 +73,15 @@ def _register_mqtt_events() -> None:
         name="COMFORT.writeback_internal_fallback",
         kind=EventKind.OCCURRED,
         payload_fields=("wrote", "read", "elapsed_s", "internal_key"),
+        default_level=logging.INFO,
+    ))
+    # INSTRUCTION-301 — hot_water_active last-valid hold across DHW-source comms
+    # loss. LATCHED on held_value; age_s is diagnostic context only.
+    ann.register(EventSpec(
+        name="MQTT.hot_water_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("held_value", "age_s"),
+        latch_key=("held_value",),
         default_level=logging.INFO,
     ))
 
@@ -259,6 +272,14 @@ class MQTTDriver:
         # Instance-scoped because MQTTDriver is an instantiated class;
         # natural per-test isolation via fresh MQTTDriver(cfg) construction.
         self._last_winning_emitter_per_room: Dict[str, str] = {}
+
+        # INSTRUCTION-301 — last-valid hold for hot_water_active across DHW-
+        # source comms loss. Holds the last live-resolved value for a bounded
+        # window when every source goes non-live, rather than collapsing to
+        # False mid-DHW. Instance-scoped (per MQTTDriver); naturally isolated
+        # per test via fresh MQTTDriver(cfg) construction.
+        self._hw_last_valid_value: Optional[bool] = None
+        self._hw_last_valid_ts: Optional[float] = None
 
         rooms = config.get("rooms", {})
         if not rooms:
@@ -768,14 +789,50 @@ class MQTTDriver:
         else:
             pass  # away/control resolved below via _resolve_mqtt_control
 
-        # ── OR resolution for DHW demand (INSTRUCTION-126) ─────────────
-        # hot_water_active is True iff at least one configured source
-        # returned an ON-set payload. has_live_hot_water is asserted iff
-        # at least one source produced an ON or LIVE-OFF reading —
+        # ── OR resolution for DHW demand (INSTRUCTION-126, amended by -301) ──
+        # hot_water_active = OR across LIVE sources only; has_live_hot_water is
+        # asserted iff at least one source produced an ON or LIVE-OFF reading —
         # UNAVAILABLE and UNRECOGNISED do not count. Single-sited write.
-        _hw_contributions = [v for v in (hw_active_value, hw_boolean_value) if v is not None]
-        if _hw_contributions:
-            hot_water_active = any(_hw_contributions)
+        # INSTRUCTION-301 — resolve from LIVE contributions only; hold last-
+        # valid across non-live (comms-drop) periods within a bounded window
+        # rather than voting False. A non-live UNAVAILABLE no longer forces
+        # hot_water_active=False mid-DHW; a live OFF is respected immediately.
+        _register_mqtt_events()
+        _hw_ann = get_annunciator()
+        _hw_sources = [
+            (hw_active_value, hw_active_live),
+            (hw_boolean_value, hw_boolean_live),
+        ]
+        _hw_now = time.time()
+        _hw_hold_timeout = config.get("hot_water_stale_hold_s", HW_STALE_HOLD_DEFAULT_S)
+        (
+            hot_water_active,
+            self._hw_last_valid_value,
+            self._hw_last_valid_ts,
+            _hw_used_hold,
+        ) = resolve_hot_water_active(
+            _hw_sources,
+            self._hw_last_valid_value,
+            self._hw_last_valid_ts,
+            _hw_now,
+            _hw_hold_timeout,
+        )
+        if _hw_used_hold:
+            _hw_age_s = (
+                _hw_now - self._hw_last_valid_ts
+                if self._hw_last_valid_ts is not None else 0.0
+            )
+            _hw_ann.entered(
+                "MQTT.hot_water_stale_lastvalid",
+                held_value=hot_water_active,
+                age_s=round(_hw_age_s, 1),
+            )
+        else:
+            # Falling edge — live reading returned OR hold timed out. Clear
+            # whichever held-value latch is set (at most one); the other is a
+            # silent no-op.
+            _hw_ann.exited("MQTT.hot_water_stale_lastvalid", held_value=True)
+            _hw_ann.exited("MQTT.hot_water_stale_lastvalid", held_value=False)
         if hw_active_live or hw_boolean_live:
             capabilities["has_live_hot_water"] = True
 
@@ -1167,14 +1224,44 @@ class MQTTDriver:
 
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
 
-        # ── Hardware commands (HP flow/mode) ──
+        # ── Hardware commands (HP flow/mode) — active-source routed (279C) ──
+        # Resolve active source from the single identity channel (parent
+        # Decision 1); write_outputs has no ctx, but config["active_source_name"]
+        # is written live every cycle by SSC.
+        active_name = config.get("active_source_name")
+        sources_by_name = {
+            s.get("name", ""): s for s in config.get("heat_sources", [])
+        }
+        active_src = sources_by_name.get(active_name)
+
+        from qsh.drivers.source_routing import resolve_source_routing
+        routing = resolve_source_routing(config, active_src)
+
         if outputs.hardware_changed:
             if control_enabled:
-                for om in self._topic_map.output_mappings:
-                    if om.field == "applied_flow":
-                        self._mqtt.publish(om.topic, str(outputs.applied_flow))
-                    elif om.field == "applied_mode":
-                        self._mqtt.publish(om.topic, outputs.applied_mode)
+                if not routing.dispatch_flow_mode:
+                    # Suppress: non-primary active source with no actuator — do NOT
+                    # fall through to the shared (primary) topics (parent §1 defect).
+                    logger.debug(
+                        "Active source '%s' unaddressable — suppressing continuous flow/mode publish",
+                        active_name,
+                    )
+                elif (
+                    routing.routed
+                    and routing.control_method == "mqtt"
+                    and routing.mqtt_flow_topic
+                    and routing.mqtt_mode_topic
+                ):
+                    # Per-source addressing — publish verbatim to this source's topics
+                    self._mqtt.publish(routing.mqtt_flow_topic, str(outputs.applied_flow))
+                    self._mqtt.publish(routing.mqtt_mode_topic, outputs.applied_mode)
+                else:
+                    # Fall-back: existing shared output_mappings (prefixed) — unchanged path
+                    for om in self._topic_map.output_mappings:
+                        if om.field == "applied_flow":
+                            self._mqtt.publish(om.topic, str(outputs.applied_flow))
+                        elif om.field == "applied_mode":
+                            self._mqtt.publish(om.topic, outputs.applied_mode)
             else:
                 logger.debug(
                     "SHADOW MODE: suppressed HP command flow=%.1f mode=%s",

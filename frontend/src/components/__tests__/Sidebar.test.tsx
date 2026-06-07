@@ -94,7 +94,7 @@ describe('Sidebar', () => {
     // When engineering=false and page is an engineering page, activePage resolves to 'home'.
     const { ENGINEERING_PAGES } = await import('../../lib/constants')
 
-    const engineeringPages = ['engineering', 'balancing', 'historian', 'settings', 'forecast', 'valves']
+    const engineeringPages = ['engineering', 'balancing', 'historian', 'settings', 'forecast', 'valves', 'swarm']
     expect([...ENGINEERING_PAGES]).toEqual(engineeringPages)
 
     // Simulate the guard: activePage = engineering-gated page + toggle off → 'home'

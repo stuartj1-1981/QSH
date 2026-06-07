@@ -8,6 +8,7 @@ import type {
   DriverStatus,
   HeatSourceState,
   SourceSelectionPayload,
+  QuarantineStatus,
 } from '../types/api'
 import type { TariffAggressionMode } from '../types/config'
 import type { Page } from '../App'
@@ -112,6 +113,11 @@ interface StatusBannerProps {
   // the payload alone does not disclose that count.
   sourceSelection?: SourceSelectionPayload
   heatSourceCount?: number
+  // INSTRUCTION-288B: quarantine signal from the swarm coordinator
+  // (QS-INSTRUCTION-007). When `quarantined` is true the banner renders a
+  // prominent "flagged for review — contact support" alert. Absent / false →
+  // nothing quarantine-related renders (happy path byte-identical).
+  quarantine?: QuarantineStatus
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -138,6 +144,7 @@ export const StatusBanner = memo(function StatusBanner({
   controlMethod,
   sourceSelection,
   heatSourceCount,
+  quarantine,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -225,6 +232,33 @@ export const StatusBanner = memo(function StatusBanner({
               >
                 Open wizard
               </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-288B quarantine banner — the unit has been flagged for
+          review by the swarm coordinator (QS-INSTRUCTION-007). Non-terminal:
+          publishing continues; this surfaces the phone-home path. Rendered
+          only when quarantined === true; absent/false → nothing here. */}
+      {quarantine?.quarantined && (
+        <div
+          role="alert"
+          data-testid="quarantine-banner"
+          className="rounded-xl border p-4 mb-2 bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">
+              This unit has been flagged for review. Contact support to be re-instated.
+            </div>
+            {quarantine.reason && (
+              <div className="mt-1 text-xs opacity-80">{quarantine.reason}</div>
+            )}
+            {quarantine.contact && (
+              <div className="mt-2 text-xs">
+                Contact: <span className="font-medium break-all">{quarantine.contact}</span>
+              </div>
             )}
           </div>
         </div>

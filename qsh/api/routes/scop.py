@@ -1,20 +1,17 @@
 """SCOP API route — mode-resolved seasonal CoP over configurable windows.
 
 Computes SCOP = Σ thermal_kWh / Σ electrical_kWh over a window for one of
-combined / CH (space heat) / HW (hot water). Combined and HW are Riemann
-sums of the per-cycle power fields against qsh_system and qsh_dhw
-respectively, via Historian.sum_field_as_kwh() (SUM × _CYCLE_HOURS).
-CH is derived arithmetically: ch_thermal = combined_thermal - hw_thermal,
-ch_electrical = combined_electrical - hw_electrical. The Riemann form
-(rather than InfluxQL INTEGRAL) is required because qsh_dhw is a sparse
-series — it writes only on DHW-active cycles, and INTEGRAL would
-linearly-interpolate phantom kWh across HP-off intervals between DHW
-cycles (see INSTRUCTION-191C V2 §Background for worked example).
+combined / CH (space heat) / HW (hot water). All three modes integrate
+against qsh_system. CH and HW filter on the `hw_active` tag set by
+historian.py at sample time (INSTRUCTION-215).
 
-INSTRUCTION-191C — depends on INSTRUCTION-191A's qsh_dhw measurement.
+INSTRUCTION-273 — replaces the INSTRUCTION-191C arithmetic-subtraction
+derivation and the qsh_dhw parallel measurement. The arithmetic path was
+sensitive to write-gate asymmetry between qsh_system and qsh_dhw, and the
+parallel measurement is retired in the same instruction.
 """
 
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from typing import Tuple, Optional
 from zoneinfo import ZoneInfo
 
@@ -29,6 +26,11 @@ VALID_MODES = {"combined", "ch", "hw"}
 
 THERMAL_FIELD = "active_source_thermal_output_kw"
 ELECTRICAL_FIELD = "hp_power_kw"
+
+# INSTRUCTION-300 coverage gate: a small grace absorbs sample-timing jitter
+# at the window-start boundary when comparing the earliest thermal sample
+# against the resolved window start.
+COVERAGE_GRACE = timedelta(minutes=5)
 
 
 def resolve_window(window: str, tz_name: str = "Europe/London") -> Tuple[str, str]:
@@ -58,6 +60,37 @@ def resolve_window(window: str, tz_name: str = "Europe/London") -> Tuple[str, st
     return sep1.isoformat(), "now()"
 
 
+def resolve_window_start_dt(
+    window: str, tz_name: str = "Europe/London"
+) -> datetime:
+    """Resolve a window enum to its absolute start as a tz-aware datetime.
+
+    Sibling to ``resolve_window`` (which returns InfluxQL-relative strings
+    like ``"-90d"``). The INSTRUCTION-300 coverage gate needs the concrete
+    start *instant* to compare against the earliest thermal-instrumented
+    sample, so this returns a ``datetime`` rather than a query fragment.
+    ``resolve_window`` is intentionally left unchanged.
+    """
+    if window not in VALID_WINDOWS:
+        raise ValueError(f"unknown window: {window!r}")
+
+    tz = ZoneInfo(tz_name)
+    now_local = datetime.now(tz)
+
+    if window == "today":
+        return datetime.combine(now_local.date(), dt_time.min, tzinfo=tz)
+
+    if window in {"7d", "30d", "90d"}:
+        return now_local - timedelta(days=int(window[:-1]))
+
+    # season — same 1 Sep boundary resolve_window computes.
+    year = now_local.year
+    return datetime(
+        year if now_local.month >= 9 else year - 1,
+        9, 1, tzinfo=tz,
+    )
+
+
 def _get_active_historian():
     h = get_historian()
     if h is None or not h.is_active:
@@ -79,36 +112,6 @@ def _config_tz(historian) -> str:
     return cfg.get("installation_tz", "Europe/London")
 
 
-def _deploy_date_in_window(historian, time_from: str) -> bool:
-    """Return True if the configured 191A deploy date falls inside the window.
-
-    Used by the frontend to render a data-quality watermark on long-window
-    charts where pre-191A blended data is being subtracted from post-191A
-    qsh_dhw data, biasing CH SCOP downward in proportion to pre-191A DHW
-    share.
-    """
-    cfg = getattr(historian, "_config", None) or {}
-    deploy_iso = cfg.get("instruction_191a_deploy_date")
-    if not deploy_iso:
-        return False  # config not yet annotated; assume no boundary issue
-    try:
-        deploy_dt = datetime.fromisoformat(deploy_iso)
-    except ValueError:
-        return False
-
-    if time_from.startswith("-"):
-        return False  # rolling windows; assume always recent enough
-    try:
-        from_dt = datetime.fromisoformat(time_from)
-    except ValueError:
-        return False
-    # Compare naive-vs-aware safely: drop tz if either side is naive.
-    if (deploy_dt.tzinfo is None) != (from_dt.tzinfo is None):
-        deploy_dt = deploy_dt.replace(tzinfo=None)
-        from_dt = from_dt.replace(tzinfo=None)
-    return from_dt < deploy_dt
-
-
 @router.get("")
 def get_scop(
     window: str = Query("30d", description="today | 7d | 30d | 90d | season"),
@@ -126,12 +129,18 @@ def get_scop(
           "scop": float | null,
           "thermal_kwh": float,
           "electrical_kwh": float,
-          "data_quality": { "deploy_date_in_window": bool }
+          "coverage_complete": bool,
+          "data_start": ISO datetime | null
         }
 
         available=false when the historian is disabled or the install is
-        not a heat pump. scop is null when the bucket has no data or the
-        electrical denominator is zero.
+        not a heat pump. scop is null when the bucket has no data, the
+        electrical denominator is zero, or (INSTRUCTION-300) the window is
+        not yet fully thermal-instrumented — i.e. the earliest recorded
+        thermal sample is later than the window start. In that case
+        coverage_complete is false and data_start carries the earliest
+        thermal-sample time (or null if the field has never been recorded);
+        thermal_kwh / electrical_kwh remain the factual partial-window sums.
     """
     if window not in VALID_WINDOWS:
         raise HTTPException(400, f"invalid window: {window!r}")
@@ -162,9 +171,31 @@ def get_scop(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    # Combined integrals from qsh_system
-    combined_th = h.sum_field_as_kwh("qsh_system", THERMAL_FIELD, time_from, time_to)
-    combined_el = h.sum_field_as_kwh("qsh_system", ELECTRICAL_FIELD, time_from, time_to)
+    # INSTRUCTION-300 coverage gate: SCOP reads null until the system has
+    # been thermal-instrumented for the whole window. If the earliest
+    # recorded thermal sample is later than the window start (within a small
+    # grace), the data does not cover the full nominal span, so the ratio is
+    # suppressed (a number over a shorter-than-labelled span is more
+    # misleading than no number). `earliest is None` (field never recorded
+    # or historian unreachable) is the fail-safe null case.
+    earliest = h.earliest_field_time("qsh_system", THERMAL_FIELD)
+    start_dt = resolve_window_start_dt(window, tz_name)
+    coverage_complete = (
+        earliest is not None and earliest <= start_dt + COVERAGE_GRACE
+    )
+
+    # Combined integrals from qsh_system. require_field pins numerator and
+    # denominator to the same cycle set — the points that recorded a thermal
+    # reading — so the electrical denominator cannot be inflated by HP-on
+    # cycles that wrote hp_power_kw but no active_source_thermal_output_kw.
+    combined_th = h.sum_field_as_kwh(
+        "qsh_system", THERMAL_FIELD, time_from, time_to,
+        require_field=THERMAL_FIELD,
+    )
+    combined_el = h.sum_field_as_kwh(
+        "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
+        require_field=THERMAL_FIELD,
+    )
 
     if mode == "combined":
         scop = _safe_div(combined_th, combined_el)
@@ -172,24 +203,37 @@ def get_scop(
         electrical = combined_el or 0.0
 
     elif mode == "hw":
-        hw_th = h.sum_field_as_kwh("qsh_dhw", THERMAL_FIELD, time_from, time_to)
-        hw_el = h.sum_field_as_kwh("qsh_dhw", ELECTRICAL_FIELD, time_from, time_to)
+        hw_th = h.sum_field_as_kwh(
+            "qsh_system", THERMAL_FIELD, time_from, time_to,
+            hw_active="true", require_field=THERMAL_FIELD,
+        )
+        hw_el = h.sum_field_as_kwh(
+            "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
+            hw_active="true", require_field=THERMAL_FIELD,
+        )
         scop = _safe_div(hw_th, hw_el)
         thermal = hw_th or 0.0
         electrical = hw_el or 0.0
 
     else:  # mode == "ch"
-        hw_th = h.sum_field_as_kwh("qsh_dhw", THERMAL_FIELD, time_from, time_to) or 0.0
-        hw_el = h.sum_field_as_kwh("qsh_dhw", ELECTRICAL_FIELD, time_from, time_to) or 0.0
-        ch_th = (combined_th or 0.0) - hw_th
-        ch_el = (combined_el or 0.0) - hw_el
-        # Negative results indicate clock-skew or out-of-order ingestion;
-        # clamp to zero and let scop go to None via _safe_div's denom check.
-        ch_th = max(0.0, ch_th)
-        ch_el = max(0.0, ch_el)
+        ch_th = h.sum_field_as_kwh(
+            "qsh_system", THERMAL_FIELD, time_from, time_to,
+            hw_active="false", require_field=THERMAL_FIELD,
+        )
+        ch_el = h.sum_field_as_kwh(
+            "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
+            hw_active="false", require_field=THERMAL_FIELD,
+        )
         scop = _safe_div(ch_th, ch_el)
-        thermal = ch_th
-        electrical = ch_el
+        thermal = ch_th or 0.0
+        electrical = ch_el or 0.0
+
+    # Coverage gate: suppress the ratio when the window is not fully
+    # instrumented. thermal_kwh / electrical_kwh remain the factual
+    # partial-window sums; only scop is nulled.
+    scop_out = round(scop, 3) if scop is not None else None
+    if not coverage_complete:
+        scop_out = None
 
     return {
         "available": True,
@@ -197,10 +241,9 @@ def get_scop(
         "mode": mode,
         "window_start": time_from,
         "window_end": time_to,
-        "scop": round(scop, 3) if scop is not None else None,
+        "scop": scop_out,
         "thermal_kwh": round(thermal, 2),
         "electrical_kwh": round(electrical, 2),
-        "data_quality": {
-            "deploy_date_in_window": _deploy_date_in_window(h, time_from),
-        },
+        "coverage_complete": coverage_complete,
+        "data_start": earliest.isoformat() if earliest is not None else None,
     }
