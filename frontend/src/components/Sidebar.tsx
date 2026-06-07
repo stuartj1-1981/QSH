@@ -1,9 +1,9 @@
-import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal } from 'lucide-react'
+import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal, Network } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface SidebarProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean
@@ -107,6 +107,12 @@ export function Sidebar({
               label="Forecast"
               active={page === 'forecast'}
               onClick={() => onNavigate('forecast')}
+            />
+            <NavItem
+              icon={<Network size={18} />}
+              label="Swarm"
+              active={page === 'swarm'}
+              onClick={() => onNavigate('swarm')}
             />
             <NavItem
               icon={<Settings size={18} />}

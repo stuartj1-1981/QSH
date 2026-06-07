@@ -835,11 +835,12 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
             topic=_prefixed(prefix, outputs["mode"]),
             field="applied_mode",
         ))
-    if outputs.get("heat_source_command"):
-        tm.output_mappings.append(OutputMapping(
-            topic=_prefixed(prefix, outputs["heat_source_command"]),
-            field="heat_source_command",
-        ))
+    # INSTRUCTION-280 — the dead config-output mapping for the per-source command
+    # topic was removed here. Since INSTRUCTION-228A, per-source on/off commands
+    # publish to command_topic_for_source(); nothing ever consumed the old MQTT
+    # config-output topic mapping (write_outputs only matches applied_flow /
+    # applied_mode / valve_setpoint / trv_setpoint). The internal OutputBlock
+    # command signal (signal_bus.py) is a separate, live concern and is unchanged.
 
     # Per-room output topics
     # INSTRUCTION-222B — accept either string or list for valve_setpoint /

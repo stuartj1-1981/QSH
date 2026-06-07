@@ -204,18 +204,6 @@ export function StepMqttBroker({ config, onUpdate }: StepMqttBrokerProps) {
             />
           </div>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-[var(--text)] mb-1">
-            Heat Source Command (optional)
-          </label>
-          <input
-            type="text"
-            value={mqtt.outputs?.heat_source_command || ''}
-            onChange={(e) => updateOutputs('heat_source_command', e.target.value)}
-            placeholder="heatpump/command"
-            className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-          />
-        </div>
       </div>
     </div>
   )

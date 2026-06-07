@@ -134,6 +134,8 @@ import qsh.occupancy; \
 import qsh.drivers; \
 import qsh.forecast; \
 import qsh.forecast.providers; \
+import qsh.swarm; \
+from qsh.swarm.shadow_sysid import ShadowSysidTrack; \
 print('T-23 / T-24 Check A deep import smoke PASS')"
 
 # Check B — boot-and-probe. Boots `python -m qsh` (which takes the template-mode

@@ -12,7 +12,11 @@ from .integration import fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
 from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
 from ..resolve import resolve_value, deep_get
-from ..hot_water_payloads import classify_hot_water_payload
+from ..hot_water_payloads import (
+    classify_hot_water_payload,
+    resolve_hot_water_active,
+    HW_STALE_HOLD_DEFAULT_S,
+)
 from ...hw_enable import resolve_hw_entity_ids
 from ...events import EventKind, EventSpec, get_annunciator
 
@@ -60,6 +64,16 @@ def _register_events() -> None:
         payload_fields=("temp",),
         default_level=logging.INFO,
     ))
+    # INSTRUCTION-301 — hot_water_active last-valid hold across HW-source comms
+    # loss. LATCHED on held_value; age_s is diagnostic context only (latch_key
+    # excludes it, so it cannot force per-cycle re-emission).
+    ann.register(EventSpec(
+        name="HA.hot_water_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("held_value", "age_s"),
+        latch_key=("held_value",),
+        default_level=logging.INFO,
+    ))
 
 
 # =========================================================================
@@ -84,6 +98,15 @@ _last_valid_heating_perc_per_emitter: Dict[Tuple[str, str], float] = {}
 # legacy stem for both fresh and stale paths; shape is consistent
 # without the tracker).
 _last_winning_entity_per_room: Dict[str, str] = {}
+
+# INSTRUCTION-301: last-valid hold for hot_water_active across DHW-source comms
+# loss. When every configured HW source reports a non-live payload (a comms
+# drop), the last live-resolved value is held for a bounded window rather than
+# collapsing to False — preventing live DHW reheat from being mis-tagged
+# hw_active='false' and polluting the CH SCOP bucket. Single HA driver instance
+# per process — same convention as the _last_valid_* caches above.
+_hw_last_valid_value: Optional[bool] = None
+_hw_last_valid_ts: Optional[float] = None
 
 # =========================================================================
 # WARN-ONCE SETS (log once per entity, then suppress)
@@ -1126,7 +1149,7 @@ def fetch_source_raw_values(config: Dict) -> Dict[str, Any]:
 
 def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     """Fetch all sensor data in one go with capability-aware degradation."""
-    global _last_valid_outdoor_temp
+    global _last_valid_outdoor_temp, _hw_last_valid_value, _hw_last_valid_ts
     data = SensorData()
     data.target_temp = target_temp
 
@@ -1250,8 +1273,43 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         bool_raw = fetch_ha_entity(hw_boolean_entity, default=None)
         bool_value, bool_live = classify_hot_water_payload(bool_raw)
 
-    contributions = [v for v in (wh_value, bool_value) if v is not None]
-    data.hot_water_active = any(contributions) if contributions else False
+    # INSTRUCTION-301 — resolve hot_water_active from LIVE contributions only.
+    # When every configured source is non-live (comms drop / unrecognised),
+    # hold the last live-resolved value for a bounded window instead of voting
+    # False. A non-live UNAVAILABLE no longer forces hot_water_active=False
+    # mid-DHW-reheat. A live OFF is respected immediately (turns HW off).
+    _register_events()
+    _hw_ann = get_annunciator()
+    hw_sources = []
+    if water_heater_entity:
+        hw_sources.append((wh_value, wh_live))
+    if hw_boolean_entity:
+        hw_sources.append((bool_value, bool_live))
+
+    _hw_now = time.time()
+    _hw_hold_timeout = config.get("hot_water_stale_hold_s", HW_STALE_HOLD_DEFAULT_S)
+    (
+        data.hot_water_active,
+        _hw_last_valid_value,
+        _hw_last_valid_ts,
+        _hw_used_hold,
+    ) = resolve_hot_water_active(
+        hw_sources, _hw_last_valid_value, _hw_last_valid_ts, _hw_now, _hw_hold_timeout
+    )
+
+    if _hw_used_hold:
+        _hw_age_s = _hw_now - _hw_last_valid_ts if _hw_last_valid_ts is not None else 0.0
+        _hw_ann.entered(
+            "HA.hot_water_stale_lastvalid",
+            held_value=data.hot_water_active,
+            age_s=round(_hw_age_s, 1),
+        )
+    else:
+        # Falling edge — a live reading returned OR the hold timed out. Clear
+        # whichever held-value latch is set (at most one can be); the unset
+        # one is a silent no-op.
+        _hw_ann.exited("HA.hot_water_stale_lastvalid", held_value=True)
+        _hw_ann.exited("HA.hot_water_stale_lastvalid", held_value=False)
 
     if water_heater_entity or hw_boolean_entity:
         data.has_live_hot_water = wh_live or bool_live

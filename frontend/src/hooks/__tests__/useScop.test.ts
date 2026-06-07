@@ -12,7 +12,6 @@ const mockResponse: ScopResponse = {
   scop: 3.42,
   thermal_kwh: 1234.5,
   electrical_kwh: 360.9,
-  data_quality: { deploy_date_in_window: false },
 }
 
 describe('useScop', () => {

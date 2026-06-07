@@ -47,7 +47,6 @@ const availableState = (mode: 'combined' | 'ch' | 'hw', scop: number | null) => 
     scop,
     thermal_kwh: scop !== null ? 100.0 : 0,
     electrical_kwh: scop !== null ? 30.0 : 0,
-    data_quality: { deploy_date_in_window: false },
   },
   loading: false,
   error: null,
@@ -94,7 +93,6 @@ describe('Scop page', () => {
     expect(screen.getByText('Combined')).toBeInTheDocument()
     expect(screen.getByText('CH')).toBeInTheDocument()
     expect(screen.getByText('HW')).toBeInTheDocument()
-    // Three cards each showing 3.50 (formatScop output for 3.5)
     const values = screen.getAllByText('3.50')
     expect(values).toHaveLength(3)
   })
@@ -107,7 +105,6 @@ describe('Scop page', () => {
     render(<Scop />)
 
     const dashes = screen.getAllByText('—')
-    // Three card values of "—".
     expect(dashes.length).toBeGreaterThanOrEqual(3)
   })
 
@@ -121,7 +118,6 @@ describe('Scop page', () => {
     expect(
       screen.getByText(/SCOP is HP-specific/i),
     ).toBeInTheDocument()
-    // Cards should not be rendered.
     expect(screen.queryByText('Combined')).not.toBeInTheDocument()
   })
 
@@ -130,7 +126,6 @@ describe('Scop page', () => {
 
     render(<Scop />)
 
-    // The hook is called with window=30d for each mode (3 calls).
     expect(mockUseScop).toHaveBeenCalledWith('30d', 'combined')
     expect(mockUseScop).toHaveBeenCalledWith('30d', 'ch')
     expect(mockUseScop).toHaveBeenCalledWith('30d', 'hw')
@@ -144,44 +139,9 @@ describe('Scop page', () => {
     fireEvent.click(screen.getByText('7d'))
 
     expect(localStorage.getItem('qsh-scop-window')).toBe('7d')
-    // After click, hook should be called with the new window for each mode.
     expect(mockUseScop).toHaveBeenCalledWith('7d', 'combined')
     expect(mockUseScop).toHaveBeenCalledWith('7d', 'ch')
     expect(mockUseScop).toHaveBeenCalledWith('7d', 'hw')
-  })
-
-  it('displays deploy-date banner when data_quality.deploy_date_in_window=true', () => {
-    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') => ({
-      data: {
-        available: true,
-        window: '30d',
-        mode,
-        scop: 3.5,
-        thermal_kwh: 100,
-        electrical_kwh: 30,
-        data_quality: { deploy_date_in_window: true },
-      },
-      loading: false,
-      error: null,
-    }))
-
-    render(<Scop />)
-
-    expect(
-      screen.getByText(/spans the 191A deploy date/i),
-    ).toBeInTheDocument()
-  })
-
-  it('does not display deploy-date banner when flag is false or absent', () => {
-    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
-      availableState(mode, 3.5),
-    )
-
-    render(<Scop />)
-
-    expect(
-      screen.queryByText(/spans the 191A deploy date/i),
-    ).not.toBeInTheDocument()
   })
 
   it('restores window from localStorage on mount', () => {
@@ -223,12 +183,54 @@ describe('Scop page', () => {
     render(<Scop />)
 
     const chCall = mockUseHistorianQuery.mock.calls.find(
-      (args) =>
+      (args: unknown[]) =>
         args[0] === 'qsh_system' &&
         Array.isArray(args[1]) &&
         args[1].includes('cop') &&
-        args[2]?.hwActive === 'false',
+        (args[2] as Record<string, unknown>)?.hwActive === 'false',
     )
     expect(chCall).toBeTruthy()
+  })
+
+  it('HW card requests qsh_system.cop with hwActive=true', () => {
+    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
+      availableState(mode, 3.5),
+    )
+    mockUseHistorianQuery.mockReturnValue({
+      data: { points: [] },
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(<Scop />)
+
+    const hwCall = mockUseHistorianQuery.mock.calls.find(
+      (args: unknown[]) =>
+        args[0] === 'qsh_system' &&
+        Array.isArray(args[1]) &&
+        args[1].includes('cop') &&
+        (args[2] as Record<string, unknown>)?.hwActive === 'true',
+    )
+    expect(hwCall).toBeTruthy()
+  })
+
+  it('no sparkline queries qsh_dhw across any mode', () => {
+    mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
+      availableState(mode, 3.5),
+    )
+    mockUseHistorianQuery.mockReturnValue({
+      data: { points: [] },
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(<Scop />)
+
+    const dhwCalls = mockUseHistorianQuery.mock.calls.filter(
+      (args: unknown[]) => args[0] === 'qsh_dhw',
+    )
+    expect(dhwCalls).toHaveLength(0)
   })
 })

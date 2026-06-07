@@ -272,6 +272,23 @@ def _normalise_power_kw(raw: float) -> float:
     return round(raw, 3)
 
 
+def _safe_pos(value: Any) -> Optional[float]:
+    """Return ``float(value)`` if it parses to a finite number > 0, else ``None``.
+
+    INSTRUCTION-278 gate for the capacity / min-output figures: an active-source
+    or config value is only trusted when it is a strictly-positive finite
+    number. ``None``, zero, negative, NaN and inf all fall through to the next
+    source in the resolution chain.
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):  # NaN / inf guard
+        return None
+    return f if f > 0 else None
+
+
 def build_heat_source_payload(snap: "CycleSnapshot") -> Dict[str, Any]:
     """Build the source-aware `heat_source` payload from a CycleSnapshot.
 
@@ -451,6 +468,7 @@ class SharedState:
         self._sysid_ref = None      # Reference to SystemIdentifier (read-only)
         self._config_ref = None     # Reference to HOUSE_CONFIG dict (read-only)
         self._balancing_ref = None  # Reference to BalancingDetector (set after API start)
+        self._swarm_ref = None      # SwarmRuntime (set after construction); None when swarm disabled
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
         self._driver_ref = None        # INSTRUCTION-225C: IODriver, set by main.py post-create_driver
@@ -775,7 +793,27 @@ class SharedState:
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──
-        hp_capacity_kw = config.get("hp_capacity_kw", 6.0)
+        # INSTRUCTION-278 — bar capacity + min-output track the ACTIVE source
+        # per cycle, falling back to the Task-1-derived config keys. Resolved as
+        # an atomic pair (all-active or all-config) so min_load_pct never mixes
+        # an active-source numerator with a config denominator. The denominator
+        # is the THERMAL figure (active-source capacity_kw /
+        # hp_thermal_capacity_kw), NOT the legacy hp_capacity_kw which the 117
+        # capability layer reads as electrical-input capacity; hp_capacity_kw
+        # stays only the lowest fallback so flat-schema installs keep their
+        # historical bar denominator.
+        _asc = getattr(ctx, "active_source_config", None) or {}
+        _a_cap = _safe_pos(_asc.get("capacity_kw"))
+        _a_min = _safe_pos(_asc.get("min_output_kw"))
+        if _a_cap is not None and _a_min is not None:
+            bar_capacity_kw, hp_min_output_kw = _a_cap, _a_min
+        else:
+            bar_capacity_kw = (
+                _safe_pos(config.get("hp_thermal_capacity_kw"))
+                or _safe_pos(config.get("hp_capacity_kw"))
+                or 6.0
+            )
+            hp_min_output_kw = _safe_pos(config.get("hp_min_output_kw")) or 2.0
         thermal_mass_per_m2 = config.get("thermal_mass_per_m2", 0.025)
 
         learned_c = {}
@@ -831,13 +869,12 @@ class SharedState:
         snap.per_room_ttc = per_room_ttc
 
         total_demand = ctx.smoothed_total_demand if hasattr(ctx, 'smoothed_total_demand') else ctx.smoothed_demand
-        capacity_pct = (total_demand / hp_capacity_kw * 100) if hp_capacity_kw > 0 else 0.0
+        capacity_pct = (total_demand / bar_capacity_kw * 100) if bar_capacity_kw > 0 else 0.0
 
         snap.capacity_pct = round(capacity_pct, 1)
-        snap.hp_capacity_kw = hp_capacity_kw
+        snap.hp_capacity_kw = bar_capacity_kw
 
-        hp_min_output_kw = config.get("hp_min_output_kw", 2.0)
-        snap.min_load_pct = round((hp_min_output_kw / hp_capacity_kw * 100) if hp_capacity_kw > 0 else 0.0, 1)
+        snap.min_load_pct = round((hp_min_output_kw / bar_capacity_kw * 100) if bar_capacity_kw > 0 else 0.0, 1)
 
         # Away state from pipeline
         away_state = ctx.away_state
@@ -1046,6 +1083,16 @@ class SharedState:
     def set_balancing(self, detector):
         with self._lock:
             self._balancing_ref = detector
+
+    def get_swarm(self):
+        """SwarmRuntime accessor for /api/swarm/* routes (INSTRUCTION-288B).
+        Returns None when swarm is disabled or not yet wired."""
+        with self._lock:
+            return self._swarm_ref
+
+    def set_swarm(self, runtime):
+        with self._lock:
+            self._swarm_ref = runtime
 
     def get_telemetry(self):
         """INSTRUCTION-193 Task 4: TelemetryService accessor for /api/status."""

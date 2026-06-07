@@ -15,11 +15,12 @@ import { LiveView } from './pages/LiveView'
 import { Scop } from './pages/Scop'
 import { Forecast } from './pages/Forecast'
 import { Valves } from './pages/Valves'
+import { Swarm } from './pages/Swarm'
 import { useLiveConnection } from './hooks/useLive'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
-export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves'
+export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm'
 
 export default function App() {
   const [page, setPage] = useState<Page>('home')
@@ -130,6 +131,7 @@ export default function App() {
         {activePage === 'scop' && <Scop />}
         {activePage === 'forecast' && <Forecast />}
         {activePage === 'valves' && <Valves />}
+        {activePage === 'swarm' && <Swarm />}
         {activePage === 'settings' && (
           <Settings onRunWizard={() => { setWizardCanExit(true); setPage('wizard') }} />
         )}

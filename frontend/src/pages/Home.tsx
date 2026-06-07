@@ -18,6 +18,7 @@ import { OperatingStateTimeline } from '../components/OperatingStateTimeline'
 import { SystemHealth } from '../components/SystemHealth'
 import { Wifi, WifiOff, Plane, Home as HomeIcon, Info } from 'lucide-react'
 import { useAwayState, useSetAway } from '../hooks/useAway'
+import { useQuarantine } from '../hooks/useQuarantine'
 import { apiUrl } from '../lib/api'
 import { buildEntityMap } from '../hooks/entityMap'
 import { formatTemp } from '../lib/utils'
@@ -45,6 +46,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const { version } = useVersion()
   const { data: awayData, refetch: refetchAway } = useAwayState()
   const { setAway } = useSetAway()
+  const { data: quarantine } = useQuarantine()
   // Optimistic away-off state — true after "I'm Home" click, clears on server confirm.
   const [optimisticAwayOff, setOptimisticAwayOff] = useState(false)
   // Optimistic Live/Shadow toggle — holds the user's intended value while the
@@ -339,6 +341,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         controlMethod={initial?.control_method}
         sourceSelection={sourceSelection ?? undefined}
         heatSourceCount={configData?.heat_sources?.length}
+        quarantine={quarantine ?? undefined}
       />
 
       {/* Comfort temperature & shadow/live toggle */}

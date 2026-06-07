@@ -50,6 +50,7 @@ from .controllers import (
     CompositeConfidenceController,
     SwarmTelemetryController,
 )
+from .controllers.swarm_context_enricher import SwarmContextEnricher
 
 __all__ = [
     "CycleContext",
@@ -84,6 +85,7 @@ __all__ = [
     "AllostaticLoadController",
     "CompositeConfidenceController",
     "SwarmTelemetryController",
+    "SwarmContextEnricher",
 ]
 
 
@@ -464,6 +466,15 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
     # No runtime ⇒ no append ⇒ bit-identical pre-263A behaviour.
     swarm_runtime = kw.get("swarm_runtime")
     if swarm_runtime is not None:
-        controllers.append(SwarmTelemetryController(runtime=swarm_runtime))
+        # 274C — SwarmContextEnricher runs FIRST (Client Sketch §3.1), before
+        # SensorController touches sysid. Inserted at the head; conditional on
+        # the same sentinel that gates the telemetry append. 274D routes the live
+        # sysid to both swarm controllers for shadow seed/blend + reconciliation.
+        controllers.insert(
+            0, SwarmContextEnricher(runtime=swarm_runtime, sysid=kw.get("sysid"))
+        )
+        controllers.append(
+            SwarmTelemetryController(runtime=swarm_runtime, sysid=kw.get("sysid"))
+        )
 
     return controllers, aux_controller

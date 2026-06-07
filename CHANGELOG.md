@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-06-07
+
+### ⚠️ Breaking change — qsh.yaml is strictly validated at startup
+- QSH now refuses to start if `qsh.yaml` contains an unrecognised
+  top-level section. On boot, any unknown top-level key is reported by
+  name and the add-on stops:
+  "Unrecognised top-level section(s) in qsh.yaml: [...]. Configure via
+  the setup wizard / settings page."
+  Action is required only if you hand-edit `qsh.yaml`: remove or correct
+  any stray, renamed, or mistyped top-level section. Configurations
+  produced by the Setup Wizard or Settings page are unaffected — every
+  key they write is recognised — and legacy keys (`away`, `schedule`,
+  `disclaimer_accepted`, …) remain tolerated. You can check a config
+  without restarting using the built-in YAML validator, which reports
+  the same issue non-fatally.
+
+### Added
+- Quantum Swarm fleet coordination (shadow mode): installs can
+  contribute and receive learned thermal parameters through the swarm
+  coordinator, with quarantine safeguards, per-channel consumption
+  visibility, a master live-enable control, and a Swarm engineering page.
+- Multi-source heating: flow and mode are routed dynamically to the
+  active heat source (heat pump or boiler); capacity and minimum output
+  are taken from the active source.
+
+### Changed
+- SCOP heating/hot-water split now uses the hot-water-active tag filter
+  for cleaner attribution (retires the legacy `qsh_dhw` measurement).
+
+### Fixed
+- Hot-water active state is held through brief heat-source comms loss
+  instead of dropping out.
+- SCOP numerator/denominator point-set asymmetry corrected.
+- Forecast hourly-grid guard and tariff fallback-rate log hygiene.
+
 ## [1.4.10] — 2026-05-25
 
 ### Fixed

@@ -50,3 +50,20 @@ export const BALANCING = {
   suggestion: 'A recommended lockshield valve adjustment to improve flow balance across your zones.',
   severity: 'How far the zone flow deviates from the ideal. Higher deviation means the zone is more out of balance.',
 } as const
+
+export const SWARM = {
+  inputs:
+    'Each swarm input this unit can consume. The light shows whether the unit is using that data on live control — green: in use; amber: observing (received but not applied live); red: no data; grey: reserved (channel not yet active).',
+  thermal_envelope:
+    'Cohort-learned heat-loss (U) and thermal-mass (C) priors. When in use, the swarm’s U/C estimates blend into this unit’s live model.',
+  solar_capture:
+    'Cohort-learned solar-gain priors that bootstrap this unit’s solar capture before it has enough sunny-day observations of its own.',
+  disturbance_relay:
+    'Disturbance events corroborated across nearby cohort units (e.g. a cold snap) and relayed to this unit. Reserved — not yet active.',
+  rl_benchmarking:
+    'Cohort benchmark data for the reinforcement-learning policy. Reserved — not yet active.',
+  global_no_signal:
+    'No fresh reading of the fleet GLOBAL gate — the coordinator is unreachable or the last read has aged out. Live consumption is held (Watchdog).',
+  local_standby:
+    'No authorisation issued for this channel yet — the coordinator has not set a local gate. Default pre-coordinator state, not a fault.',
+} as const

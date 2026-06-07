@@ -22,7 +22,6 @@ export interface MqttConfig {
   outputs?: {
     flow_temp?: string
     mode?: string
-    heat_source_command?: string
   }
 }
 
