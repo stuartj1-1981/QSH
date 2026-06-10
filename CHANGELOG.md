@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-06-10
+
+### Added
+- Fixed-rate tariffs can now be set up directly in the wizard tariff
+  step and the Settings tariff editor, with seeded defaults and
+  consistent validation across both.
+- Swarm telemetry carries additional unit-side heat-source fields
+  (shadow mode).
+
+### Changed
+- Smarter heat-pump wind-down: when demand is satisfied and the
+  commanded flow falls below return, the system coasts and intends
+  off rather than holding heat.
+
+### Fixed
+- Boiler installs: per-source power is now routed correctly to cost
+  tracking, with a clear notice when no boiler power sensor is
+  configured.
+- MQTT flow-control method persists for non-primary heat sources.
+- No more false heat-pump trip learning or readback escalation during
+  demand-satisfied wind-down.
+- Timezone-naive MQTT weather forecasts are accepted, and forecasts
+  received but unusable are surfaced instead of silently ignored.
+
 ## [1.5.0] — 2026-06-07
 
 ### ⚠️ Breaking change — qsh.yaml is strictly validated at startup
