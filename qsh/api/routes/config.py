@@ -449,6 +449,26 @@ def patch_config_section(section: str, body=Body(...)):
 
     incoming = body.get("data", body) if isinstance(body, dict) else body
 
+    # INSTRUCTION-305: reject an unbootable fixed-without-rate energy config at
+    # the route BEFORE read_modify_write and BEFORE the restart-flag write, so
+    # the Settings save path can never persist a config that crash-loops on
+    # restart. This is the backend correctness boundary; the 304 frontend seed
+    # is the UX convenience. Validates electricity AND gas (lpg/oil default at
+    # runtime). The 422 detail shape matches deploy_config (wizard.py) so API
+    # clients see one validation-error contract across both write entry points.
+    if section == "energy" and isinstance(incoming, dict):
+        from qsh.tariff import validate_energy_fixed_rate
+
+        _energy_errors = validate_energy_fixed_rate(incoming)
+        if _energy_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Config validation failed",
+                    "errors": _energy_errors,
+                },
+            )
+
     # "root" section merges individual keys at the YAML root level
     # (e.g. publish_mqtt_shadow, flow_min_internal)
     if section == "root":

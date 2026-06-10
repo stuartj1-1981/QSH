@@ -14,6 +14,7 @@ Control methods:
 import logging
 import math
 from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
+from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
 
 
 # Lower bound on the readback mismatch alarm threshold. Preserves
@@ -373,6 +374,8 @@ def apply_hardware_control(
     trv_offset_tracker=None,
     hp_power_kw=None,
     prev_mismatch_count=0,
+    return_temp=None,
+    has_live_return_temp=False,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -517,25 +520,40 @@ def apply_hardware_control(
     if hp_power_kw is not None and optimal_mode is not None:
         observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
         if observed_mode != optimal_mode:
-            new_mismatch_count = prev_mismatch_count + 1
-            if new_mismatch_count >= readback_threshold:
-                logging.error(
-                    "Mode readback mismatch persisted for %d cycles "
-                    "(threshold %d) — HP not responding to commanded '%s'. "
-                    "Check Octopus API status and HP connectivity.",
-                    new_mismatch_count, readback_threshold, optimal_mode,
-                )
-            elif should_update_mode:
-                logging.warning(
-                    "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
-                    new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
+            flow_below_return = (
+                has_live_return_temp
+                and return_temp is not None
+                and optimal_flow <= return_temp + FLOW_BELOW_RETURN_MARGIN_C
+            )
+            if optimal_mode == "heat" and flow_below_return:
+                # QSH commanded flow at/below return — HP idle is demand-satisfied,
+                # not an unresponsive HP. Do not escalate; reset the counter.
+                new_mismatch_count = 0
+                logging.debug(
+                    "Readback: commanded heat but HP idle with flow %.1f°C <= return "
+                    "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
+                    optimal_flow, return_temp, FLOW_BELOW_RETURN_MARGIN_C,
                 )
             else:
-                logging.info(
-                    "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
-                    "will trigger re-command next cycle",
-                    new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
-                )
+                new_mismatch_count = prev_mismatch_count + 1
+                if new_mismatch_count >= readback_threshold:
+                    logging.error(
+                        "Mode readback mismatch persisted for %d cycles "
+                        "(threshold %d) — HP not responding to commanded '%s'. "
+                        "Check Octopus API status and HP connectivity.",
+                        new_mismatch_count, readback_threshold, optimal_mode,
+                    )
+                elif should_update_mode:
+                    logging.warning(
+                        "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
+                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
+                    )
+                else:
+                    logging.info(
+                        "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
+                        "will trigger re-command next cycle",
+                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
+                    )
         else:
             new_mismatch_count = 0
         applied_mode = observed_mode

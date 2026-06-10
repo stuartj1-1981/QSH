@@ -25,6 +25,7 @@ import { HelpTip } from '../HelpTip'
 import { TARIFF } from '../../lib/helpText'
 import { useLive } from '../../hooks/useLive'
 import { DEFAULT_TARIFF_AGGRESSION_MODE } from '../../lib/tariff'
+import { DEFAULT_ELEC_FIXED_RATE, DEFAULT_GAS_FIXED_RATE } from '../../lib/tariffDefaults'
 import type {
   Driver,
   ElectricityProviderKind,
@@ -80,7 +81,17 @@ function stripSentinels<T extends object>(obj: T): T {
 }
 
 function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
-  if (energy.electricity) return energy.electricity
+  if (energy.electricity) {
+    // 304: a config that arrived as provider:'fixed' with no rate hydrates
+    // with the UI default seeded, so the Save payload (read from state)
+    // carries energy.electricity.fixed_rate even if the user never touches
+    // the provider radio.
+    const e = energy.electricity
+    if (e.provider === 'fixed' && e.fixed_rate == null) {
+      return { ...e, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
+    }
+    return e
+  }
   // Full-Octopus credentials win first.
   if (energy.octopus?.api_key) {
     return {
@@ -105,8 +116,15 @@ function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
 }
 
 function hydrateGas(energy: EnergyYaml): GasTariffConfig {
-  if (energy.gas) return energy.gas
-  return { provider: 'fixed', fixed_rate: 0.07 }
+  if (energy.gas) {
+    // 304: same fixed-without-rate seed as electricity (see above).
+    const g = energy.gas
+    if (g.provider === 'fixed' && g.fixed_rate == null) {
+      return { ...g, fixed_rate: DEFAULT_GAS_FIXED_RATE }
+    }
+    return g
+  }
+  return { provider: 'fixed', fixed_rate: DEFAULT_GAS_FIXED_RATE }
 }
 
 function installHasFuel(
@@ -312,13 +330,25 @@ export function TariffSettings({
   }
 
   const setElectricityProvider = (provider: ElectricityProviderKind) => {
-    setElectricity((prev) => ({ ...prev, provider }))
+    // 304: seed the UI default into committed state when switching to Fixed
+    // with no rate, so the Save payload carries energy.electricity.fixed_rate
+    // even if the user accepts the displayed default without a keystroke.
+    setElectricity((prev) =>
+      provider === 'fixed' && prev.fixed_rate == null
+        ? { ...prev, provider, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
+        : { ...prev, provider },
+    )
     setTestResultElectricity(null)
     setEdfTestResult(null)
   }
 
   const setGasProvider = (provider: GasProviderKind) => {
-    setGas((prev) => ({ ...prev, provider }))
+    // 304: same seed-on-switch as electricity (see above).
+    setGas((prev) =>
+      provider === 'fixed' && prev.fixed_rate == null
+        ? { ...prev, provider, fixed_rate: DEFAULT_GAS_FIXED_RATE }
+        : { ...prev, provider },
+    )
     setTestResultGas(null)
   }
 
@@ -399,7 +429,7 @@ export function TariffSettings({
           <FixedRateInput
             label="Electricity Rate (£/kWh)"
             help={TARIFF.importRate}
-            value={electricity.fixed_rate ?? 0.245}
+            value={electricity.fixed_rate ?? DEFAULT_ELEC_FIXED_RATE}
             onChange={(v) => setElectricity((prev) => ({ ...prev, fixed_rate: v }))}
           />
         )}
@@ -434,7 +464,7 @@ export function TariffSettings({
           {gas.provider === 'fixed' && (
             <FixedRateInput
               label="Gas Rate (£/kWh)"
-              value={gas.fixed_rate ?? 0.07}
+              value={gas.fixed_rate ?? DEFAULT_GAS_FIXED_RATE}
               onChange={(v) => setGas((prev) => ({ ...prev, fixed_rate: v }))}
             />
           )}

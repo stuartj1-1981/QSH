@@ -16,10 +16,11 @@
  * The wizard PATCHes the new per-fuel shape; the backend's migrate-on-save
  * (150C) handles legacy `energy.octopus` / `energy.fixed_rates` keys.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { apiUrl } from '../../lib/api'
+import { DEFAULT_ELEC_FIXED_RATE, DEFAULT_GAS_FIXED_RATE } from '../../lib/tariffDefaults'
 import { useTariffStatus } from '../../hooks/useTariffStatus'
 import { testEdfRegionResponseSchema } from '../../types/schemas'
 import type {
@@ -96,11 +97,14 @@ function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
 
 function hydrateGas(energy: EnergyYaml): GasTariffConfig {
   if (energy.gas) return energy.gas
-  return { provider: 'fixed', fixed_rate: 0.07 }
+  return { provider: 'fixed', fixed_rate: DEFAULT_GAS_FIXED_RATE }
 }
 
 export function StepTariff({ config, onUpdate }: StepTariffProps) {
-  const energy: EnergyYaml = config.energy || {}
+  // Memoised so its identity is stable across renders — the 303 mount-seed
+  // effect depends on it, and a fresh `|| {}` object each render would churn
+  // that effect (react-hooks/exhaustive-deps).
+  const energy: EnergyYaml = useMemo(() => config.energy || {}, [config.energy])
   const { edfFreephaseSupported } = useTariffStatus()
 
   const [electricity, setElectricity] = useState<ElectricityTariffConfig>(() => hydrateElectricity(energy))
@@ -116,21 +120,29 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   const [edfTesting, setEdfTesting] = useState(false)
   const [edfTestResult, setEdfTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const edfDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 303: guards the one-time mount seed of a fixed_rate default for an
+  // edit-existing config that arrived as provider:'fixed' with no rate.
+  const seededFixedRateRef = useRef(false)
 
-  const persist = (next: { electricity?: ElectricityTariffConfig; gas?: GasTariffConfig }) => {
-    // 158C Task 5: strip REDACTED sentinels before forwarding to onUpdate
-    // so the wizard's in-memory copy does not carry the literal sentinel.
-    // Backend deploy still runs restore_redacted; this keeps the wire-out
-    // payload clean.
-    const elec = (next.electricity ?? electricity) as ElectricityTariffConfig
-    const g = (next.gas ?? gas) as GasTariffConfig
-    const updated: EnergyYaml = {
-      ...energy,
-      electricity: stripSentinels(elec),
-      ...(hasGas ? { gas: stripSentinels(g) } : {}),
-    }
-    onUpdate('energy', updated)
-  }
+  const persist = useCallback(
+    (next: { electricity?: ElectricityTariffConfig; gas?: GasTariffConfig }) => {
+      // 158C Task 5: strip REDACTED sentinels before forwarding to onUpdate
+      // so the wizard's in-memory copy does not carry the literal sentinel.
+      // Backend deploy still runs restore_redacted; this keeps the wire-out
+      // payload clean.
+      // 303: memoised so the mount-seed effect's dependency on persist is
+      // stable (identity changes only when its inputs do).
+      const elec = (next.electricity ?? electricity) as ElectricityTariffConfig
+      const g = (next.gas ?? gas) as GasTariffConfig
+      const updated: EnergyYaml = {
+        ...energy,
+        electricity: stripSentinels(elec),
+        ...(hasGas ? { gas: stripSentinels(g) } : {}),
+      }
+      onUpdate('energy', updated)
+    },
+    [electricity, gas, energy, hasGas, onUpdate],
+  )
 
   const updateElectricity = (changes: Partial<ElectricityTariffConfig>) => {
     const updated = { ...electricity, ...changes } as ElectricityTariffConfig
@@ -145,7 +157,13 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   }
 
   const setElectricityProvider = (provider: ElectricityProviderKind) => {
+    // 303: seed the UI default into committed state when switching to Fixed
+    // with no rate, so the deploy payload carries energy.electricity.fixed_rate
+    // even if the user accepts the displayed default without a keystroke.
     const updated: ElectricityTariffConfig = { ...electricity, provider }
+    if (provider === 'fixed' && updated.fixed_rate == null) {
+      updated.fixed_rate = DEFAULT_ELEC_FIXED_RATE
+    }
     setElectricity(updated)
     setTestResultElectricity(null)
     setEdfTestResult(null)
@@ -153,7 +171,11 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
   }
 
   const setGasProvider = (provider: GasProviderKind) => {
+    // 303: same seed-on-switch as electricity (see above).
     const updated: GasTariffConfig = { ...gas, provider }
+    if (provider === 'fixed' && updated.fixed_rate == null) {
+      updated.fixed_rate = DEFAULT_GAS_FIXED_RATE
+    }
     setGas(updated)
     setTestResultGas(null)
     persist({ gas: updated })
@@ -270,6 +292,32 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
     }
   }, [])
 
+  // 303: edit-existing seed. A config that arrived as provider:'fixed' with
+  // no fixed_rate (the original defect's on-disk shape) hydrates local state
+  // as-is; the displayed default never reaches the committed payload because
+  // persist only runs on a change event. Push the seeded default through
+  // persist once so the deploy payload carries the rate. Runs once (ref
+  // guard); re-evaluates on prop refresh but no-ops after the first seed and
+  // when the incoming rate is already present / the provider is not Fixed /
+  // the gas section is absent. Checks the incoming energy.<fuel> (the new
+  // per-fuel key) — legacy octopus/fixed_rates shapes are untouched.
+  useEffect(() => {
+    if (seededFixedRateRef.current) return
+    const next: { electricity?: ElectricityTariffConfig; gas?: GasTariffConfig } = {}
+    if (energy.electricity?.provider === 'fixed' && energy.electricity.fixed_rate == null) {
+      next.electricity = { ...energy.electricity, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
+    }
+    if (hasGas && energy.gas?.provider === 'fixed' && energy.gas.fixed_rate == null) {
+      next.gas = { ...energy.gas, fixed_rate: DEFAULT_GAS_FIXED_RATE }
+    }
+    if (next.electricity || next.gas) {
+      seededFixedRateRef.current = true
+      if (next.electricity) setElectricity(next.electricity)
+      if (next.gas) setGas(next.gas)
+      persist(next)
+    }
+  }, [energy, hasGas, persist])
+
   return (
     <div className="space-y-8">
       <div>
@@ -329,7 +377,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
         {electricity.provider === 'fixed' && (
           <FixedRateInput
             label="Electricity Rate (£/kWh)"
-            value={electricity.fixed_rate ?? 0.245}
+            value={electricity.fixed_rate ?? DEFAULT_ELEC_FIXED_RATE}
             onChange={(v) => updateElectricity({ fixed_rate: v })}
           />
         )}
@@ -365,7 +413,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
           {gas.provider === 'fixed' && (
             <FixedRateInput
               label="Gas Rate (£/kWh)"
-              value={gas.fixed_rate ?? 0.07}
+              value={gas.fixed_rate ?? DEFAULT_GAS_FIXED_RATE}
               onChange={(v) => updateGas({ fixed_rate: v })}
             />
           )}

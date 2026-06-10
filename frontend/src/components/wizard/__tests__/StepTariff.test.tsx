@@ -315,6 +315,75 @@ describe('StepTariff — EDF region picker (V2 E-M3)', () => {
   })
 })
 
+// ── INSTRUCTION-303: fixed_rate seeded into committed state ────────────
+
+describe('StepTariff — fixed_rate seeding (303)', () => {
+  function lastEnergy(onUpdate: ReturnType<typeof vi.fn>) {
+    const energyCalls = onUpdate.mock.calls.filter((c) => c[0] === 'energy')
+    return energyCalls[energyCalls.length - 1]?.[1] as
+      | { electricity?: { fixed_rate?: number }; gas?: { fixed_rate?: number } }
+      | undefined
+  }
+
+  it('seeds default electricity fixed_rate on provider switch (no keystroke)', () => {
+    const onUpdate = vi.fn()
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    expect(lastEnergy(onUpdate)?.electricity?.fixed_rate).toBe(0.245)
+  })
+
+  it('seeds default gas fixed_rate on provider switch (no keystroke)', () => {
+    const onUpdate = vi.fn()
+    // Gas starts on Octopus (no fixed_rate) so the switch genuinely seeds.
+    const cfg = {
+      energy: {
+        gas: {
+          provider: 'octopus' as const,
+          octopus_api_key: 'sk_x',
+          octopus_account_number: 'A-1',
+        },
+      },
+      heat_source: { type: 'gas_boiler' as const },
+    }
+    render(<StepTariff config={cfg} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByTestId('provider-gas-provider-fixed'))
+    expect(lastEnergy(onUpdate)?.gas?.fixed_rate).toBe(0.07)
+  })
+
+  it('seeds default electricity fixed_rate on mount for an edit-existing fixed config without a rate', () => {
+    const onUpdate = vi.fn()
+    const cfg = {
+      energy: { electricity: { provider: 'fixed' as const } },
+      heat_source: { type: 'heat_pump' as const },
+    }
+    render(<StepTariff config={cfg} onUpdate={onUpdate} />)
+    const energyCalls = onUpdate.mock.calls.filter((c) => c[0] === 'energy')
+    // Exactly one mount persist — the ref guard prevents re-seeding.
+    expect(energyCalls).toHaveLength(1)
+    const payload = energyCalls[0][1] as { electricity?: { fixed_rate?: number } }
+    expect(payload.electricity?.fixed_rate).toBe(0.245)
+  })
+
+  it('does NOT seed on mount when the incoming fixed config already has a rate', () => {
+    const onUpdate = vi.fn()
+    const cfg = {
+      energy: { electricity: { provider: 'fixed' as const, fixed_rate: 0.31 } },
+      heat_source: { type: 'heat_pump' as const },
+    }
+    render(<StepTariff config={cfg} onUpdate={onUpdate} />)
+    expect(onUpdate.mock.calls.filter((c) => c[0] === 'energy')).toHaveLength(0)
+  })
+
+  it('user-entered electricity rate wins over the seeded default', () => {
+    const onUpdate = vi.fn()
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    const input = screen.getByLabelText(/Electricity Rate/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '0.30' } })
+    expect(lastEnergy(onUpdate)?.electricity?.fixed_rate).toBe(0.30)
+  })
+})
+
 describe('StepTariff — Fixed rate validation', () => {
   it('Fixed rate input has min/max/step constraints', () => {
     render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)

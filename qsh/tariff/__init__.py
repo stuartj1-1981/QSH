@@ -159,6 +159,48 @@ VALID_ELECTRICITY_PROVIDERS: tuple[str, ...] = (
 )
 
 
+# INSTRUCTION-305: canonical "fixed-rate required" messages — the single
+# source of truth for the wording emitted by the wizard validator
+# (qsh/api/routes/wizard.py), the energy PATCH route
+# (qsh/api/routes/config.py), and the runtime factory below. One place to
+# change the rule. The electricity string is byte-identical to the inline
+# message INSTRUCTION-188 placed in validate_config (preserved verbatim).
+ELECTRICITY_FIXED_RATE_REQUIRED_MSG = (
+    "energy.electricity.provider='fixed' requires "
+    "energy.electricity.fixed_rate to be set"
+)
+GAS_FIXED_RATE_REQUIRED_MSG = (
+    "energy.gas.provider='fixed' requires "
+    "energy.gas.fixed_rate to be set"
+)
+
+
+def _fixed_rate_missing(value) -> bool:
+    """True when a fixed_rate is absent or unusable: None, or an empty/blank
+    string. The single definition of 'missing fixed_rate' shared by the
+    validator and the runtime factory, so the two cannot diverge (a blank
+    string must be rejected at the factory before it reaches float("") in
+    FixedRateProvider)."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def validate_energy_fixed_rate(energy: dict) -> list[str]:
+    """Return error strings for any electricity/gas section whose provider is
+    'fixed' but whose fixed_rate is missing per _fixed_rate_missing (None or
+    empty/blank string). Empty list = no fixed-rate problem. Does not validate
+    lpg/oil — the runtime factory defaults those to 0.0 by design."""
+    errors: list[str] = []
+    for fuel, msg in (
+        ("electricity", ELECTRICITY_FIXED_RATE_REQUIRED_MSG),
+        ("gas", GAS_FIXED_RATE_REQUIRED_MSG),
+    ):
+        section = energy.get(fuel) if isinstance(energy, dict) else None
+        if isinstance(section, dict) and section.get("provider") == "fixed":
+            if _fixed_rate_missing(section.get("fixed_rate")):
+                errors.append(msg)
+    return errors
+
+
 def fuel_for_source(source_type: str) -> Fuel:
     """Map heat_source type to fuel. Single source of truth for the mapping.
     Raises KeyError for unrecognised source types — caller must have already
@@ -327,7 +369,15 @@ def _build_provider(fuel: Fuel, energy_config: dict) -> TariffProvider:
                 fallback_rate=fallback_rate,
             )
         if provider_kind == "fixed":
-            return FixedRateProvider(fuel, value=fuel_section["fixed_rate"])
+            # INSTRUCTION-305: guarded read using the same _fixed_rate_missing
+            # predicate as validate_energy_fixed_rate, so a hand-edited
+            # fixed_rate: "" (blank) raises the canonical ConfigurationError
+            # here rather than a cryptic KeyError (absent key) or ValueError
+            # (float("") in FixedRateProvider). Mirrors the ha_entity guard.
+            fixed_rate = fuel_section.get("fixed_rate")
+            if _fixed_rate_missing(fixed_rate):
+                raise ConfigurationError(ELECTRICITY_FIXED_RATE_REQUIRED_MSG)
+            return FixedRateProvider(fuel, value=fixed_rate)
 
     if fuel == "gas":
         if provider_kind == "octopus":
@@ -337,7 +387,11 @@ def _build_provider(fuel: Fuel, energy_config: dict) -> TariffProvider:
             from qsh.tariff.octopus_gas import OctopusGasProvider
             return OctopusGasProvider(energy_config)
         if provider_kind == "fixed":
-            return FixedRateProvider(fuel, value=fuel_section["fixed_rate"])
+            # INSTRUCTION-305: same guard as the electricity fixed branch.
+            fixed_rate = fuel_section.get("fixed_rate")
+            if _fixed_rate_missing(fixed_rate):
+                raise ConfigurationError(GAS_FIXED_RATE_REQUIRED_MSG)
+            return FixedRateProvider(fuel, value=fixed_rate)
 
     if fuel in ("lpg", "oil"):
         if provider_kind in (None, "fixed"):
@@ -360,6 +414,9 @@ __all__ = [
     "TARIFF_HTTP_TIMEOUT_SECONDS",
     "SUPPORTED_PROVIDER_KINDS",
     "VALID_ELECTRICITY_PROVIDERS",
+    "ELECTRICITY_FIXED_RATE_REQUIRED_MSG",
+    "GAS_FIXED_RATE_REQUIRED_MSG",
+    "validate_energy_fixed_rate",
     "fuel_for_source",
     "create_tariff_providers",
     "FixedRateProvider",

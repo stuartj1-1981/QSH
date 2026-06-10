@@ -1054,3 +1054,139 @@ describe('HeatSourceSettings — MQTT driver fuel cost / carbon factor topics (I
     expect(screen.queryByText('JSON payload')).toBeNull()
   })
 })
+
+/**
+ * INSTRUCTION-308 — non-primary MQTT sources must persist
+ * flow_control.method="mqtt" so resolve_source_routing dispatches their
+ * per-source Flow/Mode topics. Scoped to non-primary (§1.7): the primary
+ * (payload[0], by name) is NEVER stamped and a stale stamp is stripped. The
+ * primary name is computed at the persist() emit point from the OUTGOING
+ * payload, so it is robust to in-session removal that reassigns the primary.
+ */
+describe('HeatSourceSettings — non-primary MQTT method stamp (INSTRUCTION-308)', () => {
+  const mqttSrc = (name: string, prefix: string, extra: Record<string, unknown> = {}) => ({
+    type: 'gas_boiler' as const,
+    name,
+    flow_control: { topic: `qsh/${prefix}/flow`, mode_topic: `qsh/${prefix}/mode`, ...extra },
+  })
+
+  it('Save stamps method=mqtt on every non-primary source and none on the primary (Task 3c.1)', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', flow_control: { topic: 'qsh/hp/flow', mode_topic: 'qsh/hp/mode' } },
+          mqttSrc('Boiler', 'boiler'),
+          mqttSrc('Immersion', 'imm'),
+        ]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    // Dirty source 2 so its per-card Save (which persists the full array) enables.
+    fireEvent.change(screen.getByLabelText('Source 2 name'), { target: { value: 'Boiler2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 2' }))
+
+    await waitFor(() => {
+      const calls = patch.mock.calls.filter((c) => c[0] === 'heat_sources')
+      expect(calls).toHaveLength(1)
+      const payload = calls[0][1] as Array<{
+        name?: string
+        flow_control?: { method?: string; topic?: string; mode_topic?: string }
+      }>
+      expect(payload).toHaveLength(3)
+      // Primary (index 0) NOT stamped — stays on the shared topic (279).
+      expect(payload[0].flow_control?.method).toBeUndefined()
+      // Non-primary stamped; per-source topics intact.
+      expect(payload[1].flow_control?.method).toBe('mqtt')
+      expect(payload[1].flow_control?.topic).toBe('qsh/boiler/flow')
+      expect(payload[2].flow_control?.method).toBe('mqtt')
+    })
+  })
+
+  it('Remove-the-primary recomputes the primary at emit; the new primary is unstamped (Task 3c.2, §1.7 (c))', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', flow_control: { topic: 'qsh/hp/flow', mode_topic: 'qsh/hp/mode' } },
+          mqttSrc('Boiler', 'boiler'),
+          mqttSrc('Immersion', 'imm'),
+        ]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    // Remove source 1 (the as-loaded primary) → 'Boiler' becomes payload[0].
+    fireEvent.click(screen.getByRole('button', { name: 'Remove source 1' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/ }))
+
+    await waitFor(() => {
+      const calls = patch.mock.calls.filter((c) => c[0] === 'heat_sources')
+      expect(calls).toHaveLength(1)
+      const payload = calls[0][1] as Array<{ name?: string; flow_control?: { method?: string } }>
+      expect(payload).toHaveLength(2)
+      // The NEW primary (old index 1) is emitted WITHOUT a method.
+      expect(payload[0].name).toBe('Boiler')
+      expect(payload[0].flow_control?.method).toBeUndefined()
+      // The remaining non-primary still carries it.
+      expect(payload[1].name).toBe('Immersion')
+      expect(payload[1].flow_control?.method).toBe('mqtt')
+    })
+  })
+
+  it('Stale method on a source promoted to primary by removal is stripped (Task 3c.3, §1.7 (c))', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', flow_control: { topic: 'qsh/hp/flow', mode_topic: 'qsh/hp/mode' } },
+          // Boiler carries a stale method='mqtt' from when it was non-primary.
+          mqttSrc('Boiler', 'boiler', { method: 'mqtt' }),
+        ]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Remove source 1' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/ }))
+
+    await waitFor(() => {
+      const calls = patch.mock.calls.filter((c) => c[0] === 'heat_sources')
+      expect(calls).toHaveLength(1)
+      const payload = calls[0][1] as Array<{
+        name?: string
+        flow_control?: { method?: string; topic?: string; mode_topic?: string }
+      }>
+      expect(payload).toHaveLength(1)
+      expect(payload[0].name).toBe('Boiler')
+      // Stale stamp stripped; per-source topics preserved.
+      expect(payload[0].flow_control?.method).toBeUndefined()
+      expect(payload[0].flow_control?.topic).toBe('qsh/boiler/flow')
+    })
+  })
+
+  it('HA driver: no method is stamped on save (axis guard)', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP' },
+          { type: 'gas_boiler', name: 'Boiler' },
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Source 2 name'), { target: { value: 'Boiler2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 2' }))
+
+    await waitFor(() => {
+      const calls = patch.mock.calls.filter((c) => c[0] === 'heat_sources')
+      expect(calls).toHaveLength(1)
+      const payload = calls[0][1] as Array<{ flow_control?: { method?: string } }>
+      expect(payload[0].flow_control?.method).toBeUndefined()
+      expect(payload[1].flow_control?.method).toBeUndefined()
+    })
+  })
+})

@@ -58,6 +58,38 @@ function sensorEntity(v: string | { topic?: string } | undefined): string {
   return ''
 }
 
+/**
+ * INSTRUCTION-308: stamp `flow_control.method="mqtt"` on NON-PRIMARY MQTT
+ * sources at the emit point. The MQTT editor renders "Flow Control Method" as a
+ * static "MQTT" label and never persisted the method, but
+ * `resolve_source_routing` keys per-source dispatch on exactly that method — so
+ * a non-primary source with per-source topics but no method is SUPPRESSED.
+ *
+ * Scoped strictly to non-primary sources to preserve INSTRUCTION-279's
+ * primary-shared invariant. "Primary" is the single §1.7 contract: the source
+ * at index 0 of the OUTGOING payload, identified by name (the same rule
+ * `resolve_source_routing` uses for `is_primary`). Computing `primaryName` from
+ * the outgoing payload (not an as-loaded cache) makes this robust to in-session
+ * add/remove that promotes a new source to primary; a stale `method="mqtt"`
+ * left on a source so promoted is stripped here. Caller gates on `driver`.
+ */
+function stampMqttFlowMethod(sources: HeatSourceYaml[]): HeatSourceYaml[] {
+  const primaryName = sources[0]?.name
+  return sources.map((s) => {
+    if (s.name === primaryName) {
+      // Primary always dispatches via the shared top-level topic (279). Strip
+      // any stale method left over from when this source was non-primary.
+      if (s.flow_control?.method === 'mqtt') {
+        const { method: _drop, ...rest } = s.flow_control
+        void _drop
+        return { ...s, flow_control: rest }
+      }
+      return s
+    }
+    return { ...s, flow_control: { ...s.flow_control, method: 'mqtt' as const } }
+  })
+}
+
 function computeInitial(
   heatSource: HeatSourceYaml,
   heatSources: HeatSourceYaml[] | undefined,
@@ -199,11 +231,22 @@ export function HeatSourceSettings({
       return { ...s, sensors: rest }
     })
 
+    // INSTRUCTION-308: stamp method="mqtt" on non-primary MQTT sources (and
+    // strip a stale stamp from the primary) at this single emit choke point —
+    // the one site used by both Save and handleRemove, where the outgoing
+    // order is final. Applied to `stamped` so BOTH the authoritative write
+    // below AND the INSTRUCTION-241C failure-detail re-send carry it. The
+    // last-saved snapshot stays as the UNSTAMPED `sanitised` so it matches the
+    // (unstamped) local `sources` — dirty tracking is correct immediately, and
+    // the post-save refetch resync pulls the backend's stamped config in.
+    const stamped =
+      driver === 'mqtt' ? stampMqttFlowMethod(sanitised) : sanitised
+
     // Server-authoritative reconciliation per INSTRUCTION-237A:
     //   length 1  → backend mirrors to singular heat_source
     //   length>=2 → backend strips stale singular
     // The frontend writes ONLY heat_sources. No dual-PATCH atomicity hazard.
-    const result = await patch('heat_sources', sanitised)
+    const result = await patch('heat_sources', stamped)
     if (result !== null) {
       setSaveError(null)
       lastSavedRef.current = sanitised
@@ -225,7 +268,7 @@ export function HeatSourceSettings({
       const resp = await fetch(apiUrl('api/config/heat_sources'), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: sanitised }),
+        body: JSON.stringify({ data: stamped }),
       })
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`

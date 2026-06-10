@@ -1009,20 +1009,13 @@ def validate_config(req: WizardValidateRequest):
             )
 
         elif provider == "fixed":
-            # V2 M-2 closure -- align strictness with octopus / ha_entity
-            # branches. V1's key-present check (`if "fixed_rate" not in
-            # electricity_cfg`) accepted `fixed_rate: ""` and
-            # `fixed_rate: null` (parses as Python None) as valid, which
-            # are semantically broken. Match the .strip() non-empty
-            # pattern used elsewhere in this branch set.
-            fixed_rate = electricity_cfg.get("fixed_rate")
-            if fixed_rate is None or (
-                isinstance(fixed_rate, str) and not fixed_rate.strip()
-            ):
-                errors.append(
-                    "energy.electricity.provider='fixed' requires "
-                    "energy.electricity.fixed_rate to be set"
-                )
+            # INSTRUCTION-305: fixed-rate presence (electricity AND gas) is
+            # validated by the shared validate_energy_fixed_rate call after
+            # this dispatch chain — see below. This branch remains so 'fixed'
+            # is a recognised electricity provider (not caught by the
+            # unrecognised-provider else). The electricity error string is
+            # byte-identical to the inline V2 M-2 check it replaces.
+            pass
 
         elif provider is None:
             # No new-schema provider declared. Fall back to the legacy
@@ -1048,6 +1041,18 @@ def validate_config(req: WizardValidateRequest):
                 f"Valid: {valid_list}, or omit to use legacy "
                 f"energy.octopus / energy.fixed_rates."
             )
+
+        # INSTRUCTION-305: shared fixed-rate presence validation for BOTH
+        # electricity and gas, called once regardless of the electricity
+        # provider above. This closes the gas gap — a gas-fixed-without-rate
+        # config is now rejected even when electricity is octopus/ha_entity,
+        # which the per-provider electricity chain never covered. The
+        # electricity coverage is byte-identical to the inline V2 M-2 check
+        # (same canonical string); gas coverage is new. Single source of
+        # truth: qsh.tariff.validate_energy_fixed_rate.
+        from qsh.tariff import validate_energy_fixed_rate
+
+        errors.extend(validate_energy_fixed_rate(energy_cfg))
 
     if req.step == "hot_water" or req.step is None:
         hw_plan = cfg.get("hw_plan")
