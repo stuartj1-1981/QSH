@@ -1223,3 +1223,66 @@ describe('TariffSettings — testOctopus auto-persist (INSTRUCTION-174)', () => 
     expect(within(elecSection).queryByText(/\/srv\//)).toBeNull()
   })
 })
+
+// ── INSTRUCTION-304: fixed_rate seeded into committed Settings state ────
+
+describe('TariffSettings — fixed_rate seeding (304)', () => {
+  it('seeds default electricity fixed_rate on provider switch, carried into Save', async () => {
+    render(<TariffSettings energy={{}} driver="ha" onRefetch={noop} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.provider).toBe('fixed')
+    expect(payload.electricity.fixed_rate).toBe(0.245)
+  })
+
+  it('seeds default gas fixed_rate on provider switch, carried into Save', async () => {
+    // Gas starts on Octopus (no fixed_rate) so the switch genuinely seeds.
+    render(
+      <TariffSettings
+        energy={{
+          gas: { provider: 'octopus', octopus_api_key: 'sk_x', octopus_account_number: 'A-1' },
+        }}
+        heatSource={{ type: 'gas_boiler' }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-gas-provider-fixed'))
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.gas.provider).toBe('fixed')
+    expect(payload.gas.fixed_rate).toBe(0.07)
+  })
+
+  it('seeds default on hydrate for an edit-existing fixed config without a rate (Save without touching radio)', async () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'fixed' } }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.fixed_rate).toBe(0.245)
+  })
+
+  it('user-entered electricity rate wins over the seeded default', async () => {
+    render(<TariffSettings energy={{}} driver="ha" onRefetch={noop} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    // The fixed-rate number input is the only spinbutton inside the
+    // electricity section (the label also wraps a HelpTip button, so
+    // getByLabelText would resolve to that, not the input).
+    const elecSection = screen.getByTestId('settings-electricity')
+    const input = within(elecSection).getByRole('spinbutton') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '0.30' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.fixed_rate).toBe(0.30)
+  })
+})

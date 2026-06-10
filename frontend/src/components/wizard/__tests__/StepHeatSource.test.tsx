@@ -692,3 +692,61 @@ describe('StepHeatSource — MQTT driver fuel cost / carbon factor topics (INSTR
   })
 
 })
+
+/**
+ * INSTRUCTION-308 — the wizard stamps flow_control.method="mqtt" on non-primary
+ * MQTT sources at the writeBack emit choke point (the single site that pushes
+ * the heat_sources array up to the deploy config). Scoped to non-primary (§1.7):
+ * the primary (outgoing payload index 0, by name) is never stamped. HA installs
+ * are unaffected.
+ */
+describe('StepHeatSource — non-primary MQTT method stamp (INSTRUCTION-308)', () => {
+  it('writeBack stamps method=mqtt on non-primary MQTT sources, not the primary', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_sources: [
+            { type: 'heat_pump', name: 'HP' },
+            { type: 'gas_boiler', name: 'Boiler' },
+          ],
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    // Any edit funnels through writeBack (the emit point). Card 0 (primary) is
+    // expanded by default; editing its capacity triggers the emit.
+    fireEvent.change(screen.getByLabelText(/Rated capacity/i), { target: { value: '6.5' } })
+
+    const call = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources').pop()
+    expect(call).toBeDefined()
+    const payload = call![1] as Array<{ name?: string; flow_control?: { method?: string } }>
+    expect(payload).toHaveLength(2)
+    expect(payload[0].flow_control?.method).toBeUndefined() // primary stays shared
+    expect(payload[1].flow_control?.method).toBe('mqtt')    // non-primary stamped
+  })
+
+  it('HA driver: writeBack does not stamp any method', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'ha',
+          heat_sources: [
+            { type: 'heat_pump', name: 'HP' },
+            { type: 'gas_boiler', name: 'Boiler' },
+          ],
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText(/Rated capacity/i), { target: { value: '6.5' } })
+
+    const call = onUpdate.mock.calls.filter((c) => c[0] === 'heat_sources').pop()
+    expect(call).toBeDefined()
+    const payload = call![1] as Array<{ flow_control?: { method?: string } }>
+    expect(payload[0].flow_control?.method).toBeUndefined()
+    expect(payload[1].flow_control?.method).toBeUndefined()
+  })
+})

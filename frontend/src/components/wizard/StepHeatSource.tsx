@@ -30,6 +30,31 @@ const FLOW_METHODS = [
   { method: 'entity', label: 'Entity', desc: 'Write to an input_number entity' },
 ] as const
 
+/**
+ * INSTRUCTION-308: stamp `flow_control.method="mqtt"` on NON-PRIMARY MQTT
+ * sources at the emit point so per-source Flow/Mode topics dispatch
+ * (`resolve_source_routing` keys per-source dispatch on the persisted method;
+ * the MQTT wizard never wrote it). Scoped to non-primary to preserve
+ * INSTRUCTION-279's primary-shared invariant — the primary (outgoing payload
+ * index 0, by name, the single §1.7 contract) is never stamped, and a stale
+ * method on a source promoted to primary is stripped. Computed against the
+ * outgoing array, never a pre-finalisation cache. Caller gates on the driver.
+ */
+function stampMqttFlowMethod(sources: HeatSourceYaml[]): HeatSourceYaml[] {
+  const primaryName = sources[0]?.name
+  return sources.map((s) => {
+    if (s.name === primaryName) {
+      if (s.flow_control?.method === 'mqtt') {
+        const { method: _drop, ...rest } = s.flow_control
+        void _drop
+        return { ...s, flow_control: rest }
+      }
+      return s
+    }
+    return { ...s, flow_control: { ...s.flow_control, method: 'mqtt' as const } }
+  })
+}
+
 // BEIS conversion factors — used as type-aware carbon-factor defaults.
 const CARBON_FACTOR_DEFAULTS: Record<HeatSourceYaml['type'], number> = {
   heat_pump: 0.207,
@@ -76,10 +101,16 @@ export function StepHeatSource({ config, onUpdate }: StepHeatSourceProps) {
   }
 
   const writeBack = (next: HeatSourceYaml[]) => {
-    setSources(next)
+    // INSTRUCTION-308: stamp non-primary MQTT sources at this single emit
+    // choke point, computed against the outgoing array so it is robust to
+    // in-session add/remove that reassigns the primary. Local state and the
+    // emitted payload stay consistent (the MQTT branch shows a static label,
+    // so stamping local state has no UI effect).
+    const out = isMqttDriver ? stampMqttFlowMethod(next) : next
+    setSources(out)
     // Frontend writes ONLY plural — backend reconciles singular per
     // INSTRUCTION-237 cross-cutting decisions (server-authoritative).
-    onUpdate('heat_sources', next)
+    onUpdate('heat_sources', out)
   }
 
   const updateAt = (i: number, changes: Partial<HeatSourceYaml>) =>
