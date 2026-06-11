@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-06-11
+
+### Added
+- The active heat source is now published on a retained MQTT status
+  topic, and a deselected source is explicitly switched off so no stale
+  command lingers on its topic.
+
+### ⚠️ Breaking
+- Default per-source MQTT command topics now honour the configured topic
+  prefix. Prefixed installs that relied on the old unprefixed default must
+  re-point their subscriptions (qsh/heat_source/<slug>/command →
+  <prefix>/heat_source/<slug>/command). Explicit command-topic overrides
+  and unprefixed installs are unaffected.
+- A primary heat source configured with both a flow-control topic and a
+  mode topic now dispatches flow and mode to those per-source topics
+  instead of the shared output topics. Re-point if you integrated against
+  the shared topics.
+
+### Changed
+- On boiler + heat-pump installs, shoulder cycling now tracks the active
+  source's minimum output — when the boiler is active it cycles against
+  the boiler's floor instead of the heat pump's, preventing short-cycling.
+
 ## [1.5.1] — 2026-06-10
 
 ### Added
