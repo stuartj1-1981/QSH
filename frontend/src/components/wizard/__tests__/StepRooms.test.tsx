@@ -282,3 +282,75 @@ describe('INSTRUCTION-231D: paired per-emitter heating_entity rows (wizard)', ()
     expect(screen.getAllByText('TRV Entity 3').length).toBe(1)
   })
 })
+
+// ── INSTRUCTION-324: property ground truth + emitter_type seeding ─────────
+
+describe('StepRooms — property declaration (INSTRUCTION-324)', () => {
+  it('renders the property inputs and writes total_floor_area_m2 via onUpdate', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepRooms
+        config={{ driver: 'ha', rooms: {} }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const areaInput = screen.getByPlaceholderText('e.g. 189')
+    fireEvent.change(areaInput, { target: { value: '189' } })
+    expect(onUpdate).toHaveBeenCalledWith('property', {
+      total_floor_area_m2: 189,
+    })
+  })
+
+  it('live readout flags a gap beyond the 25% tolerance', () => {
+    const config = {
+      driver: 'ha' as const,
+      property: { total_floor_area_m2: 189 },
+      rooms: { lounge: { area_m2: 102 } as RoomConfigYaml },
+    }
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    const readout = screen.getByTestId('area-reconciliation-readout')
+    expect(readout.textContent).toMatch(/102 m² of 189 m² declared/)
+    expect(readout.textContent).toMatch(/exceeds the 25% tolerance/)
+    expect(readout.className).toContain('text-[var(--red)]')
+  })
+
+  it('live readout is calm when the declaration reconciles', () => {
+    const config = {
+      driver: 'ha' as const,
+      property: { total_floor_area_m2: 100 },
+      rooms: { lounge: { area_m2: 90 } as RoomConfigYaml },
+    }
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    const readout = screen.getByTestId('area-reconciliation-readout')
+    expect(readout.textContent).not.toMatch(/exceeds/)
+    expect(readout.className).not.toContain('text-[var(--red)]')
+  })
+
+  it('Add Room seeds an explicit emitter_type (visible default, never silent)', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepRooms config={{ driver: 'ha', rooms: {} }} onUpdate={onUpdate} />,
+    )
+    fireEvent.change(
+      screen.getByPlaceholderText('Room name (e.g. living_room)'),
+      { target: { value: 'Snug' } },
+    )
+    fireEvent.click(screen.getByText('Add Room'))
+    expect(onUpdate).toHaveBeenCalledWith(
+      'rooms',
+      expect.objectContaining({
+        snug: expect.objectContaining({ emitter_type: 'radiator' }),
+      }),
+    )
+  })
+
+  it('emitter type select shows the placeholder for a room without the key', () => {
+    const config = haConfig({ area_m2: 15, control_mode: 'indirect' })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    const select = screen
+      .getByText('Select emitter type…')
+      .closest('select') as HTMLSelectElement
+    expect(select.value).toBe('')
+  })
+})

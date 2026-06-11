@@ -4,6 +4,8 @@ import type {
   ValidationResponse,
   DeployResponse,
   DestructiveDeployError,
+  AckOutstandingError,
+  WizardWarning,
   QshConfigYaml,
   HeatSourceYaml,
   MqttTopicInput,
@@ -103,7 +105,11 @@ export interface WizardState {
   totalSteps: number
   config: Partial<QshConfigYaml>
   validationErrors: string[]
-  validationWarnings: string[]
+  validationWarnings: WizardWarning[]
+  /** INSTRUCTION-324 — instance-qualified rule ids the user has ticked on
+   *  the review step. Sent with deploy; deploy 409s while any fired
+   *  acknowledged-class warning is missing from this list. */
+  acknowledgedRuleIds: string[]
   isDeploying: boolean
 }
 
@@ -114,6 +120,7 @@ export function useWizard() {
     config: {},
     validationErrors: [],
     validationWarnings: [],
+    acknowledgedRuleIds: [],
     isDeploying: false,
   })
 
@@ -146,7 +153,7 @@ export function useWizard() {
   }, [])
 
   const validateStep = useCallback(
-    async (step: string, config: unknown): Promise<ValidationResponse> => {
+    async (step: string | null, config: unknown): Promise<ValidationResponse> => {
       try {
         const resp = await fetch(apiUrl('api/wizard/validate'), {
           method: 'POST',
@@ -160,6 +167,17 @@ export function useWizard() {
     },
     []
   )
+
+  /** INSTRUCTION-324 — tick/untick an acknowledged-class warning on the
+   *  review step. */
+  const toggleAcknowledgement = useCallback((ruleId: string, on: boolean) => {
+    setState((prev) => {
+      const current = new Set(prev.acknowledgedRuleIds)
+      if (on) current.add(ruleId)
+      else current.delete(ruleId)
+      return { ...prev, acknowledgedRuleIds: [...current] }
+    })
+  }, [])
 
   const next = useCallback(async () => {
     const currentStepName = steps[state.currentStep] as WizardStepName
@@ -182,11 +200,26 @@ export function useWizard() {
       return false
     }
 
+    // INSTRUCTION-324: entering the review step runs a FULL validation
+    // (step=null) so the acknowledgement checklist shows every fired
+    // warning, not just the last step's. Stale acknowledgements (e.g. a
+    // room renamed after ticking) are pruned to the currently-fired ids.
+    let warnings = result.warnings || []
+    const nextStepName = steps[state.currentStep + 1] as WizardStepName | undefined
+    if (nextStepName === 'review') {
+      const full = await validateStep(null, state.config)
+      warnings = full.warnings || []
+    }
+    const firedIds = new Set(
+      warnings.map((w) => w.rule_id).filter((r): r is string => r !== null)
+    )
+
     setState((prev) => ({
       ...prev,
       currentStep: prev.currentStep + 1,
       validationErrors: [],
-      validationWarnings: result.warnings || [],
+      validationWarnings: warnings,
+      acknowledgedRuleIds: prev.acknowledgedRuleIds.filter((r) => firedIds.has(r)),
     }))
     return true
   }, [state.currentStep, state.config, steps, validateStep])
@@ -208,17 +241,32 @@ export function useWizard() {
   }, [steps.length])
 
   const _post = useCallback(
-    async (force: boolean): Promise<DeployResponse | DestructiveDeployError | null> => {
+    async (
+      force: boolean
+    ): Promise<DeployResponse | DestructiveDeployError | AckOutstandingError | null> => {
       setState((prev) => ({ ...prev, isDeploying: true }))
       try {
         const resp = await fetch(apiUrl('api/wizard/deploy'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config: state.config, force }),
+          body: JSON.stringify({
+            config: state.config,
+            force,
+            acknowledged_rule_ids: state.acknowledgedRuleIds,
+          }),
         })
         if (resp.status === 409) {
           const body = await resp.json()
           const detail = (body?.detail ?? {}) as Record<string, unknown>
+          // INSTRUCTION-324: two 409 shapes — the acknowledgement refusal
+          // carries `outstanding`, the section-preservation refusal carries
+          // `removed_sections`.
+          if (Array.isArray(detail.outstanding)) {
+            return {
+              kind: 'ack_outstanding',
+              outstanding: detail.outstanding as string[],
+            }
+          }
           return {
             kind: 'destructive',
             removed_sections: (detail.removed_sections as string[]) ?? [],
@@ -233,7 +281,7 @@ export function useWizard() {
         setState((prev) => ({ ...prev, isDeploying: false }))
       }
     },
-    [state.config]
+    [state.config, state.acknowledgedRuleIds]
   )
 
   const deploy = useCallback(
@@ -280,5 +328,6 @@ export function useWizard() {
     goToStep,
     deploy,
     forceDeploy,
+    toggleAcknowledgement,
   }
 }

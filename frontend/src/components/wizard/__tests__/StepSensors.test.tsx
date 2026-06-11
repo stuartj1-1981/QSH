@@ -87,6 +87,8 @@ describe('StepReview — flow_rate summary row', () => {
       <StepReview
         config={config}
         validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={() => {}}
         isDeploying={false}
         onDeploy={async () => null}
         onForceDeploy={async () => null}
@@ -109,6 +111,8 @@ describe('StepReview — flow_rate summary row', () => {
       <StepReview
         config={config}
         validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={() => {}}
         isDeploying={false}
         onDeploy={async () => null}
         onForceDeploy={async () => null}
@@ -128,6 +132,8 @@ describe('StepReview — flow_rate summary row', () => {
       <StepReview
         config={config}
         validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={() => {}}
         isDeploying={false}
         onDeploy={async () => null}
         onForceDeploy={async () => null}

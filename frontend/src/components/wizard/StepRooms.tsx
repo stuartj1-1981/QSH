@@ -4,7 +4,11 @@ import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml } from '../../types/config'
+import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml } from '../../types/config'
+
+/** Mirrors AREA_RECONCILIATION_TOLERANCE in qsh/api/routes/wizard.py — used
+ *  only to colour the live readout; the backend rule is authoritative. */
+const AREA_TOLERANCE = 0.25
 
 interface StepRoomsProps {
   config: Partial<QshConfigYaml>
@@ -27,12 +31,31 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
   const mqtt: MqttConfig = (config.mqtt as MqttConfig) || { broker: '', port: 1883, inputs: {} }
   const [mqttScanResults, setMqttScanResults] = useState<MqttTopicCandidate[]>([])
 
+  // INSTRUCTION-324 — property ground truth, captured before the rooms.
+  const property: PropertyYaml = (config.property as PropertyYaml) ?? {}
+  const sumRoomArea = Object.values(rooms).reduce(
+    (total, room) => total + (room.area_m2 || 0),
+    0
+  )
+  const declaredArea = property.total_floor_area_m2
+  const areaGapPct =
+    declaredArea && declaredArea > 0
+      ? Math.abs(sumRoomArea - declaredArea) / declaredArea
+      : null
+
+  const updateProperty = (changes: Partial<PropertyYaml>) => {
+    onUpdate('property', { ...property, ...changes })
+  }
+
   const addRoom = () => {
     const name = newName.trim().toLowerCase().replace(/\s+/g, '_')
     if (!name || rooms[name]) return
     const newRooms = {
       ...rooms,
-      [name]: { area_m2: 15, facing: 'interior', ceiling_m: 2.4 },
+      // emitter_type seeded explicitly (INSTRUCTION-324): the truth gate
+      // requires it per room, and the select below displays exactly what
+      // will be deployed — a visible default, never a silent one.
+      [name]: { area_m2: 15, facing: 'interior', ceiling_m: 2.4, emitter_type: 'radiator' as const },
     }
     onUpdate('rooms', newRooms)
     setNewName('')
@@ -240,6 +263,78 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
         </p>
       </div>
 
+      {/* INSTRUCTION-324 — property ground truth: the building first, then
+          its rooms. The declared total anchors the Σ-room-area
+          reconciliation; deploy refuses configs that don't reconcile. */}
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-medium text-[var(--text)]">Property</h3>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            Declare the building before its rooms — room areas are checked
+            against the total at deploy.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-[var(--text)] mb-1">
+              Total Floor Area (m²) <span className="text-[var(--red)]">*</span>
+            </label>
+            <input
+              type="number"
+              step="1"
+              min="30"
+              max="1000"
+              value={property.total_floor_area_m2 ?? ''}
+              onChange={(e) =>
+                updateProperty({
+                  total_floor_area_m2: e.target.value
+                    ? parseFloat(e.target.value)
+                    : undefined,
+                })
+              }
+              placeholder="e.g. 189"
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-[var(--text)] mb-1">
+              Bedrooms — optional
+            </label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              max="12"
+              value={property.bedrooms ?? ''}
+              onChange={(e) =>
+                updateProperty({
+                  bedrooms: e.target.value
+                    ? parseInt(e.target.value, 10)
+                    : undefined,
+                })
+              }
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+            />
+          </div>
+        </div>
+        {declaredArea != null && declaredArea > 0 && (
+          <p
+            data-testid="area-reconciliation-readout"
+            className={`text-xs ${
+              areaGapPct !== null && areaGapPct > AREA_TOLERANCE
+                ? 'text-[var(--red)]'
+                : 'text-[var(--text-muted)]'
+            }`}
+          >
+            Rooms add up to {Math.round(sumRoomArea * 10) / 10} m² of{' '}
+            {declaredArea} m² declared
+            {areaGapPct !== null && (
+              <> ({Math.round(areaGapPct * 100)}% gap{areaGapPct > AREA_TOLERANCE ? ' — exceeds the 25% tolerance, deploy will refuse' : ''})</>
+            )}
+          </p>
+        )}
+      </div>
+
       {/* Add room */}
       <div className="flex gap-2">
         <input
@@ -376,19 +471,25 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                     />
                   </div>
 
-                  {/* Emitter type */}
+                  {/* Emitter type — required (INSTRUCTION-324). A room
+                      without the key shows the placeholder instead of a
+                      phantom "Radiator" that was never in the config; the
+                      deploy gate errors until a real selection is made. */}
                   <div>
                     <label className="block text-xs font-medium text-[var(--text)] mb-1">
-                      Emitter Type
+                      Emitter Type <span className="text-[var(--red)]">*</span>
                     </label>
                     <select
-                      value={room.emitter_type || 'radiator'}
+                      value={room.emitter_type || ''}
                       onChange={(e) => {
                         const val = e.target.value as 'radiator' | 'ufh' | 'fan_coil'
                         updateRoom(name, { emitter_type: val })
                       }}
                       className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                     >
+                      <option value="" disabled>
+                        Select emitter type…
+                      </option>
                       <option value="radiator">Radiator</option>
                       <option value="ufh">Underfloor Heating</option>
                       <option value="fan_coil">Fan Coil</option>

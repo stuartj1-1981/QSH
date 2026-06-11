@@ -12,6 +12,9 @@ interface WizardShellProps {
   isFirstStep: boolean
   isLastStep: boolean
   isDeploying?: boolean
+  /** INSTRUCTION-324 — disables the footer Next/Deploy button while
+   *  acknowledged-class warnings remain unticked on the review step. */
+  nextDisabled?: boolean
   validationErrors: string[]
   onExit?: () => void
 }
@@ -26,6 +29,7 @@ export function WizardShell({
   isFirstStep,
   isLastStep,
   isDeploying,
+  nextDisabled,
   validationErrors,
   onExit,
 }: WizardShellProps) {
@@ -127,7 +131,7 @@ export function WizardShell({
           </button>
           <button
             onClick={onNext}
-            disabled={isDeploying}
+            disabled={isDeploying || nextDisabled}
             className="flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-medium bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50"
           >
             {isDeploying ? (

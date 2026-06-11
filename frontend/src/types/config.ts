@@ -429,6 +429,15 @@ export interface TelemetryYaml {
   endpoint?: string
 }
 
+/** INSTRUCTION-324 — owner-declared building ground truth. Captured at the
+ *  top of StepRooms; total_floor_area_m2 is required by the wizard truth
+ *  gate (validity band 30–1000 m²) and anchors the Σ-room-area
+ *  reconciliation error. bedrooms is an optional soft archetype key. */
+export interface PropertyYaml {
+  total_floor_area_m2?: number
+  bedrooms?: number
+}
+
 export interface QshConfigYaml {
   driver?: 'ha' | 'mqtt'
   rooms?: Record<string, RoomConfigYaml>
@@ -458,6 +467,18 @@ export interface QshConfigYaml {
   hw_precharge?: HwPrechargeYaml
   telemetry?: TelemetryYaml
   disclaimer_accepted?: boolean
+
+  /** INSTRUCTION-327 — IANA zone for comfort + occupancy schedule evaluation
+   *  on installs without an HA Supervisor (e.g. plain Docker). Blank/absent =
+   *  automatic (Supervisor → TZ env → UTC). Validated authoritatively at
+   *  backend config load; written via PATCH /api/config/root. */
+  schedule_timezone?: string
+
+  // INSTRUCTION-324 — wizard config-truth gate.
+  property?: PropertyYaml
+  /** Audit trail stamped server-side at deploy: instance-qualified rule id
+   *  (e.g. "emitter_kw_defaulted:lounge") → ISO timestamp. */
+  wizard_acknowledgements?: Record<string, string>
 
   // Internal value overrides (36C — HA helper decoupling)
   flow_min_internal?: number
@@ -497,11 +518,21 @@ export interface ScanRoomResponse {
   candidates: Record<string, EntityCandidate[]>
 }
 
+/** INSTRUCTION-324 — structured warning envelope from /api/wizard/validate.
+ *  rule_id is non-null for acknowledged-class warnings (instance-qualified,
+ *  e.g. "emitter_kw_defaulted:lounge"); deploy 409s while any fired rule_id
+ *  is unacknowledged. rule_id null = legacy informational warning, never
+ *  deploy-blocking. */
+export interface WizardWarning {
+  rule_id: string | null
+  message: string
+}
+
 /** Response from POST /api/wizard/validate */
 export interface ValidationResponse {
   valid: boolean
   errors: string[]
-  warnings: string[]
+  warnings: WizardWarning[]
 }
 
 /** Response from POST /api/wizard/deploy */
@@ -509,7 +540,7 @@ export interface DeployResponse {
   deployed: boolean
   yaml_path: string
   message: string
-  warnings: string[]
+  warnings: WizardWarning[]
 }
 
 /** 409 destructive-deploy refusal — wizard config would remove top-level
@@ -523,9 +554,23 @@ export interface DestructiveDeployError {
 }
 
 export function isDestructiveDeployError(
-  v: DeployResponse | DestructiveDeployError | null
+  v: DeployResponse | DestructiveDeployError | AckOutstandingError | null
 ): v is DestructiveDeployError {
   return !!v && (v as DestructiveDeployError).kind === 'destructive'
+}
+
+/** 409 acknowledgement refusal (INSTRUCTION-324) — fired acknowledged-class
+ *  warnings missing from acknowledged_rule_ids. Lists the outstanding
+ *  instance-qualified rule ids. */
+export interface AckOutstandingError {
+  kind: 'ack_outstanding'
+  outstanding: string[]
+}
+
+export function isAckOutstandingError(
+  v: DeployResponse | DestructiveDeployError | AckOutstandingError | null
+): v is AckOutstandingError {
+  return !!v && (v as AckOutstandingError).kind === 'ack_outstanding'
 }
 
 /** Response from POST /api/wizard/test-octopus (INSTRUCTION-90E direction filter). */

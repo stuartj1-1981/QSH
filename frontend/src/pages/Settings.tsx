@@ -155,7 +155,14 @@ export function Settings({ onRunWizard }: SettingsProps) {
           </div>
         )
       case 'system':
-        return <SystemSettings driver={driver} onRunWizard={onRunWizard} />
+        return (
+          <SystemSettings
+            driver={driver}
+            scheduleTimezone={data.schedule_timezone}
+            onRefetch={refetch}
+            onRunWizard={onRunWizard}
+          />
+        )
     }
   }
 

@@ -115,3 +115,62 @@ describe('useWizard', () => {
     expect(result.current.stepLabels).toHaveLength(15)
   })
 })
+
+// ── INSTRUCTION-324: full validation on entering review + ack pruning ────
+
+describe('useWizard review-entry full validation (INSTRUCTION-324)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('runs a full (step=null) validation when advancing into review and prunes stale acks', async () => {
+    const firedWarning = {
+      rule_id: 'emitter_kw_defaulted:lounge',
+      message: "Room 'lounge' emitter_kw not set",
+    }
+    const mockFetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (_url, init) => {
+        const body = JSON.parse((init as RequestInit).body as string)
+        const isFull = body.step === null
+        return {
+          ok: true,
+          json: async () => ({
+            valid: true,
+            errors: [],
+            warnings: isFull ? [firedWarning] : [],
+          }),
+        } as Response
+      })
+
+    const { result } = renderHook(() => useWizard())
+
+    // Position on the step before review (HA branch: disclaimer at index 12)
+    const reviewIdx = result.current.steps.indexOf('review')
+    act(() => {
+      result.current.goToStep(reviewIdx - 1)
+    })
+    // Tick one stale ack (its rule won't fire) and one that will fire.
+    act(() => {
+      result.current.toggleAcknowledgement('emitter_kw_defaulted:renamed_room', true)
+      result.current.toggleAcknowledgement('emitter_kw_defaulted:lounge', true)
+    })
+
+    await act(async () => {
+      await result.current.next()
+    })
+
+    expect(result.current.stepName).toBe('review')
+    // Two validate calls: the step itself, then the full pass.
+    const steps = mockFetch.mock.calls.map(
+      (c) => JSON.parse((c[1] as RequestInit).body as string).step
+    )
+    expect(steps).toEqual(['disclaimer', null])
+    // The review warnings come from the FULL validation.
+    expect(result.current.validationWarnings).toEqual([firedWarning])
+    // The stale ack (rule no longer fired) is pruned; the live one survives.
+    expect(result.current.acknowledgedRuleIds).toEqual([
+      'emitter_kw_defaulted:lounge',
+    ])
+  })
+})
