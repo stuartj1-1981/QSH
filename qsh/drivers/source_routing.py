@@ -10,6 +10,14 @@ Design: INSTRUCTION-279A §2. Pure functions; no I/O, no HA/MQTT imports, no
 module-scope side effects (mirrors ``qsh/drivers/resolve.py``'s posture so it
 ships as source under the ``drivers/`` whitelist and unit-tests cleanly).
 
+INSTRUCTION-329 D5: the INSTRUCTION-279 primary-shared invariant is relaxed —
+a PRIMARY source carrying explicit per-source ``flow_control`` topics (both
+``topic`` and ``mode_topic``) is stamped ``method="mqtt"`` at config load and
+routes per-source through the ``method`` branch like any other source. The
+shared-topic fallback below now applies only to primaries WITHOUT explicit
+per-source topics. The routing decision itself is unchanged: it keys solely on
+``flow_control.method``.
+
 The default literals below MUST match the existing top-level resolution
 (``config.py`` ``_resolve_active_source``, verified at config.py:2253-2263) and
 the HA dispatch helpers (``hardware_dispatch.py`` ``_apply_flow_*``, verified at
@@ -120,16 +128,25 @@ def resolve_source_routing(
 
     # fc empty / method unset / unknown (incl. octopus_api, trvs_only,
     # monitor_only top-level methods, which are never per-source routed).
+    #
+    # INSTRUCTION-329 D5: this fallback is reached for a primary ONLY when it
+    # carries no explicit per-source method. A primary configured with both
+    # flow_control.topic AND flow_control.mode_topic is stamped method="mqtt"
+    # at config load (config.py INSTRUCTION-308/329 block) and routes per-source
+    # via the method=="mqtt" branch above — the 279 primary-shared invariant now
+    # applies only to primaries without explicit per-source topics. The method
+    # check at the top of this function is the sole routing decision; no change
+    # here beyond this clarification.
     control_method = config.get("control_method", "trvs_only")
     if fallback_safe:
-        # Single-source or primary: the top-level flat targets ARE this active
-        # source's actuator, so the routing carries them through (§2.2 fallback
-        # row — "top-level flat targets copied through"; SourceRouting docstring).
-        # The active source IS the primary, so the top-level config is
-        # authoritative; populating the routing fields keeps the routing object
-        # self-describing, matching the per-source routed branches above.
-        # effective_dispatch_config still leaves the original config keys intact
-        # for routed=False, so dispatch is unaffected.
+        # Single-source or primary-without-per-source-topics: the top-level flat
+        # targets ARE this active source's actuator, so the routing carries them
+        # through (§2.2 fallback row — "top-level flat targets copied through";
+        # SourceRouting docstring). The top-level config is authoritative;
+        # populating the routing fields keeps the routing object self-describing,
+        # matching the per-source routed branches above. effective_dispatch_config
+        # still leaves the original config keys intact for routed=False, so
+        # dispatch is unaffected.
         return SourceRouting(
             control_method=control_method,
             routed=False,

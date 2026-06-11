@@ -5,6 +5,7 @@ import os
 import copy
 import yaml
 import requests
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -33,6 +34,48 @@ router = APIRouter(prefix="/wizard", tags=["wizard"])
 # perceived hang.
 HA_TIMEOUT = 15
 
+# ── INSTRUCTION-324: wizard config-truth gate ────────────────────────────────
+#
+# Structural truths are hard ERRORS; plausibility flags are acknowledged
+# WARNINGS (owner disposition 11 June 2026 — mixed + acknowledge). Each
+# acknowledged-class warning carries a stable, instance-qualified rule_id;
+# deploy refuses (409) while any fired rule_id is unacknowledged, and the
+# accepted set is stamped into the deployed YAML as
+# `wizard_acknowledgements: {rule_id: ISO-timestamp}`.
+
+# Validity band for the property.total_floor_area_m2 declaration. The
+# declaration ANCHORS the area-reconciliation rule below — a garbage
+# declaration (5 m² or 50000 m²) voids the very check it exists to enable, so
+# declaration validity is a structural precondition (hard error), not a
+# plausibility flag.
+PROPERTY_AREA_MIN_M2 = 30.0
+PROPERTY_AREA_MAX_M2 = 1000.0
+
+# Σ room area vs declared total tolerance. Hallways, stairwells and unheated
+# spaces legitimately go uncounted in the room list, so a sizeable shortfall
+# is normal. The Vaillant beta install was 0.46 under (9 rooms / 102 m²
+# configured against a real 13 / 189 m²) — caught by 0.25 with margin.
+AREA_RECONCILIATION_TOLERANCE = 0.25
+
+# Mirrors qsh/config.py EMITTER_TAU_DEFAULTS — the per-room τ-derivation
+# table that makes emitter_type a control-quality input, not metadata.
+VALID_EMITTER_TYPES = ("radiator", "ufh", "fan_coil")
+
+# Optional bedrooms declaration — a soft archetype key that anchors no
+# reconciliation rule, so out-of-band is an acknowledged warning, not an
+# error (INSTRUCTION-324 decision 4a).
+BEDROOMS_MIN = 0
+BEDROOMS_MAX = 12
+
+# Plausibility ceilings for template-inheritance carriers (decision 4). The
+# solar ceiling is the Vaillant P3 catch: a 27.78 kW "observed" solar block
+# inherited from a template on a domestic install.
+SOLAR_DOMESTIC_CAPACITY_MAX_KW = 15.0
+BATTERY_RATE_MAX_KW = 20.0
+BATTERY_CAPACITY_MAX_KWH = 50.0
+TANK_VOLUME_PLAUSIBLE_MIN_L = 80
+TANK_VOLUME_PLAUSIBLE_MAX_L = 500
+
 
 def _get_ha_headers():
     """Lazily resolve HA Supervisor credentials. Only called when an HA endpoint runs."""
@@ -59,6 +102,11 @@ class WizardDeployRequest(BaseModel):
 
     config: Dict[str, Any]
     force: bool = False
+    # INSTRUCTION-324: instance-qualified rule ids the user has explicitly
+    # acknowledged (e.g. "emitter_kw_defaulted:lounge",
+    # "solar_block_no_entity"). Deploy 409s while any fired
+    # acknowledged-class warning is missing from this list.
+    acknowledged_rule_ids: List[str] = Field(default_factory=list)
 
 
 class OctopusTestRequest(BaseModel):
@@ -815,12 +863,125 @@ def validate_config(req: WizardValidateRequest):
         rooms = cfg.get("rooms", {})
         if not rooms:
             errors.append("At least one room is required")
+
+        # \u2500\u2500 INSTRUCTION-324: property ground-truth declaration \u2500\u2500
+        # The declaration is required and band-checked BEFORE it anchors the
+        # area-reconciliation rule below; a voided declaration reconciles
+        # nothing (total_area_f stays None).
+        prop = cfg.get("property")
+        prop = prop if isinstance(prop, dict) else {}
+        total_area_raw = prop.get("total_floor_area_m2")
+        total_area_f: Optional[float] = None
+        if total_area_raw is None:
+            errors.append(
+                "property.total_floor_area_m2 is required \u2014 declare the "
+                "building's total floor area (m\u00b2) so the room list can be "
+                "reconciled against ground truth"
+            )
+        else:
+            try:
+                total_area_f = float(total_area_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"property.total_floor_area_m2 must be a number, "
+                    f"got {total_area_raw!r}"
+                )
+            else:
+                if not (PROPERTY_AREA_MIN_M2 <= total_area_f <= PROPERTY_AREA_MAX_M2):
+                    errors.append(
+                        f"property.total_floor_area_m2 = {total_area_f:g} is "
+                        f"outside the validity band "
+                        f"[{PROPERTY_AREA_MIN_M2:g}, {PROPERTY_AREA_MAX_M2:g}] m\u00b2 "
+                        f"\u2014 a declaration outside this band cannot anchor the "
+                        f"room-area reconciliation check"
+                    )
+                    total_area_f = None
+
+        bedrooms_raw = prop.get("bedrooms")
+        if bedrooms_raw is not None:
+            try:
+                bedrooms_i = int(bedrooms_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"property.bedrooms must be an integer, got {bedrooms_raw!r}"
+                )
+            else:
+                if not (BEDROOMS_MIN <= bedrooms_i <= BEDROOMS_MAX):
+                    warnings.append({
+                        "rule_id": "bedrooms_out_of_band",
+                        "message": (
+                            f"property.bedrooms = {bedrooms_i} is outside the "
+                            f"typical band [{BEDROOMS_MIN}, {BEDROOMS_MAX}] \u2014 "
+                            f"confirm this is correct for this building"
+                        ),
+                    })
+
         for name, rc in rooms.items():
             if not rc.get("area_m2"):
                 errors.append(f"Room '{name}' missing area_m2")
             area = rc.get("area_m2", 0)
             if area and (area < 1 or area > 200):
                 warnings.append(f"Room '{name}' area {area}m\u00b2 seems unusual")
+
+            # INSTRUCTION-324: emitter_type is a hard requirement. The
+            # runtime branches per-room \u03c4 derivation on it
+            # (qsh/config.py EMITTER_TAU_DEFAULTS) \u2014 it is a control-quality
+            # input, not metadata, and a silent None degrades every room to
+            # the global tau.
+            etype = rc.get("emitter_type")
+            if not etype:
+                errors.append(
+                    f"Room '{name}' missing emitter_type. "
+                    f"Valid: {', '.join(VALID_EMITTER_TYPES)}"
+                )
+            elif etype not in VALID_EMITTER_TYPES:
+                errors.append(
+                    f"Room '{name}' has invalid emitter_type '{etype}'. "
+                    f"Valid: {', '.join(VALID_EMITTER_TYPES)}"
+                )
+
+            # INSTRUCTION-324: emitter_kw keeps its area \u00d7 0.1 runtime
+            # default (qsh/config.py:1030), but a silent default becomes a
+            # visible, acknowledged one \u2014 instance-qualified per room so
+            # four defaulted rooms need four acknowledgements.
+            if rc.get("emitter_kw") in (None, ""):
+                try:
+                    _default_kw = round(float(area or 0.0) * 0.1, 2)
+                except (TypeError, ValueError):
+                    _default_kw = 0.0
+                warnings.append({
+                    "rule_id": f"emitter_kw_defaulted:{name}",
+                    "message": (
+                        f"Room '{name}' emitter_kw not set \u2014 will default to "
+                        f"{_default_kw:g} kW (area \u00d7 0.1). Defaulted, not "
+                        f"measured: confirm or enter the emitter's rated output"
+                    ),
+                })
+
+        # \u2500\u2500 INSTRUCTION-324: declared-vs-\u03a3-room-area reconciliation \u2500\u2500
+        # Hard error \u2014 the Vaillant failure (9 rooms / 102 m\u00b2 configured vs
+        # real 13 / 189 m\u00b2) was structurally undetectable without a declared
+        # total to reconcile against. Skipped when the declaration is absent/
+        # voided (already an error above) or no rooms exist (already an error).
+        if total_area_f is not None and rooms:
+            declared_sum = 0.0
+            for rc in rooms.values():
+                try:
+                    declared_sum += float(rc.get("area_m2") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+            gap = abs(declared_sum - total_area_f)
+            if gap / total_area_f > AREA_RECONCILIATION_TOLERANCE:
+                errors.append(
+                    f"Room areas do not reconcile with the declared property: "
+                    f"\u03a3 room area_m2 = {declared_sum:g} m\u00b2 vs declared "
+                    f"property.total_floor_area_m2 = {total_area_f:g} m\u00b2 "
+                    f"(gap {gap:g} m\u00b2 = {gap / total_area_f:.0%}, tolerance "
+                    f"{AREA_RECONCILIATION_TOLERANCE:.0%}). Add the missing "
+                    f"rooms or correct the declaration"
+                )
+
+        for name, rc in rooms.items():
             if cfg.get("driver") == "mqtt":
                 mqtt_topics = rc.get("mqtt_topics", {})
                 if not mqtt_topics.get("room_temp"):
@@ -1062,6 +1223,20 @@ def validate_config(req: WizardValidateRequest):
         vol = hw_tank.get("volume_litres")
         if vol is not None and (vol < 10 or vol > 500):
             errors.append(f"hw_tank.volume_litres={vol} outside range [10, 500]")
+        elif vol is not None and (
+            vol < TANK_VOLUME_PLAUSIBLE_MIN_L or vol > TANK_VOLUME_PLAUSIBLE_MAX_L
+        ):
+            # INSTRUCTION-324: within the hard validity range but outside the
+            # plausible domestic band — template-inherited or mistyped value.
+            warnings.append({
+                "rule_id": "tank_volume_band",
+                "message": (
+                    f"hw_tank.volume_litres = {vol} is outside the plausible "
+                    f"domestic band [{TANK_VOLUME_PLAUSIBLE_MIN_L}, "
+                    f"{TANK_VOLUME_PLAUSIBLE_MAX_L}] L — confirm this is the "
+                    f"actual cylinder volume for this building"
+                ),
+            })
         hw_pre = cfg.get("hw_precharge", {})
         factor = hw_pre.get("factor")
         if factor is not None and (factor < 0.0 or factor > 1.0):
@@ -1110,10 +1285,103 @@ def validate_config(req: WizardValidateRequest):
         if battery.get("soc_entity") and not grid.get("power_entity"):
             warnings.append("Battery configured without grid power entity — grid-aware charging disabled")
 
+        # ── INSTRUCTION-324: template-inheritance + plausibility detectors ──
+        # The Vaillant P3 case: a solar block with 27.78 kW capacity and no
+        # matching live entity, inherited wholesale from someone else's
+        # template. Both detector classes are acknowledged warnings — the
+        # user can keep the config, but must say so explicitly.
+        solar_cfg = cfg.get("solar")
+        if isinstance(solar_cfg, dict) and solar_cfg:
+            solar_cap = solar_cfg.get("capacity_kw", solar_cfg.get("capacity_kwp"))
+            if solar_cap is not None:
+                try:
+                    solar_cap_f = float(solar_cap)
+                except (TypeError, ValueError):
+                    solar_cap_f = None
+                if solar_cap_f is not None and solar_cap_f > SOLAR_DOMESTIC_CAPACITY_MAX_KW:
+                    warnings.append({
+                        "rule_id": "solar_capacity_gt_domestic",
+                        "message": (
+                            f"Solar capacity {solar_cap_f:g} kW exceeds the "
+                            f"domestic ceiling of "
+                            f"{SOLAR_DOMESTIC_CAPACITY_MAX_KW:g} kW — confirm "
+                            f"this is a real array, not a template-inherited "
+                            f"value"
+                        ),
+                    })
+            # Decision 4b: solar.production_entity is the key fed to
+            # _ha_entity_exists. Block present with the key absent OR
+            # present-but-non-existent in HA fires the warning — the direct
+            # "inherited, not his" detector.
+            production_entity = solar_cfg.get("production_entity")
+            if not production_entity or not _ha_entity_exists(production_entity):
+                warnings.append({
+                    "rule_id": "solar_block_no_entity",
+                    "message": (
+                        "A solar block is configured but no live matching "
+                        "entity was found (solar.production_entity "
+                        f"{production_entity!r}) — confirm this building "
+                        "actually has solar, or remove the block"
+                    ),
+                })
+
+        battery_cfg = cfg.get("battery")
+        if isinstance(battery_cfg, dict) and battery_cfg:
+            implausible_bits = []
+            max_rate = battery_cfg.get("max_rate_kw")
+            if max_rate is not None:
+                try:
+                    if float(max_rate) > BATTERY_RATE_MAX_KW:
+                        implausible_bits.append(
+                            f"max_rate_kw {float(max_rate):g} kW > "
+                            f"{BATTERY_RATE_MAX_KW:g} kW"
+                        )
+                except (TypeError, ValueError):
+                    pass
+            capacity_kwh = battery_cfg.get("capacity_kwh")
+            if capacity_kwh is not None:
+                try:
+                    if float(capacity_kwh) > BATTERY_CAPACITY_MAX_KWH:
+                        implausible_bits.append(
+                            f"capacity_kwh {float(capacity_kwh):g} kWh > "
+                            f"{BATTERY_CAPACITY_MAX_KWH:g} kWh"
+                        )
+                except (TypeError, ValueError):
+                    pass
+            if implausible_bits:
+                warnings.append({
+                    "rule_id": "battery_rate_implausible",
+                    "message": (
+                        f"Battery configuration is implausible for a domestic "
+                        f"install ({'; '.join(implausible_bits)}) — confirm "
+                        f"these values, or correct a template-inherited block"
+                    ),
+                })
+            soc_entity = battery_cfg.get("soc_entity")
+            if not soc_entity or not _ha_entity_exists(soc_entity):
+                warnings.append({
+                    "rule_id": "battery_block_no_entity",
+                    "message": (
+                        "A battery block is configured but no live matching "
+                        f"entity was found (battery.soc_entity {soc_entity!r}) "
+                        "— confirm this building actually has a battery, or "
+                        "remove the block"
+                    ),
+                })
+
+    # INSTRUCTION-324: structured warning envelope. Acknowledged-class rules
+    # append {rule_id, message}; legacy informational warnings are plain
+    # strings — normalised here to the envelope with rule_id=None (no
+    # acknowledgement required, never deploy-blocking).
+    structured_warnings = [
+        w if isinstance(w, dict) else {"rule_id": None, "message": w}
+        for w in warnings
+    ]
+
     return {
         "valid": len(errors) == 0,
         "errors": errors,
-        "warnings": warnings,
+        "warnings": structured_warnings,
     }
 
 
@@ -1734,6 +2002,31 @@ def deploy_config(req: WizardDeployRequest):
             },
         )
 
+    # ── INSTRUCTION-324: acknowledgement gate ──
+    # Every fired acknowledged-class warning (rule_id non-null) must be
+    # explicitly acknowledged by its instance-qualified id before ANY YAML
+    # write. Precedes the section-preservation guard. The restore-backup
+    # flow (/api/backup/restore) is exempt by construction — it redeploys a
+    # previously-running config and never enters this route.
+    required_acks = [
+        w["rule_id"]
+        for w in validation["warnings"]
+        if isinstance(w, dict) and w.get("rule_id")
+    ]
+    acked = set(req.acknowledged_rule_ids or [])
+    outstanding = [r for r in required_acks if r not in acked]
+    if outstanding:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Deploy blocked — configuration warnings require "
+                    "explicit acknowledgement"
+                ),
+                "outstanding": outstanding,
+            },
+        )
+
     # Hydrate redacted secrets and run the section-preservation guard against
     # the on-disk YAML BEFORE any write. The 409 path must short-circuit before
     # yaml.dump, the file write, and the restart-flag write.
@@ -1774,6 +2067,10 @@ def deploy_config(req: WizardDeployRequest):
     # top-level section present in the on-disk YAML, unless force=True.
     if existing:
         removed_sections = set(existing.keys()) - set(req.config.keys())
+        # INSTRUCTION-324: wizard_acknowledgements is stamped server-side
+        # AFTER this guard on every deploy — its absence from the incoming
+        # payload is never destructive.
+        removed_sections.discard("wizard_acknowledgements")
         # INSTRUCTION-237A Task 1c: exempt legitimate 1→N / N→1 transitions
         # from the destructive-drop check. Reconciliation above already
         # stripped the relevant key from req.config in each direction.
@@ -1807,6 +2104,17 @@ def deploy_config(req: WizardDeployRequest):
                 "existing_sections=%d, incoming_sections=%d, removed_sections=%s",
                 len(existing), len(req.config), sorted(removed_sections),
             )
+
+    # ── INSTRUCTION-324: stamp the acknowledgement audit trail ──
+    # One key per acknowledged instance (instance-qualified rule ids), value
+    # is the deploy timestamp. Re-stamped on every deploy: a rule that no
+    # longer fires needs no acknowledgement, so its old entry drops out.
+    # PyYAML round-trips colon-bearing keys (emitter_kw_defaulted:lounge)
+    # cleanly — plain scalars only break on colon-followed-by-space, and the
+    # room-name suffix is the config key (no spaces). Pinned by
+    # test_config_property_carrythrough.py.
+    _ack_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    req.config["wizard_acknowledgements"] = {rid: _ack_ts for rid in required_acks}
 
     # ── Telemetry: generate install_id before writing YAML (H1/H2 resolution) ──
     telemetry_cfg = req.config.get("telemetry", {})

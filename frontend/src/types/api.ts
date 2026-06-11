@@ -226,6 +226,12 @@ export interface HealthResponse {
   cycle_number: number
   api_version: string
   addon_version: string
+  // INSTRUCTION-252 backend fields, typed under INSTRUCTION-327 for the
+  // Schedule page caption. local_timezone is the resolved IANA name; source
+  // names which step of the precedence chain won. Optional so the caption
+  // degrades gracefully against older backends / partial mocks.
+  local_timezone?: string
+  local_timezone_source?: 'supervisor' | 'config' | 'env' | 'default'
   driver: { status: string; [key: string]: unknown }
 }
 

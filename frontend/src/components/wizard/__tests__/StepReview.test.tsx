@@ -33,6 +33,8 @@ describe('StepReview destructive deploy', () => {
       <StepReview
         config={baseConfig}
         validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={vi.fn()}
         isDeploying={false}
         onDeploy={onDeploy}
         onForceDeploy={onForceDeploy}
@@ -66,6 +68,8 @@ describe('StepReview destructive deploy', () => {
       <StepReview
         config={baseConfig}
         validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={vi.fn()}
         isDeploying={false}
         onDeploy={onDeploy}
         onForceDeploy={onForceDeploy}
@@ -149,5 +153,124 @@ describe('useWizard.deploy 409 handling', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
     expect(body.force).toBe(true)
+  })
+})
+
+// ── INSTRUCTION-324: acknowledgement UX ──────────────────────────────────
+
+const ackWarnings = [
+  { rule_id: 'emitter_kw_defaulted:living_room', message: "Room 'living_room' emitter_kw not set" },
+  { rule_id: 'solar_block_no_entity', message: 'A solar block is configured but no live matching entity was found' },
+  { rule_id: null, message: 'heat_source.capacity_kw not set — fleet telemetry will report null.' },
+]
+
+describe('StepReview acknowledgement gate (INSTRUCTION-324)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const renderWithAcks = (acknowledged: string[], onAcknowledge = vi.fn(), onDeploy = vi.fn()) => {
+    render(
+      <StepReview
+        config={baseConfig}
+        validationWarnings={ackWarnings}
+        acknowledgedRuleIds={acknowledged}
+        onAcknowledge={onAcknowledge}
+        isDeploying={false}
+        onDeploy={onDeploy}
+        onForceDeploy={vi.fn()}
+      />
+    )
+    return { onAcknowledge, onDeploy }
+  }
+
+  it('renders one checkbox per acknowledged-class warning and lists null-rule_id warnings as plain text', () => {
+    renderWithAcks([])
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes).toHaveLength(2)
+    // The legacy informational warning renders without a checkbox.
+    expect(screen.getByText(/fleet telemetry will report null/)).toBeDefined()
+  })
+
+  it('disables Deploy until every acknowledged-class warning is ticked', () => {
+    renderWithAcks(['emitter_kw_defaulted:living_room'])
+    const deployBtn = screen.getByText('Deploy Configuration').closest('button')!
+    expect(deployBtn.disabled).toBe(true)
+  })
+
+  it('enables Deploy when all acknowledged-class warnings are ticked', () => {
+    renderWithAcks(['emitter_kw_defaulted:living_room', 'solar_block_no_entity'])
+    const deployBtn = screen.getByText('Deploy Configuration').closest('button')!
+    expect(deployBtn.disabled).toBe(false)
+  })
+
+  it('ticking a checkbox fires onAcknowledge with the qualified rule id', () => {
+    const { onAcknowledge } = renderWithAcks([])
+    fireEvent.click(screen.getAllByRole('checkbox')[0])
+    expect(onAcknowledge).toHaveBeenCalledWith('emitter_kw_defaulted:living_room', true)
+  })
+
+  it('renders the outstanding banner when deploy returns an ack_outstanding 409', async () => {
+    const onDeploy = vi.fn().mockResolvedValue({
+      kind: 'ack_outstanding',
+      outstanding: ['emitter_kw_defaulted:living_room'],
+    })
+    renderWithAcks(['emitter_kw_defaulted:living_room', 'solar_block_no_entity'], vi.fn(), onDeploy)
+    fireEvent.click(screen.getByText('Deploy Configuration'))
+    await waitFor(() => {
+      expect(screen.getByTestId('ack-outstanding-banner')).toBeDefined()
+    })
+    expect(screen.getByTestId('ack-outstanding-banner').textContent).toMatch(
+      /emitter_kw_defaulted:living_room/
+    )
+  })
+})
+
+describe('useWizard acknowledgement threading (INSTRUCTION-324)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('deploy posts acknowledged_rule_ids and translates the ack 409', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 409,
+      json: () =>
+        Promise.resolve({
+          detail: {
+            message: 'Deploy blocked',
+            outstanding: ['emitter_kw_defaulted:lounge'],
+          },
+        }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    act(() => {
+      result.current.toggleAcknowledgement('solar_block_no_entity', true)
+    })
+    let deployResult: unknown
+    await act(async () => {
+      deployResult = await result.current.deploy()
+    })
+
+    expect(deployResult).toEqual({
+      kind: 'ack_outstanding',
+      outstanding: ['emitter_kw_defaulted:lounge'],
+    })
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.acknowledged_rule_ids).toEqual(['solar_block_no_entity'])
+  })
+
+  it('toggleAcknowledgement adds and removes rule ids', () => {
+    const { result } = renderHook(() => useWizard())
+    act(() => {
+      result.current.toggleAcknowledgement('a:1', true)
+      result.current.toggleAcknowledgement('b:2', true)
+    })
+    expect(result.current.acknowledgedRuleIds.sort()).toEqual(['a:1', 'b:2'])
+    act(() => {
+      result.current.toggleAcknowledgement('a:1', false)
+    })
+    expect(result.current.acknowledgedRuleIds).toEqual(['b:2'])
   })
 })

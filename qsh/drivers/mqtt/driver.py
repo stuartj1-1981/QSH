@@ -84,6 +84,24 @@ def _register_mqtt_events() -> None:
         latch_key=("held_value",),
         default_level=logging.INFO,
     ))
+    # INSTRUCTION-332 — outdoor last-valid hold across staleness / parse /
+    # comms loss. Mirrors HA.outdoor_stale_lastvalid (sensor_fetcher.py:61-66)
+    # with added diagnostics (age_s, reason). Singleton latch (no latch_key);
+    # the payload is diagnostic context only (T-33).
+    ann.register(EventSpec(
+        name="MQTT.outdoor_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("temp", "age_s", "reason"),
+        default_level=logging.INFO,
+    ))
+    # Cold-start fallback to 5.0 with no last-valid history available. WARNING
+    # because 5.0 is a synthetic value, not a real measurement.
+    ann.register(EventSpec(
+        name="MQTT.outdoor_stale_no_history",
+        kind=EventKind.LATCHED,
+        payload_fields=("fallback",),
+        default_level=logging.WARNING,
+    ))
 
 
 # INSTRUCTION-268 — writeback round-trip verification tolerance.
@@ -281,6 +299,20 @@ class MQTTDriver:
         self._hw_last_valid_value: Optional[bool] = None
         self._hw_last_valid_ts: Optional[float] = None
 
+        # INSTRUCTION-332 — last-valid hold for outdoor_temp across staleness /
+        # parse / comms loss. Unbounded hold, exact HA-path parity (owner
+        # decision 11 June 2026). Without it a no-candidate cycle collapses to a
+        # synthetic 5.0 indistinguishable downstream from a real reading.
+        # Instance-scoped (per MQTTDriver); naturally isolated per test.
+        self._outdoor_last_valid: Optional[float] = None
+        self._outdoor_last_valid_ts: Optional[float] = None
+
+        # INSTRUCTION-329 D1 — last-published value for the retained
+        # status/active_source annunciation topic. None → first cycle always
+        # publishes; subsequent cycles publish only on change. Instance-scoped
+        # (per MQTTDriver), naturally isolated per test.
+        self._last_published_active_source: Optional[str] = None
+
         rooms = config.get("rooms", {})
         if not rooms:
             raise ValueError("MQTTDriver: config['rooms'] is empty — need at least one room")
@@ -376,11 +408,31 @@ class MQTTDriver:
             logger.error("MQTTDriver: failed to save state on shutdown: %s", e)
 
         if self._mqtt and self._topic_map:
-            # Publish mode "off" to mode topic (safe state)
+            # Publish mode "off" to the shared mode topic (existing safe state).
             for om in self._topic_map.output_mappings:
                 if om.field == "applied_mode":
                     self._mqtt.publish(om.topic, "off")
                     break
+
+            # 329 Task 5 — all-off is unambiguous and safe at shutdown: publish
+            # "off" to every configured per-source flow_control.mode_topic and
+            # every source's command topic, so no per-source topic retains a
+            # stale "heat" after the process exits.
+            _config = getattr(self, "_config", {}) or {}
+            _prefix = _config.get("mqtt", {}).get("topic_prefix", "")
+            _cmd_default_prefix = (
+                f"{_prefix}/heat_source" if _prefix else "qsh/heat_source"
+            )
+            for _src in _config.get("heat_sources", []) or []:
+                _src_mode = (_src.get("flow_control") or {}).get("mode_topic")
+                if _src_mode:
+                    self._mqtt.publish(_src_mode, "off")
+                self._mqtt.publish(
+                    command_topic_for_source(
+                        _src, default_prefix=_cmd_default_prefix,
+                    ),
+                    "off",
+                )
 
         if self._mqtt:
             self._mqtt.disconnect()
@@ -1160,6 +1212,67 @@ class MQTTDriver:
             elif slot == "pump_power":
                 reading.pump_power = fval
 
+        # ── INSTRUCTION-332 — outdoor_temp last-valid hold + has_outdoor ──
+        # Driver parity with the HA path (sensor_fetcher.py:1162-1186). A
+        # cycle with no parsed outdoor candidate — quality "unavailable" (LWT
+        # offline / age > threshold) OR a fresh-but-unparseable payload — must
+        # ride the last live reading rather than collapsing to a synthetic 5.0
+        # that is indistinguishable downstream and thrashes active_demand_kw.
+        _register_mqtt_events()
+        _oat_ann = get_annunciator()
+        outdoor_declared = (
+            any(m.field == "outdoor_temp" for m in tm.input_mappings)
+            if tm else False
+        )
+        _oat_val = system_values.get("outdoor_temp")
+        _oat_q = signal_quality.get("outdoor_temp")
+        if _oat_val is not None and _oat_q == "good":
+            # Fresh, parsed reading — use it, refresh the hold, flag measured.
+            outdoor_temp = _oat_val
+            self._outdoor_last_valid = _oat_val
+            self._outdoor_last_valid_ts = now
+            has_outdoor = True
+            _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
+            _oat_ann.exited("MQTT.outdoor_stale_no_history")
+        elif _oat_val is not None:
+            # quality == "stale": the aged payload passes through (current
+            # behaviour, not a substitution). has_outdoor=False so the
+            # antifrost gate treats it as conservatively as the HA path; the
+            # hold is NOT updated (refreshed on fresh readings only).
+            outdoor_temp = _oat_val
+            has_outdoor = False
+            _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
+            _oat_ann.exited("MQTT.outdoor_stale_no_history")
+        elif outdoor_declared:
+            # No parsed candidate this cycle. q is never None when declared
+            # (never-received resolves "unavailable"); a parse failure can
+            # occur in either the good or stale band, hence two-valued reason.
+            has_outdoor = False
+            _oat_reason = "unavailable" if _oat_q == "unavailable" else "parse_failed"
+            if self._outdoor_last_valid is not None:
+                outdoor_temp = self._outdoor_last_valid
+                _oat_age = (
+                    now - self._outdoor_last_valid_ts
+                    if self._outdoor_last_valid_ts is not None else 0.0
+                )
+                _oat_ann.entered(
+                    "MQTT.outdoor_stale_lastvalid",
+                    temp=round(outdoor_temp, 1),
+                    age_s=int(_oat_age),
+                    reason=_oat_reason,
+                )
+            else:
+                outdoor_temp = 5.0
+                _oat_ann.entered("MQTT.outdoor_stale_no_history", fallback=5.0)
+        else:
+            # No outdoor mapping configured — quiet hold-or-5.0 arm, mirroring
+            # the HA no-entity branch (sensor_fetcher.py:1184-1186). No events.
+            outdoor_temp = (
+                self._outdoor_last_valid
+                if self._outdoor_last_valid is not None else 5.0
+            )
+            has_outdoor = False
+
         return InputBlock(
             room_temps=room_temps,
             independent_sensors=independent_sensors,
@@ -1168,7 +1281,8 @@ class MQTTDriver:
                 _r: dict(_em) for _r, _em in valve_positions_per_emitter.items()
             },
             avg_open_frac=avg_open_frac,
-            outdoor_temp=system_values.get("outdoor_temp", 5.0),
+            outdoor_temp=outdoor_temp,
+            has_outdoor=has_outdoor,
             target_temp=comfort_temp_rv.value,
             hp_flow_temp=system_values.get("hp_flow_temp", 35.0),
             hp_return_temp=system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
@@ -1237,6 +1351,28 @@ class MQTTDriver:
         from qsh.drivers.source_routing import resolve_source_routing
         routing = resolve_source_routing(config, active_src)
 
+        # ── 329 D1: retained active-source annunciation ──────────────────
+        # Publish the SSC-selected source to a retained status topic so back
+        # ends can disambiguate transition traces (beta report). Edge-gated
+        # on the last-published value; retain=True makes it survive both the
+        # subscriber's reconnects and QSH restarts. NOT gated on
+        # control_enabled — this is observability, not actuation (precedent:
+        # the shadow/telemetry block below, "not gated on control_enabled").
+        # The unprefixed shape is qsh/status/active_source (Task-3-style
+        # empty-prefix default; _prefixed alone returns the bare suffix).
+        # DEBUG-only log — no per-cycle operator-log line (T-33).
+        if active_name:
+            _active_topic = (
+                f"{prefix}/status/active_source" if prefix
+                else "qsh/status/active_source"
+            )
+            if active_name != getattr(self, "_last_published_active_source", None):
+                self._mqtt.publish(
+                    _active_topic, str(active_name), qos=1, retain=True,
+                )
+                self._last_published_active_source = active_name
+                logger.debug("329 D1: published active_source=%s", active_name)
+
         if outputs.hardware_changed:
             if control_enabled:
                 if not routing.dispatch_flow_mode:
@@ -1275,6 +1411,13 @@ class MQTTDriver:
             sources_by_name = {
                 s.get("name", ""): s for s in config.get("heat_sources", [])
             }
+            # 329 D4: default per-source command topic honours mqtt.topic_prefix.
+            # Explicit source.mqtt.command_topic overrides remain verbatim
+            # (command_topic_for_source handles that). Unprefixed installs:
+            # byte-identical legacy default (qsh/heat_source/<slug>/command).
+            _cmd_default_prefix = (
+                f"{prefix}/heat_source" if prefix else "qsh/heat_source"
+            )
             for source_name, cmd in outputs.source_command.items():
                 src_cfg = sources_by_name.get(source_name)
                 if src_cfg is None:
@@ -1283,13 +1426,32 @@ class MQTTDriver:
                         source_name,
                     )
                     continue
-                topic = command_topic_for_source(src_cfg)
+                topic = command_topic_for_source(
+                    src_cfg, default_prefix=_cmd_default_prefix,
+                )
+                # 329 D2: on retirement (cmd == "off"), also publish "off" to
+                # the source's per-source mode topic verbatim — the continuous
+                # flow/mode channel writes that topic while active, so without
+                # this the MODE topic retains a stale "heat" after a mid-heat
+                # switch (the tester's back end watches the MODE topic). The
+                # mode_topic is consumed verbatim by resolve_source_routing
+                # (source_routing.py:84-94, no prefixing), so the retirement
+                # publish must match it exactly. The incoming source's "heat"
+                # mode is NOT published here — the continuous channel owns it
+                # (avoids a mode write racing ahead of its paired flow write).
+                _mode_topic = (src_cfg.get("flow_control") or {}).get("mode_topic")
                 if control_enabled:
                     self._mqtt.publish(topic, cmd, qos=1, retain=False)
+                    if cmd == "off" and _mode_topic:
+                        self._mqtt.publish(_mode_topic, "off")
                 else:
                     logger.debug(
                         "SHADOW MODE: would publish %s -> %s", topic, cmd,
                     )
+                    if cmd == "off" and _mode_topic:
+                        logger.debug(
+                            "SHADOW MODE: would publish %s -> off", _mode_topic,
+                        )
 
         # ── Valve commands (MANUAL-aware per INSTRUCTION-225B) ──
         from qsh import manual_state
@@ -1444,6 +1606,27 @@ class MQTTDriver:
             )
             return
 
+        # 329 Task 5 — resolve the active source's routing once, and the
+        # per-source command-topic default prefix, for the per-source publishes
+        # added below. Active source from the single identity channel, falling
+        # back to heat_sources[0] (cold-start / unset).
+        from qsh.drivers.source_routing import resolve_source_routing
+
+        _prefix = config.get("mqtt", {}).get("topic_prefix", "")
+        _cmd_default_prefix = (
+            f"{_prefix}/heat_source" if _prefix else "qsh/heat_source"
+        )
+        _heat_sources = config.get("heat_sources", []) or []
+        _active_name = config.get("active_source_name")
+        _by_name = {s.get("name", ""): s for s in _heat_sources}
+        _active_src = _by_name.get(_active_name) or (
+            _heat_sources[0] if _heat_sources else None
+        )
+        _active_resolved_name = (
+            (_active_src or {}).get("name") if _active_src else None
+        )
+        _failsafe_routing = resolve_source_routing(config, _active_src)
+
         max_retries = 3
         retry_interval = 2  # seconds
 
@@ -1453,11 +1636,51 @@ class MQTTDriver:
                     "FAILSAFE (attempt %d/%d): publishing flow=%.1f mode=%s",
                     attempt, max_retries, safe_flow, safe_mode,
                 )
+                # Shared output mappings — kept for maximal legacy reach.
                 for om in self._topic_map.output_mappings:
                     if om.field == "applied_flow":
                         self._mqtt.publish(om.topic, str(safe_flow))
                     elif om.field == "applied_mode":
                         self._mqtt.publish(om.topic, safe_mode)
+
+                # 329 Task 5 — the active source's per-source topics receive the
+                # safe state when it is routed-mqtt (otherwise the shared topics
+                # above ARE its actuator). Every NON-active source receives an
+                # explicit "off" on its command topic and (when configured) its
+                # mode topic — owner disposition 11 June 2026: mirror teardown's
+                # all-off rationale and close the boot→first-edge and
+                # crash-restart stale-retained-"heat" windows (recorded as
+                # reviewer 328-V1 LOW-2, acknowledged at INSTRUCTION-328 V2 §1)
+                # during the one event designed to drive safe state. "heat" is
+                # NEVER published to a non-active source — a dual-source failsafe
+                # must not light both burners.
+                if (
+                    _failsafe_routing.routed
+                    and _failsafe_routing.control_method == "mqtt"
+                    and _failsafe_routing.mqtt_flow_topic
+                    and _failsafe_routing.mqtt_mode_topic
+                ):
+                    self._mqtt.publish(
+                        _failsafe_routing.mqtt_flow_topic, str(safe_flow),
+                    )
+                    self._mqtt.publish(
+                        _failsafe_routing.mqtt_mode_topic, safe_mode,
+                    )
+                for _src in _heat_sources:
+                    if _src.get("name") == _active_resolved_name:
+                        continue
+                    self._mqtt.publish(
+                        command_topic_for_source(
+                            _src, default_prefix=_cmd_default_prefix,
+                        ),
+                        "off",
+                        qos=1,
+                        retain=False,
+                    )
+                    _src_mode = (_src.get("flow_control") or {}).get("mode_topic")
+                    if _src_mode:
+                        self._mqtt.publish(_src_mode, "off")
+
                 logger.warning("FAILSAFE: safe state published successfully")
                 return
             except Exception as e:

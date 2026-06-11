@@ -24,6 +24,15 @@ interface WizardProps {
 export function Wizard({ onComplete, onExit }: WizardProps) {
   const wizard = useWizard()
 
+  // INSTRUCTION-324 — fired acknowledged-class warnings (rule_id non-null)
+  // not yet ticked. Gates BOTH deploy affordances (the shell footer button
+  // and StepReview's own button) so the server-side 409 is never the first
+  // line of defence the user meets.
+  const ackedIds = new Set(wizard.acknowledgedRuleIds)
+  const hasUnacknowledged = wizard.validationWarnings.some(
+    (w) => w.rule_id !== null && !ackedIds.has(w.rule_id)
+  )
+
   const handleNext = async () => {
     if (wizard.stepName === 'review') {
       const result = await wizard.deploy()
@@ -140,6 +149,8 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
           <StepReview
             config={wizard.config}
             validationWarnings={wizard.validationWarnings}
+            acknowledgedRuleIds={wizard.acknowledgedRuleIds}
+            onAcknowledge={wizard.toggleAcknowledgement}
             isDeploying={wizard.isDeploying}
             onDeploy={wizard.deploy}
             onForceDeploy={wizard.forceDeploy}
@@ -158,6 +169,7 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
       isFirstStep={wizard.currentStep === 0}
       isLastStep={wizard.stepName === 'review'}
       isDeploying={wizard.isDeploying}
+      nextDisabled={wizard.stepName === 'review' && hasUnacknowledged}
       validationErrors={wizard.validationErrors}
       onExit={onExit}
     >

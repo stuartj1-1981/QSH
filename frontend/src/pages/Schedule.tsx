@@ -1,10 +1,49 @@
-import { useState, useCallback, useReducer } from 'react'
+import { useState, useCallback, useReducer, useEffect } from 'react'
 import { useSchedules, useUpdateSchedule, useApplyPreset, useCopySchedule } from '../hooks/useSchedule'
 import type { WeekSchedule, PresetName, DayName } from '../types/schedule'
 import { ALL_DAYS } from '../types/schedule'
 import { WeeklyGrid } from '../components/schedule/WeeklyGrid'
 import { ScheduleToolbar } from '../components/schedule/ScheduleToolbar'
 import { ComfortScheduleEditor } from '../components/schedule/ComfortScheduleEditor'
+import { apiUrl } from '../lib/api'
+import type { HealthResponse } from '../types/api'
+
+/** INSTRUCTION-327 — surface the backend-resolved schedule timezone where the
+ *  user looks when "the schedule fires at the wrong time". The red "now" line
+ *  in WeeklyGrid is browser-local by design; this caption names the zone the
+ *  BACKEND evaluates schedules in (from /api/health, INSTRUCTION-252 fields)
+ *  so a UTC-fallback install is self-diagnosing. Renders nothing while health
+ *  is unavailable or the backend predates the fields. */
+function TimezoneCaption() {
+  const [health, setHealth] = useState<HealthResponse | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch(apiUrl('api/health'), { signal: controller.signal })
+      .then((r) => r.json() as Promise<HealthResponse>)
+      .then(setHealth)
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
+
+  if (!health || typeof health.local_timezone !== 'string' || !health.local_timezone_source) {
+    return null
+  }
+
+  return (
+    <div className="mb-4">
+      <p className="text-xs text-[var(--text-muted)]">
+        Schedule timezone: {health.local_timezone} ({health.local_timezone_source})
+      </p>
+      {health.local_timezone_source === 'default' && (
+        <p className="mt-1 text-xs text-amber-500">
+          Schedules are evaluating in UTC — set a timezone in Settings → System, or set
+          the container TZ env var.
+        </p>
+      )}
+    </div>
+  )
+}
 
 interface LocalState {
   schedule: WeekSchedule | null
@@ -174,6 +213,9 @@ export function Schedule() {
 
       {/* Global comfort schedule (time-of-day temperature targets) */}
       <ComfortScheduleEditor />
+
+      {/* INSTRUCTION-327 — backend-resolved schedule timezone + source */}
+      <TimezoneCaption />
 
       {/* Per-room occupancy schedules */}
       <ScheduleToolbar

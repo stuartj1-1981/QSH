@@ -480,6 +480,8 @@ def patch_config_section(section: str, body=Body(...)):
             "pid_target_internal",
             "flow_writes_per_hour",
             "mode_writes_per_hour",
+            # INSTRUCTION-327 — Settings → System schedule-timezone field.
+            "schedule_timezone",
         }
 
         def _apply_root(raw: dict) -> dict:
@@ -492,6 +494,42 @@ def patch_config_section(section: str, body=Body(...)):
                                 raise HTTPException(
                                     status_code=422,
                                     detail=f"{key} must be an integer in [3, 6], got {value!r}",
+                                )
+                        # INSTRUCTION-327 — schedule_timezone: validate the
+                        # IANA name before persisting. The in-memory write
+                        # below feeds qsh/utils.py:_config_time_zone within
+                        # the 300 s TTL, and the runtime arm catches
+                        # ZoneInfoNotFoundError ONLY — a malformed key would
+                        # raise ValueError on every re-resolution. Interactive
+                        # write → reject with 422 (the boot path's equivalent
+                        # is warn-and-don't-carry in _build_house_config).
+                        # Blank/null clears the key (= automatic resolution:
+                        # Supervisor → TZ env → UTC).
+                        if key == "schedule_timezone":
+                            if value is None or (
+                                isinstance(value, str) and not value.strip()
+                            ):
+                                raw.pop(key, None)
+                                config = shared_state.get_config()
+                                if config is not None:
+                                    config.pop(key, None)
+                                continue
+                            if not isinstance(value, str):
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=f"schedule_timezone must be a string, got {value!r}",
+                                )
+                            value = value.strip()
+                            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+                            try:
+                                ZoneInfo(value)
+                            except (ZoneInfoNotFoundError, ValueError):
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=(
+                                        f"schedule_timezone {value!r} is not a valid "
+                                        f"IANA zone name (example: Europe/London)"
+                                    ),
                                 )
                         raw[key] = value
                         # Also update in-memory config

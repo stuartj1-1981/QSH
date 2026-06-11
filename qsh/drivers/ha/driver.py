@@ -396,6 +396,7 @@ class HADriver:
             trv_temps=dict(sensor_data.trv_temps),
             trv_setpoints=dict(sensor_data.trv_setpoints),
             outdoor_temp=sensor_data.outdoor_temp,
+            has_outdoor=sensor_data.has_outdoor,
             target_temp=target_temp,
             # Heat source
             hp_flow_temp=sensor_data.hp_flow_temp,

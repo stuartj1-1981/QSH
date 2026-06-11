@@ -1394,6 +1394,15 @@ def resolve_external_setpoints(config: Dict) -> None:
     )
 
     # --- Shoulder shutdown threshold (hp_min_output_kw) ---
+    # INSTRUCTION-330 precedence: on multi-source installs SSC
+    # (_update_backwards_compat) re-stamps hp_min_output_kw from the ACTIVE
+    # source each cycle, AFTER this function runs — UNLESS
+    # entities.shoulder_threshold is configured, in which case SSC's stamp is
+    # gated off and the entity value resolved here owns the floor fleet-wide
+    # across source switches (operator-explicit > program). The
+    # entity-unavailable case falls back to the boot snapshot below per the
+    # docstring — that remains the operator channel's own fallback, NOT an SSC
+    # stamping opportunity (the gate stays closed whenever the entity exists).
     shoulder_rv = resolve_value(
         config,
         entity_key="entities.shoulder_threshold",

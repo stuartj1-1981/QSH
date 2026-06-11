@@ -1,24 +1,40 @@
 import { useState } from 'react'
 import { Download, AlertTriangle, Check, Loader2 } from 'lucide-react'
 import type {
+  AckOutstandingError,
   DeployResponse,
   DestructiveDeployError,
   QshConfigYaml,
   RoomConfigYaml,
+  WizardWarning,
 } from '../../types/config'
-import { isDestructiveDeployError } from '../../types/config'
+import {
+  isAckOutstandingError,
+  isDestructiveDeployError,
+} from '../../types/config'
+
+type DeployOutcome =
+  | DeployResponse
+  | DestructiveDeployError
+  | AckOutstandingError
+  | null
 
 interface StepReviewProps {
   config: Partial<QshConfigYaml>
-  validationWarnings: string[]
+  validationWarnings: WizardWarning[]
+  /** INSTRUCTION-324 — instance-qualified rule ids already ticked. */
+  acknowledgedRuleIds: string[]
+  onAcknowledge: (ruleId: string, on: boolean) => void
   isDeploying: boolean
-  onDeploy: () => Promise<DeployResponse | DestructiveDeployError | null>
-  onForceDeploy: () => Promise<DeployResponse | DestructiveDeployError | null>
+  onDeploy: () => Promise<DeployOutcome>
+  onForceDeploy: () => Promise<DeployOutcome>
 }
 
 export function StepReview({
   config,
   validationWarnings,
+  acknowledgedRuleIds,
+  onAcknowledge,
   isDeploying,
   onDeploy,
   onForceDeploy,
@@ -27,6 +43,21 @@ export function StepReview({
   const [destructive, setDestructive] = useState<DestructiveDeployError | null>(
     null
   )
+  const [ackOutstanding, setAckOutstanding] = useState<AckOutstandingError | null>(
+    null
+  )
+
+  // INSTRUCTION-324 — acknowledged-class warnings (rule_id non-null) gate
+  // the deploy button; legacy informational warnings (rule_id null) render
+  // in the plain amber list as before.
+  const ackWarnings = validationWarnings.filter(
+    (w): w is WizardWarning & { rule_id: string } => w.rule_id !== null
+  )
+  const infoWarnings = validationWarnings.filter((w) => w.rule_id === null)
+  const acked = new Set(acknowledgedRuleIds)
+  const unacknowledgedCount = ackWarnings.filter(
+    (w) => !acked.has(w.rule_id)
+  ).length
 
   const rooms = config.rooms ?? {}
   const hs = config.heat_source
@@ -49,20 +80,30 @@ export function StepReview({
 
   const handleDeploy = async () => {
     const result = await onDeploy()
+    if (isAckOutstandingError(result)) {
+      setAckOutstanding(result)
+      return
+    }
     if (isDestructiveDeployError(result)) {
       setDestructive(result)
       return
     }
+    setAckOutstanding(null)
     if (result) setDeployResult(result)
   }
 
   const handleForceDeploy = async () => {
     const result = await onForceDeploy()
+    if (isAckOutstandingError(result)) {
+      setAckOutstanding(result)
+      return
+    }
     if (isDestructiveDeployError(result)) {
       setDestructive(result)
       return
     }
     setDestructive(null)
+    setAckOutstanding(null)
     if (result) setDeployResult(result)
   }
 
@@ -83,7 +124,7 @@ export function StepReview({
             <p className="text-sm font-medium text-[var(--amber)] mb-2">Warnings:</p>
             <ul className="text-sm text-[var(--amber)] space-y-1">
               {deployResult.warnings.map((w, i) => (
-                <li key={i}>- {w}</li>
+                <li key={i}>- {w.message}</li>
               ))}
             </ul>
           </div>
@@ -104,16 +145,58 @@ export function StepReview({
         </p>
       </div>
 
-      {/* Warnings */}
-      {validationWarnings.length > 0 && (
+      {/* Informational warnings (rule_id null — never deploy-blocking) */}
+      {infoWarnings.length > 0 && (
         <div className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30">
           <div className="flex items-center gap-2 mb-2">
             <AlertTriangle size={16} className="text-[var(--amber)]" />
             <p className="text-sm font-medium text-[var(--amber)]">Warnings</p>
           </div>
           <ul className="text-sm text-[var(--amber)] space-y-1">
-            {validationWarnings.map((w, i) => (
-              <li key={i}>- {w}</li>
+            {infoWarnings.map((w, i) => (
+              <li key={i}>- {w.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* INSTRUCTION-324 — acknowledged-class warnings. Each item must be
+          explicitly confirmed before deploy is enabled; the acknowledgement
+          set is stamped into the deployed YAML as an audit trail. */}
+      {ackWarnings.length > 0 && (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          data-testid="ack-warnings"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Confirm before deploying
+            </p>
+          </div>
+          <p className="text-xs text-[var(--amber)] mb-3">
+            These look unusual or assumed. Tick each one to confirm it is
+            correct for this building — your confirmations are recorded in
+            the deployed configuration.
+          </p>
+          <ul className="space-y-2">
+            {ackWarnings.map((w) => (
+              <li key={w.rule_id}>
+                <label className="flex items-start gap-2 text-sm text-[var(--amber)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={acked.has(w.rule_id)}
+                    onChange={(e) => onAcknowledge(w.rule_id, e.target.checked)}
+                  />
+                  <span>
+                    {w.message}
+                    <span className="block text-xs opacity-80">
+                      I confirm this is correct for this building
+                    </span>
+                  </span>
+                </label>
+              </li>
             ))}
           </ul>
         </div>
@@ -240,6 +323,31 @@ export function StepReview({
         </SummarySection>
       </div>
 
+      {/* Acknowledgement refusal banner (INSTRUCTION-324). Normally
+          unreachable — the deploy button is disabled until every item is
+          ticked — but rendered defensively for the race where warnings
+          changed server-side between validate and deploy. */}
+      {ackOutstanding && (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          role="alert"
+          data-testid="ack-outstanding-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Deploy blocked — unacknowledged warnings
+            </p>
+          </div>
+          <p className="text-sm text-[var(--amber)]">
+            The server requires explicit acknowledgement of:{' '}
+            {ackOutstanding.outstanding.join(', ')}. Go back through the
+            wizard if the configuration changed, or tick the confirmations
+            above.
+          </p>
+        </div>
+      )}
+
       {/* Destructive-deploy refusal banner (INSTRUCTION-137 Task 3) */}
       {destructive && (
         <div
@@ -272,7 +380,12 @@ export function StepReview({
         </button>
         <button
           onClick={handleDeploy}
-          disabled={isDeploying}
+          disabled={isDeploying || unacknowledgedCount > 0}
+          title={
+            unacknowledgedCount > 0
+              ? `${unacknowledgedCount} warning${unacknowledgedCount === 1 ? '' : 's'} awaiting confirmation`
+              : undefined
+          }
           className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {isDeploying ? (
@@ -287,7 +400,7 @@ export function StepReview({
         {destructive && (
           <button
             onClick={handleForceDeploy}
-            disabled={isDeploying}
+            disabled={isDeploying || unacknowledgedCount > 0}
             className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--amber)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
           >
             Force Deploy
