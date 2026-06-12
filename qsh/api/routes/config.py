@@ -345,6 +345,7 @@ def patch_config_section(section: str, body=Body(...)):
     """
     valid_sections = {
         "rooms",
+        "property",
         "heat_source",
         "heat_sources",
         "outdoor",

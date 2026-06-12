@@ -71,7 +71,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
 
     switch (section) {
       case 'rooms':
-        return <RoomSettings rooms={data.rooms || {}} driver={driver} onRefetch={refetch} />
+        return <RoomSettings rooms={data.rooms || {}} property={data.property || {}} driver={driver} onRefetch={refetch} />
       case 'building-layout':
         return <BuildingLayout onRefetch={refetch} />
       case 'heat_source':
@@ -92,6 +92,8 @@ export function Settings({ onRunWizard }: SettingsProps) {
         return (
           <ThermalSettings
             thermal={data.thermal || {}}
+            shoulder={data.shoulder || {}}
+            summer={data.summer || {}}
             rooms={Object.keys(data.rooms || {})}
             driver={driver}
             onRefetch={refetch}

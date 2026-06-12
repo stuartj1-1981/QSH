@@ -123,6 +123,10 @@ describe('RoomSettings auxiliary_output integration', () => {
       },
     }
     render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // INSTRUCTION-335 M-1: rooms is now dirty-gated, so a no-edit Save no longer
+    // PATCHes. A trivial area edit dirties the section; the round-trip assertion
+    // (auxiliary_output unchanged) is unaffected.
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
     fireEvent.click(screen.getByText('Save Changes'))
     expect(patchMock).toHaveBeenCalledTimes(1)
     const [section, payload] = patchMock.mock.calls[0]
@@ -251,6 +255,9 @@ describe('RoomSettings fixed_setpoint conditional input', () => {
       },
     }
     render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // INSTRUCTION-335 M-1: dirty the section with a trivial area edit so the
+    // dirty-gated Save still PATCHes; the strip assertion is unaffected.
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
     fireEvent.click(screen.getByText('Save Changes'))
     expect(patchMock).toHaveBeenCalledTimes(1)
     const [section, payload] = patchMock.mock.calls[0]
@@ -269,6 +276,9 @@ describe('RoomSettings fixed_setpoint conditional input', () => {
       },
     }
     render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    // INSTRUCTION-335 M-1: dirty the section with a trivial area edit so the
+    // dirty-gated Save still PATCHes; fixed_setpoint preservation is unaffected.
+    fireEvent.change(screen.getByDisplayValue('10'), { target: { value: '11' } })
     fireEvent.click(screen.getByText('Save Changes'))
     expect(patchMock).toHaveBeenCalledTimes(1)
     const [, payload] = patchMock.mock.calls[0]
@@ -728,5 +738,241 @@ describe('INSTRUCTION-231D: paired per-emitter heating_entity rows', () => {
       '',
       'number.C_valve_position',
     ])
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-333 — emitter_type selector (wizard↔Settings parity) + 'none'
+// =============================================================================
+
+describe('RoomSettings emitter_type selector (INSTRUCTION-333)', () => {
+  beforeEach(() => {
+    patchMock.mockClear()
+  })
+
+  const radRooms = {
+    lounge: {
+      area_m2: 20,
+      facing: 'S',
+      emitter_type: 'radiator' as const,
+      emitter_kw: 1.5,
+    },
+  }
+
+  const emitterSelect = () =>
+    screen.getByText('Select emitter type…').closest('select') as HTMLSelectElement
+
+  it('renders the emitter type selector with all four options', () => {
+    render(<RoomSettings rooms={radRooms} driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByText('Emitter Type')).toBeInTheDocument()
+    for (const name of [
+      'Radiator',
+      'Underfloor Heating',
+      'Fan Coil',
+      'None (no emitter)',
+    ]) {
+      expect(screen.getByRole('option', { name })).toBeInTheDocument()
+    }
+  })
+
+  it('an emitter_type edit flows into the rooms patch payload', () => {
+    render(<RoomSettings rooms={radRooms} driver="ha" onRefetch={() => {}} />)
+    fireEvent.change(emitterSelect(), { target: { value: 'ufh' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    expect(patchMock).toHaveBeenCalledTimes(1)
+    const [section, payload] = patchMock.mock.calls[0]
+    expect(section).toBe('rooms')
+    expect(payload.lounge.emitter_type).toBe('ufh')
+  })
+
+  it('selecting None forces emitter_kw to 0 in the payload', () => {
+    render(<RoomSettings rooms={radRooms} driver="ha" onRefetch={() => {}} />)
+    fireEvent.change(emitterSelect(), { target: { value: 'none' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    const [, payload] = patchMock.mock.calls[0]
+    expect(payload.lounge.emitter_type).toBe('none')
+    expect(payload.lounge.emitter_kw).toBe(0)
+  })
+
+  it('None→Radiator yields a payload room with emitter_kw absent (EC5)', () => {
+    const noneRooms = {
+      lounge: {
+        area_m2: 20,
+        facing: 'S',
+        emitter_type: 'none' as const,
+        emitter_kw: 0,
+      },
+    }
+    render(<RoomSettings rooms={noneRooms} driver="ha" onRefetch={() => {}} />)
+    fireEvent.change(emitterSelect(), { target: { value: 'radiator' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    const [, payload] = patchMock.mock.calls[0]
+    expect(payload.lounge.emitter_type).toBe('radiator')
+    // emitter_kw cleared to undefined → dropped by JSON.stringify on the wire;
+    // restore_redacted's full-section overwrite then drops it from the YAML and
+    // area×0.1 re-applies at load. This is the EC5 link-1 falsifier.
+    const wire = JSON.parse(JSON.stringify(payload.lounge))
+    expect(wire).not.toHaveProperty('emitter_kw')
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-335 — Property declaration (total_floor_area_m2, bedrooms)
+// =============================================================================
+
+describe('RoomSettings property declaration (INSTRUCTION-335)', () => {
+  beforeEach(() => {
+    patchMock.mockClear()
+  })
+
+  const baseRooms = { lounge: { area_m2: 20, facing: 'S', ceiling_m: 2.4 } }
+  const areaInput = () => screen.getByLabelText('Total Floor Area (m²)')
+  const bedroomsInput = () => screen.getByLabelText('Bedrooms — optional')
+  const saveBtn = () => screen.getByRole('button', { name: /save changes/i })
+
+  it('renders both property inputs bound to the prop', () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        property={{ total_floor_area_m2: 189, bedrooms: 4 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    expect(areaInput()).toHaveValue(189)
+    expect(bedroomsInput()).toHaveValue(4)
+  })
+
+  it('rooms-only edit does NOT PATCH property', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        property={{ total_floor_area_m2: 189, bedrooms: 4 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('rooms', expect.anything()),
+    )
+    expect(patchMock.mock.calls.find((c) => c[0] === 'property')).toBeUndefined()
+  })
+
+  it('property-only edit does NOT PATCH rooms (converse falsifier)', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        property={{ total_floor_area_m2: 189, bedrooms: 4 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    fireEvent.change(areaInput(), { target: { value: '200' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith(
+        'property',
+        expect.objectContaining({ total_floor_area_m2: 200, bedrooms: 4 }),
+      ),
+    )
+    expect(patchMock.mock.calls.find((c) => c[0] === 'rooms')).toBeUndefined()
+  })
+
+  it('dirty-scoped gate: rooms-only edit saves with an empty property; editing area out-of-band then disables Save', async () => {
+    render(
+      <RoomSettings rooms={baseRooms} property={{}} driver="ha" onRefetch={() => {}} />,
+    )
+    // Untouched/empty declaration must never block a rooms-only save.
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
+    expect(saveBtn()).not.toBeDisabled()
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('rooms', expect.anything()),
+    )
+    expect(patchMock.mock.calls.find((c) => c[0] === 'property')).toBeUndefined()
+
+    // Now an *edited* out-of-band declaration disables Save (dirty-scoped gate).
+    fireEvent.change(areaInput(), { target: { value: '5' } })
+    expect(saveBtn()).toBeDisabled()
+  })
+
+  it('bedrooms out of [0,12] shows a soft warning and never disables Save', () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        property={{ total_floor_area_m2: 189 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    fireEvent.change(bedroomsInput(), { target: { value: '20' } })
+    expect(screen.getByText(/Outside the typical range/i)).toBeInTheDocument()
+    expect(saveBtn()).not.toBeDisabled()
+  })
+
+  it('reconciliation warning shows above tolerance and never blocks Save', () => {
+    // Σ room area 20 vs declared 189 → 0.89 > 0.25.
+    render(
+      <RoomSettings
+        rooms={{ lounge: { area_m2: 20, facing: 'S' } }}
+        property={{ total_floor_area_m2: 189 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    expect(
+      screen.getByText(/differs from the sum of room areas/i),
+    ).toBeInTheDocument()
+    expect(saveBtn()).not.toBeDisabled()
+  })
+
+  it('reconciliation warning is silent within tolerance', () => {
+    // Σ 180 vs declared 189 → 0.048 < 0.25.
+    render(
+      <RoomSettings
+        rooms={{ a: { area_m2: 90, facing: 'S' }, b: { area_m2: 90, facing: 'N' } }}
+        property={{ total_floor_area_m2: 189 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/differs from the sum of room areas/i)).toBeNull()
+  })
+
+  it('reconciliation warning is silent at declared area 0 (÷0 guard)', () => {
+    render(
+      <RoomSettings
+        rooms={{ lounge: { area_m2: 20, facing: 'S' } }}
+        property={{ total_floor_area_m2: 0 }}
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/differs from the sum of room areas/i)).toBeNull()
+  })
+
+  it('aborts on first failure: rooms PATCH fails ⇒ property not written, no onRefetch, error surfaced', async () => {
+    const onRefetch = vi.fn()
+    // First call (rooms) resolves null (failure); the default {ok:true} is left
+    // intact for other tests. property must never be reached.
+    patchMock.mockResolvedValueOnce(null)
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        property={{ total_floor_area_m2: 189, bedrooms: 4 }}
+        driver="ha"
+        onRefetch={onRefetch}
+      />,
+    )
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
+    fireEvent.change(areaInput(), { target: { value: '200' } })
+    fireEvent.click(saveBtn())
+    expect(await screen.findByText(/Failed to save rooms/i)).toBeInTheDocument()
+    expect(patchMock.mock.calls.find((c) => c[0] === 'property')).toBeUndefined()
+    expect(onRefetch).not.toHaveBeenCalled()
   })
 })

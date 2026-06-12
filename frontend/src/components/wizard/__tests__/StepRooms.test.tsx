@@ -354,3 +354,62 @@ describe('StepRooms — property declaration (INSTRUCTION-324)', () => {
     expect(select.value).toBe('')
   })
 })
+
+// ── INSTRUCTION-333: emitter_type 'none' (no emitter) ────────────────────────
+
+describe('StepRooms — emitter_type none (INSTRUCTION-333)', () => {
+  const emitterSelect = () =>
+    screen.getByText('Select emitter type…').closest('select') as HTMLSelectElement
+
+  it('renders the None (no emitter) option', () => {
+    const config = haConfig({
+      area_m2: 15,
+      control_mode: 'indirect',
+      emitter_type: 'radiator',
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(
+      screen.getByRole('option', { name: 'None (no emitter)' }),
+    ).toBeInTheDocument()
+  })
+
+  it('selecting None forces emitter_kw to 0', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 15,
+      control_mode: 'indirect',
+      emitter_type: 'radiator',
+      emitter_kw: 1.5,
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    fireEvent.change(emitterSelect(), { target: { value: 'none' } })
+    const lastCall = onUpdate.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    expect(lastCall![0]).toBe('rooms')
+    const updated = (lastCall![1] as Record<string, RoomConfigYaml>).lounge
+    expect(updated.emitter_type).toBe('none')
+    expect(updated.emitter_kw).toBe(0)
+  })
+
+  it('switching away from None clears emitter_kw (dropped on serialise)', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 15,
+      control_mode: 'indirect',
+      emitter_type: 'none',
+      emitter_kw: 0,
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    fireEvent.change(emitterSelect(), { target: { value: 'radiator' } })
+    const lastCall = onUpdate.mock.calls.at(-1)
+    const updated = (lastCall![1] as Record<string, RoomConfigYaml>).lounge
+    expect(updated.emitter_type).toBe('radiator')
+    // emitter_kw cleared to undefined → dropped by JSON.stringify on the wire,
+    // so area×0.1 re-applies at load rather than persisting a 0-output radiator.
+    const wire = JSON.parse(JSON.stringify(updated))
+    expect(wire).not.toHaveProperty('emitter_kw')
+  })
+})

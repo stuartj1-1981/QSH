@@ -1,17 +1,45 @@
 import { useState, useMemo, useCallback } from 'react'
-import { Plus, Trash2, Save, Loader2 } from 'lucide-react'
+import { Plus, Trash2, Save, Loader2, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml } from '../../types/config'
 import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { AuxOutputEditor } from './AuxOutputEditor'
 
+// INSTRUCTION-335 — the wizard property band (qsh/api/routes/wizard.py:51-52,
+// 58, 69-70). Area band is a dirty-scoped client save-gate; bedrooms band and
+// the Σ-area reconciliation are soft, non-blocking warnings.
+const PROPERTY_AREA_MIN_M2 = 30
+const PROPERTY_AREA_MAX_M2 = 1000
+const BEDROOMS_MIN = 0
+const BEDROOMS_MAX = 12
+const AREA_RECONCILIATION_TOLERANCE = 0.25
+
 interface RoomSettingsProps {
   rooms: Record<string, RoomConfigYaml>
+  // INSTRUCTION-335 (P-5): the owner-declared building ground truth, surfaced
+  // for edit-after-setup. Optional so existing callers/tests that pre-date
+  // this change still type-check; absent ⇒ {} (a pre-324 install).
+  property?: PropertyYaml
   driver: Driver
   onRefetch: () => void
+}
+
+/** Apply the on-save room transforms to a whole rooms map. Used both for the
+ *  PATCH payload and — applied to BOTH sides — for the dirty compare, so the
+ *  gate is like-with-like (INSTRUCTION-335 §8 handoff-1) rather than reading
+ *  perpetually dirty because the payload is transformed and the baseline isn't. */
+function cleanRoomsMap(
+  m: Record<string, RoomConfigYaml>,
+): Record<string, RoomConfigYaml> {
+  return Object.fromEntries(
+    Object.entries(m).map(([n, r]) => [
+      n,
+      stripFixedSetpointForControlMode(stripEmptyMqttTopics(r)),
+    ]),
+  )
 }
 
 /** Extract the topic string from a RoomMqttTopicValue (string or MqttTopicInput object). */
@@ -65,8 +93,10 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   return { ...room, mqtt_topics: cleaned as RoomConfigYaml['mqtt_topics'] }
 }
 
-export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
+export function RoomSettings({ rooms, property, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
+  const [propertyState, setPropertyState] = useState<PropertyYaml>(property ?? {})
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const { patch, saving } = usePatchConfig()
   // INSTRUCTION-162A: per-room aux validity. False means the AuxOutputEditor
@@ -373,15 +403,67 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
     })
   }
 
+  // ── Property dirty-gate + soft warnings (INSTRUCTION-335) ──
+  const initialProperty = property ?? {}
+  const propertyDirty =
+    JSON.stringify(propertyState) !== JSON.stringify(initialProperty)
+  const area = propertyState.total_floor_area_m2
+  const areaInBand =
+    typeof area === 'number' &&
+    Number.isFinite(area) &&
+    area >= PROPERTY_AREA_MIN_M2 &&
+    area <= PROPERTY_AREA_MAX_M2
+  // Dirty-scoped (M-2): an untouched/absent declaration never blocks Save; an
+  // *edited* declaration must carry a valid in-band area.
+  const areaGateBlocks = propertyDirty && !areaInBand
+  const bedrooms = propertyState.bedrooms
+  const bedroomsWarn =
+    typeof bedrooms === 'number' &&
+    (bedrooms < BEDROOMS_MIN || bedrooms > BEDROOMS_MAX)
+  // Σ-area reconciliation — soft, non-blocking, ÷0-guarded.
+  const sumRoomArea = Object.values(editedRooms).reduce(
+    (s, r) => s + (typeof r.area_m2 === 'number' ? r.area_m2 : 0),
+    0,
+  )
+  const reconcileWarn =
+    typeof area === 'number' &&
+    area > 0 &&
+    Math.abs(sumRoomArea - area) / area > AREA_RECONCILIATION_TOLERANCE
+
+  // Rooms dirty-gate — clean BOTH sides (handoff-1).
+  const cleanedRooms = cleanRoomsMap(editedRooms)
+  const roomsDirty =
+    JSON.stringify(cleanedRooms) !== JSON.stringify(cleanRoomsMap(rooms))
+
   const save = async () => {
-    const cleaned = Object.fromEntries(
-      Object.entries(editedRooms).map(([n, r]) => [
-        n,
-        stripFixedSetpointForControlMode(stripEmptyMqttTopics(r)),
-      ])
-    )
-    const result = await patch('rooms', cleaned)
-    if (result) onRefetch()
+    setSaveError(null)
+    // §1.1: dirty-gated, whole-section, serialized awaits, order rooms →
+    // property, abort on first failure (no later PATCH, no onRefetch).
+    if (roomsDirty) {
+      let ok = false
+      try {
+        ok = Boolean(await patch('rooms', cleanedRooms))
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        setSaveError('Failed to save rooms. Your changes have not been applied.')
+        return
+      }
+    }
+    if (propertyDirty) {
+      let ok = false
+      try {
+        ok = Boolean(await patch('property', propertyState))
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        setSaveError('Failed to save property declaration. Your changes have not been applied.')
+        return
+      }
+    }
+    onRefetch()
   }
 
   /** Check if a room has any legacy HA entity fields set. */
@@ -394,12 +476,110 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
         <h2 className="text-lg font-bold text-[var(--text)]">Rooms</h2>
         <button
           onClick={save}
-          disabled={saving || !allValid}
+          disabled={saving || !allValid || areaGateBlocks}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           Save Changes
         </button>
+      </div>
+
+      {saveError && (
+        <div
+          role="alert"
+          className="px-4 py-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/10 text-sm text-[var(--text)]"
+        >
+          <div className="flex items-start gap-2">
+            <span className="flex-1">{saveError}</span>
+            <button
+              type="button"
+              onClick={() => setSaveError(null)}
+              aria-label="Dismiss error"
+              className="text-[var(--text-muted)] hover:text-[var(--text)] shrink-0"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-335 — Property declaration (parity with StepRooms). The
+          area band is a dirty-scoped client save-gate; the bedrooms band and
+          the Σ-area reconciliation are soft, non-blocking warnings. The wizard
+          remains the hard reconciliation gate at deploy. */}
+      <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-3">
+        <h3 className="text-sm font-medium text-[var(--text)]">Property</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label
+              htmlFor="property-total-area"
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Total Floor Area (m²)
+            </label>
+            <input
+              id="property-total-area"
+              type="number"
+              step="1"
+              min={PROPERTY_AREA_MIN_M2}
+              max={PROPERTY_AREA_MAX_M2}
+              value={propertyState.total_floor_area_m2 ?? ''}
+              onChange={(e) =>
+                setPropertyState((prev) => ({
+                  ...prev,
+                  total_floor_area_m2: e.target.value
+                    ? parseFloat(e.target.value)
+                    : undefined,
+                }))
+              }
+              placeholder="e.g. 189"
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+            />
+            {areaGateBlocks && (
+              <p className="mt-1 text-xs text-[var(--red)]">
+                Enter a total floor area between {PROPERTY_AREA_MIN_M2} and{' '}
+                {PROPERTY_AREA_MAX_M2} m² to save the declaration.
+              </p>
+            )}
+          </div>
+          <div>
+            <label
+              htmlFor="property-bedrooms"
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Bedrooms — optional
+            </label>
+            <input
+              id="property-bedrooms"
+              type="number"
+              step="1"
+              min={BEDROOMS_MIN}
+              max={BEDROOMS_MAX}
+              value={propertyState.bedrooms ?? ''}
+              onChange={(e) =>
+                setPropertyState((prev) => ({
+                  ...prev,
+                  bedrooms: e.target.value
+                    ? parseInt(e.target.value, 10)
+                    : undefined,
+                }))
+              }
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+            />
+            {bedroomsWarn && (
+              <p className="mt-1 text-xs text-[var(--amber)]">
+                Outside the typical range {BEDROOMS_MIN}–{BEDROOMS_MAX} — saved anyway.
+              </p>
+            )}
+          </div>
+        </div>
+        {reconcileWarn && (
+          <p className="text-xs text-[var(--amber)]">
+            Declared floor area differs from the sum of room areas by more than{' '}
+            {Math.round(AREA_RECONCILIATION_TOLERANCE * 100)}%. Check the room
+            areas or the declared total.
+          </p>
+        )}
       </div>
 
       {/* Add room */}
@@ -493,14 +673,48 @@ export function RoomSettings({ rooms, driver, onRefetch }: RoomSettingsProps) {
                   type="number"
                   step="0.1"
                   value={room.emitter_kw ?? ''}
+                  disabled={room.emitter_type === 'none'}
                   onChange={(e) =>
                     updateRoom(name, {
                       emitter_kw: e.target.value ? parseFloat(e.target.value) : undefined,
                     })
                   }
                   placeholder="Auto"
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] disabled:opacity-50"
                 />
+              </div>
+              {/* Emitter type — INSTRUCTION-333 parity: the sole per-room τ
+                  lever, editable after setup (StepRooms↔RoomSettings parity).
+                  'None' couples identically to the wizard: forces emitter_kw 0;
+                  switching away clears it (undefined dropped by JSON.stringify,
+                  full-section overwrite by restore_redacted, area×0.1 re-applies
+                  at load) so a no-emitter room never persists a 0-output rad. */}
+              <div>
+                <label className="block text-xs text-[var(--text-muted)] mb-1">
+                  Emitter Type
+                </label>
+                <select
+                  value={room.emitter_type || ''}
+                  onChange={(e) => {
+                    const val = e.target.value as 'radiator' | 'ufh' | 'fan_coil' | 'none'
+                    const changes: Partial<RoomConfigYaml> = { emitter_type: val }
+                    if (val === 'none') {
+                      changes.emitter_kw = 0
+                    } else if (room.emitter_type === 'none') {
+                      changes.emitter_kw = undefined
+                    }
+                    updateRoom(name, changes)
+                  }}
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                >
+                  <option value="" disabled>
+                    Select emitter type…
+                  </option>
+                  <option value="radiator">Radiator</option>
+                  <option value="ufh">Underfloor Heating</option>
+                  <option value="fan_coil">Fan Coil</option>
+                  <option value="none">None (no emitter)</option>
+                </select>
               </div>
             </div>
             {/* Control mode — driver-agnostic */}
