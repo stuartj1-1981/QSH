@@ -461,13 +461,14 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                       type="number"
                       step="0.1"
                       value={room.emitter_kw ?? ''}
+                      disabled={room.emitter_type === 'none'}
                       onChange={(e) =>
                         updateRoom(name, {
                           emitter_kw: e.target.value ? parseFloat(e.target.value) : undefined,
                         })
                       }
                       placeholder="Auto-estimated from area"
-                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] disabled:opacity-50"
                     />
                   </div>
 
@@ -482,8 +483,19 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                     <select
                       value={room.emitter_type || ''}
                       onChange={(e) => {
-                        const val = e.target.value as 'radiator' | 'ufh' | 'fan_coil'
-                        updateRoom(name, { emitter_type: val })
+                        const val = e.target.value as 'radiator' | 'ufh' | 'fan_coil' | 'none'
+                        // INSTRUCTION-333: 'none' forces emitter_kw to 0;
+                        // switching away from 'none' clears it (undefined is
+                        // omitted from the deploy payload, so area×0.1 re-applies
+                        // at load) so a no-emitter room never persists a silent
+                        // 0-output radiator.
+                        const changes: Partial<RoomConfigYaml> = { emitter_type: val }
+                        if (val === 'none') {
+                          changes.emitter_kw = 0
+                        } else if (room.emitter_type === 'none') {
+                          changes.emitter_kw = undefined
+                        }
+                        updateRoom(name, changes)
                       }}
                       className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                     >
@@ -493,6 +505,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                       <option value="radiator">Radiator</option>
                       <option value="ufh">Underfloor Heating</option>
                       <option value="fan_coil">Fan Coil</option>
+                      <option value="none">None (no emitter)</option>
                     </select>
                   </div>
 

@@ -14,7 +14,7 @@ router = APIRouter(tags=["rooms"])
 logger = logging.getLogger(__name__)
 
 
-VALID_EMITTER_TYPES = {"radiator", "ufh", "fan_coil"}
+VALID_EMITTER_TYPES = {"radiator", "ufh", "fan_coil", "none"}
 VALID_BOUNDARY_TYPES = {"wall", "open", "party", "floor_ceiling"}
 RESERVED_FACE_KEYWORDS = {"external", "ground", "roof", "unheated"}
 

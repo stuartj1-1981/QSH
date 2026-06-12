@@ -102,7 +102,7 @@ export interface RoomConfigYaml {
   /** 6-face room envelope. */
   envelope?: RoomEnvelopeYaml
   emitter_kw?: number
-  emitter_type?: 'radiator' | 'ufh' | 'fan_coil'
+  emitter_type?: 'radiator' | 'ufh' | 'fan_coil' | 'none'
   trv_entity?: string | string[]
   independent_sensor?: string
   // INSTRUCTION-231C — list-form for multi-emitter rooms (open_plan

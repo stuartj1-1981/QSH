@@ -59,7 +59,9 @@ AREA_RECONCILIATION_TOLERANCE = 0.25
 
 # Mirrors qsh/config.py EMITTER_TAU_DEFAULTS — the per-room τ-derivation
 # table that makes emitter_type a control-quality input, not metadata.
-VALID_EMITTER_TYPES = ("radiator", "ufh", "fan_coil")
+# "none" (INSTRUCTION-333) is a first-class value meaning "no emitter":
+# τ → global (silent), emitter_kw forced to 0 at load.
+VALID_EMITTER_TYPES = ("radiator", "ufh", "fan_coil", "none")
 
 # Optional bedrooms declaration — a soft archetype key that anchors no
 # reconciliation rule, so out-of-band is an acknowledged warning, not an
@@ -944,7 +946,9 @@ def validate_config(req: WizardValidateRequest):
             # default (qsh/config.py:1030), but a silent default becomes a
             # visible, acknowledged one \u2014 instance-qualified per room so
             # four defaulted rooms need four acknowledgements.
-            if rc.get("emitter_kw") in (None, ""):
+            # INSTRUCTION-333: a 'none' emitter room has emitter_kw forced to 0
+            # at load, so there is no defaulted value to acknowledge \u2014 skip.
+            if rc.get("emitter_type") != "none" and rc.get("emitter_kw") in (None, ""):
                 try:
                     _default_kw = round(float(area or 0.0) * 0.1, 2)
                 except (TypeError, ValueError):
