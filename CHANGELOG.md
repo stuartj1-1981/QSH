@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.5.3] — 2026-06-12
+
+### Added
+- Property details — total floor area and number of bedrooms — can now
+  be edited in Room Settings after the initial wizard, not just during
+  first-time setup.
+- The shoulder-season forecast horizon and the summer demand threshold
+  are now editable in Thermal Settings.
+- A room's emitter type is now editable in Room Settings, including a new
+  "None" option for rooms that have no emitter. A no-emitter room
+  correctly contributes zero heat output instead of a hidden default.
+
 ## [1.5.2] — 2026-06-11
 
 ### Added
