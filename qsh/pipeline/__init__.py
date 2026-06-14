@@ -49,6 +49,7 @@ from .controllers import (
     AllostaticLoadController,
     CompositeConfidenceController,
     SwarmTelemetryController,
+    ApoptosisArbiterController,
 )
 from .controllers.swarm_context_enricher import SwarmContextEnricher
 
@@ -85,6 +86,7 @@ __all__ = [
     "AllostaticLoadController",
     "CompositeConfidenceController",
     "SwarmTelemetryController",
+    "ApoptosisArbiterController",
     "SwarmContextEnricher",
 ]
 
@@ -226,26 +228,85 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
     #                     timestamp, debouncer, flow_min, flow_max, urgent,
     #                     action_counter, control_enabled, trv_tracker)
     if resolved.get("apply_hardware_control_fn") is None:
+        if driver_type == "mqtt":
+            # MQTT does NOT dispatch flow/mode here — publication stays in
+            # driver.write_outputs (and is shadow-gated there). But the
+            # heat-source mode readback is driver-agnostic and must run so
+            # ctx.readback_mismatch_count is LIVE on MQTT installs, at parity
+            # with the HA driver (INSTRUCTION-339A). It calls the SAME shared
+            # helper apply_hardware_control uses, so the readback math cannot
+            # drift between drivers. This is the composition root — the only
+            # place outside drivers/ha permitted to import a concrete driver
+            # function (mirrors the HA apply_hardware_control import in
+            # _resolve_ha_defaults above).
+            from ..drivers.ha.hardware_dispatch import (
+                _derive_readback_threshold,
+                compute_mode_readback,
+            )
 
-        def _noop_hw(*args, **kw):
-            # HardwareController expects (applied_mode, new_mismatch_count).
-            # MQTT and mock drivers have no hardware readback — mismatch is always 0.
-            # `applied_mode` is the commanded optimal_mode (args[1] per the caller
-            # contract at qsh/pipeline/controllers/hardware_controller.py:114–131).
-            #
-            # No silent fallback. HardwareController always supplies 13 positional
-            # args; any shorter call is by construction a DI signature drift event
-            # and must fail loudly so it is caught by tests and startup smoke,
-            # not by misleading shadow-mode state downstream.
-            if len(args) < 2:
-                raise RuntimeError(
-                    "_noop_hw called with fewer than 2 positional args — "
-                    "DI signature drift at apply_hardware_control boundary"
+            def _mqtt_readback_hw(*args, **kw):
+                # HardwareController call contract (see
+                # qsh/pipeline/controllers/hardware_controller.py:229-248):
+                #   args[1]=optimal_mode, args[2]=optimal_flow, args[4]=prev_mode;
+                #   readback inputs (hp_power_kw, prev_mismatch_count, return_temp,
+                #   has_live_return_temp) arrive as kwargs.
+                #
+                # No silent fallback. HardwareController always supplies the full
+                # positional arg list; any shorter call is by construction a DI
+                # signature drift event and must fail loudly so it is caught by
+                # tests and startup smoke, not by misleading state downstream.
+                if len(args) < 2:
+                    raise RuntimeError(
+                        "_mqtt_readback_hw called with fewer than 2 positional "
+                        "args — DI signature drift at apply_hardware_control boundary"
+                    )
+                optimal_mode = args[1]
+                optimal_flow = args[2] if len(args) > 2 else 0.0
+                prev_mode = args[4] if len(args) > 4 else None
+                # should_update_mode=True: MQTT re-publishes flow+mode together
+                # every cycle in write_outputs, so the mode write is never
+                # debounced away (mode_debounce_time_s=0.0). The threshold is the
+                # SINGLE per-source threshold (INSTRUCTION-339B B-1/B-2) — the same
+                # _derive_readback_threshold the HA path uses — driven by the
+                # active source's response_timeout_s that HardwareController
+                # resolves and forwards, so the per-source operator alarm fires on
+                # MQTT too. The floor/margin remain a lower bound.
+                return compute_mode_readback(
+                    prev_mismatch_count=kw.get("prev_mismatch_count", 0),
+                    optimal_mode=optimal_mode,
+                    prev_mode=prev_mode,
+                    hp_power_kw=kw.get("hp_power_kw"),
+                    optimal_flow=optimal_flow,
+                    return_temp=kw.get("return_temp"),
+                    has_live_return_temp=kw.get("has_live_return_temp", False),
+                    readback_threshold=_derive_readback_threshold(
+                        0.0, response_timeout_s=kw.get("response_timeout_s")
+                    ),
+                    should_update_mode=True,
                 )
-            applied_mode = args[1]
-            return applied_mode, 0
 
-        resolved["apply_hardware_control_fn"] = _noop_hw
+            resolved["apply_hardware_control_fn"] = _mqtt_readback_hw
+        else:
+
+            def _noop_hw(*args, **kw):
+                # HardwareController expects (applied_mode, new_mismatch_count).
+                # The mock driver has no hardware readback — mismatch is always 0.
+                # `applied_mode` is the commanded optimal_mode (args[1] per the caller
+                # contract at qsh/pipeline/controllers/hardware_controller.py:114–131).
+                #
+                # No silent fallback. HardwareController always supplies 13 positional
+                # args; any shorter call is by construction a DI signature drift event
+                # and must fail loudly so it is caught by tests and startup smoke,
+                # not by misleading shadow-mode state downstream.
+                if len(args) < 2:
+                    raise RuntimeError(
+                        "_noop_hw called with fewer than 2 positional args — "
+                        "DI signature drift at apply_hardware_control boundary"
+                    )
+                applied_mode = args[1]
+                return applied_mode, 0
+
+            resolved["apply_hardware_control_fn"] = _noop_hw
 
     # COP: already in InputBlock.hp_cop
     # Signature: get_cop(config, cop_history)
@@ -475,6 +536,14 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         )
         controllers.append(
             SwarmTelemetryController(runtime=swarm_runtime, sysid=kw.get("sysid"))
+        )
+        # INSTRUCTION-321A — apoptosis arbiter runs LAST (after telemetry), reads
+        # swarm + sysid state. Disabled-by-default; evaluates + records for the
+        # CAPA §7.1 soak. config carries per-room areas for Trigger C.
+        controllers.append(
+            ApoptosisArbiterController(
+                runtime=swarm_runtime, sysid=kw.get("sysid"), config=config
+            )
         )
 
     return controllers, aux_controller

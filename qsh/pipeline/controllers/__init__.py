@@ -48,8 +48,10 @@ from .tariff_optimiser import TariffOptimiserController
 from .allostatic_load_controller import AllostaticLoadController
 from .composite_confidence_controller import CompositeConfidenceController
 from .swarm_telemetry_controller import SwarmTelemetryController
+from .apoptosis_arbiter import ApoptosisArbiterController
 
 __all__ = [
+    "ApoptosisArbiterController",
     "BoostController",
     "HeatSourceSensorSelector",
     "SensorController",

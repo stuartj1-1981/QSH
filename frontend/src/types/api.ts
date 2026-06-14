@@ -562,6 +562,32 @@ export interface QuarantineStatus {
   contact: string | null
 }
 
+// INSTRUCTION-321B: apoptosis detector read surface over the publisher's
+// apoptosis_status() + is_self_suspended() (GET /api/swarm/apoptosis).
+// `suspended` reflects the swarm-lifecycle FSM; `hormesis` is the soft 2-of-3
+// warning; the three trigger flags are diagnostic (engineering view).
+export interface ApoptosisStatus {
+  known: boolean
+  hormesis: boolean
+  armed: boolean
+  suspended: boolean
+  enabled: boolean
+  trigger_a: boolean
+  trigger_b: boolean
+  trigger_c: boolean
+  // INSTRUCTION-322B: dormancy + recovery fields for the banner/countdown.
+  // `dormant` = supervisory control released (SENESCENT_DORMANT);
+  // `pre_shutdown_active` = inside the 24 h countdown (or armed-and-waiting);
+  // `recommissioning` = post-dormancy RECOMMISSIONING_SOAK; `swarm_state` is the
+  // QS-061 wire value (null for COMPLIANT/OUTDATED). Optional so older payloads
+  // (pre-322B) still parse.
+  dormant?: boolean
+  pre_shutdown_active?: boolean
+  pre_shutdown_remaining_hours?: number | null
+  recommissioning?: boolean
+  swarm_state?: string | null
+}
+
 // INSTRUCTION-289B: swarm unit read surface — shapes mirror 289A's four GET
 // routes (qsh/api/routes/swarm.py) exactly; every field is the contract.
 export interface SwarmStatus {
