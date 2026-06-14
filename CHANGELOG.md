@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.5.4] — 2026-06-14
+
+### Added
+- Swarm units can now recognise when their own data has become
+  unreliable — a sensor that no longer tracks its actuator, readings
+  that collide with the learned model, or values outside physical
+  limits — and voluntarily withdraw from the shared learning network so
+  they don't pollute it for everyone else. This self-suspension is off
+  by default. A status banner shows when a unit has suspended itself,
+  and a unit is brought back into service automatically once it
+  recovers.
+- MQTT heat-source installs now read back the heat-source mode, bringing
+  them to parity with direct installs.
+- A heat source that stops responding to commands is now detected via a
+  per-source response timeout with a dead-time gate, surfaced in
+  Settings.
+
+### Changed
+- Short-cycle detection is now boost-aware and resets its cooldown
+  correctly, reducing false short-cycle trips during a boost.
+
 ## [1.5.3] — 2026-06-12
 
 ### Added
