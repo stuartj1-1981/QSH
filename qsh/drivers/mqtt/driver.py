@@ -42,6 +42,10 @@ from .topic_map import (
 
 logger = logging.getLogger(__name__)
 
+# INSTRUCTION-322B Task 7 — sentinel distinguishing "never published" from a
+# legitimate None/absent banner, so the first cycle always publishes.
+_UNSET = object()
+
 
 # INSTRUCTION-221C — register MQTT events. Idempotent for identical specs;
 # singleton lookup at use site so test fixtures resetting the annunciator
@@ -312,6 +316,14 @@ class MQTTDriver:
         # publishes; subsequent cycles publish only on change. Instance-scoped
         # (per MQTTDriver), naturally isolated per test.
         self._last_published_active_source: Optional[str] = None
+
+        # INSTRUCTION-322B Task 7 — last-published greenfield swarm-state topics
+        # (qsh/swarm/state/quarantine_banner + dormancy_countdown). Sentinel
+        # objects (not None) so the first cycle publishes even a None/absent
+        # banner, and the retained countdown is cleared (L-3) on the first
+        # dormancy-active cycle. Instance-scoped, naturally isolated per test.
+        self._last_published_swarm_banner: Any = _UNSET
+        self._last_published_dormancy_countdown: Any = _UNSET
 
         rooms = config.get("rooms", {})
         if not rooms:
@@ -1373,6 +1385,22 @@ class MQTTDriver:
                 self._last_published_active_source = active_name
                 logger.debug("329 D1: published active_source=%s", active_name)
 
+        # ── INSTRUCTION-322B Task 7 — greenfield swarm-state topics ──────
+        # Retained banner + 24 h dormancy countdown for standalone (MQTT) installs.
+        # Observability, not actuation — NOT gated on control_enabled (precedent:
+        # the active_source annunciation above). Edge-gated on the last-published
+        # value; the retained countdown is cleared (→ "0") on dormancy-active /
+        # recommissioning (banner no longer "pre_shutdown" → countdown None, L-3).
+        # Gated on the swarm subsystem being active — a non-swarm install never
+        # publishes these (the arbiter, which writes the OutputBlock fields, only
+        # runs with a SwarmRuntime).
+        if shared_state.get_swarm() is not None:
+            self._publish_swarm_state(
+                prefix,
+                getattr(outputs, "swarm_banner_state", None),
+                getattr(outputs, "swarm_dormancy_countdown_hours", None),
+            )
+
         if outputs.hardware_changed:
             if control_enabled:
                 if not routing.dispatch_flow_mode:
@@ -1589,6 +1617,34 @@ class MQTTDriver:
             notif_topic = f"{prefix}/notifications" if prefix else "qsh/notifications"
             for notif in outputs.notifications:
                 self._mqtt.publish(notif_topic, json.dumps(notif))
+
+    def _publish_swarm_state(
+        self, prefix: str, banner: Optional[str], countdown_hours: Optional[int]
+    ) -> None:
+        """Publish the greenfield swarm-state topics retained, edge-gated on the
+        last-published value (INSTRUCTION-322B Task 7). The countdown is published
+        as an integer string of hours; outside the pre-shutdown window
+        (countdown_hours is None) it is cleared to "0" so a late subscriber does
+        not see a frozen stale countdown (L-3)."""
+        if not self._mqtt:
+            return
+        banner_topic = (
+            f"{prefix}/swarm/state/quarantine_banner" if prefix
+            else "qsh/swarm/state/quarantine_banner"
+        )
+        countdown_topic = (
+            f"{prefix}/swarm/state/dormancy_countdown" if prefix
+            else "qsh/swarm/state/dormancy_countdown"
+        )
+        if banner != self._last_published_swarm_banner:
+            self._mqtt.publish(banner_topic, banner or "", qos=1, retain=True)
+            self._last_published_swarm_banner = banner
+        # None → cleared retained countdown ("0") so late subscribers see no stale
+        # value once dormancy is active / recommissioned (L-3).
+        countdown_payload = str(int(countdown_hours)) if countdown_hours is not None else "0"
+        if countdown_payload != self._last_published_dormancy_countdown:
+            self._mqtt.publish(countdown_topic, countdown_payload, qos=1, retain=True)
+            self._last_published_dormancy_countdown = countdown_payload
 
     def apply_failsafe(self, config: Dict, safe_flow: float = 40.0, safe_mode: str = "heat") -> None:
         """Publish safe-state commands to MQTT with retry.

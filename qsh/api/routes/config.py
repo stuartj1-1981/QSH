@@ -412,6 +412,35 @@ def patch_config_section(section: str, body=Body(...)):
         if _dup_err is not None:
             raise HTTPException(status_code=400, detail=_dup_err)
 
+        # INSTRUCTION-339C — per-element response_timeout_s range parity. Mirrors
+        # the backend config-load band [30, 900] s (config.py heat_sources loop)
+        # so an out-of-range value is rejected at PATCH with a clean 422 rather
+        # than deferred to a config-load SystemExit on the next restart. Coerces
+        # like the loader's safe_float so a numeric string is accepted; absent
+        # key is fine (resolves to the per-source-type default at runtime).
+        for _idx, _src in enumerate(guard_incoming):
+            if not isinstance(_src, dict) or "response_timeout_s" not in _src:
+                continue
+            _rt_raw = _src["response_timeout_s"]
+            try:
+                _rt = float(_rt_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"heat_sources[{_idx}].response_timeout_s must be a number, "
+                        f"got {_rt_raw!r}"
+                    ),
+                )
+            if not (30.0 <= _rt <= 900.0):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"heat_sources[{_idx}].response_timeout_s={_rt}s is outside "
+                        "safe range [30, 900]"
+                    ),
+                )
+
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml
     # (the section being patched lives in it). Other failures abort the

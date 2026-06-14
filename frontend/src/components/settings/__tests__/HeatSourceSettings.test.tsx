@@ -1190,3 +1190,116 @@ describe('HeatSourceSettings — non-primary MQTT method stamp (INSTRUCTION-308)
     })
   })
 })
+
+/**
+ * INSTRUCTION-339C — per-source response_timeout_s (dead-time gate) field:
+ * renders with the resolved per-type default as placeholder, materialises the
+ * parsed number, flags out-of-range inline, and round-trips a saved value.
+ */
+describe('HeatSourceSettings — response timeout (INSTRUCTION-339C)', () => {
+  it('renders the field with the HP resolved-default placeholder (180)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'heat_pump', name: 'HP' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const input = document.getElementById(
+      'source-0-response-timeout',
+    ) as HTMLInputElement
+    expect(input).not.toBeNull()
+    expect(input.placeholder).toBe('default 180')
+    expect(input.value).toBe('')
+  })
+
+  it('shows the boiler resolved-default placeholder (300)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler' } as HeatSourceYamlT]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const input = document.getElementById(
+      'source-0-response-timeout',
+    ) as HTMLInputElement
+    expect(input.placeholder).toBe('default 300')
+  })
+
+  it('editing materialises the parsed number and marks the card unsaved', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'heat_pump', name: 'HP' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const input = document.getElementById(
+      'source-0-response-timeout',
+    ) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '240' } })
+    expect(
+      (document.getElementById('source-0-response-timeout') as HTMLInputElement)
+        .value,
+    ).toBe('240')
+    expect(screen.getByText(/^\(unsaved\)$/)).toBeInTheDocument()
+  })
+
+  it('out-of-range value shows an inline error', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', response_timeout_s: 1000 } as HeatSourceYamlT,
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByText(/Must be between 30 and 900/)).toBeInTheDocument()
+  })
+
+  it('in-range value shows no inline error', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', response_timeout_s: 240 } as HeatSourceYamlT,
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.queryByText(/Must be between 30 and 900/)).toBeNull()
+    expect(
+      (document.getElementById('source-0-response-timeout') as HTMLInputElement)
+        .value,
+    ).toBe('240')
+  })
+
+  it('round-trips a saved response_timeout_s in the persist payload', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP', response_timeout_s: 240 } as HeatSourceYamlT,
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Source 1 name'), {
+      target: { value: 'HP2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+    await waitFor(() => {
+      const hsCall = patch.mock.calls.find((c) => c[0] === 'heat_sources')!
+      const sources = hsCall[1] as Array<{ response_timeout_s?: number }>
+      expect(sources[0].response_timeout_s).toBe(240)
+    })
+  })
+})

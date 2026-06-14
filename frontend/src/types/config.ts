@@ -166,6 +166,10 @@ export interface HeatSourceYaml {
   // electrical input. Boilers: fuel input. Powers fleet telemetry's
   // heat_pump.declared_output_kw column.
   capacity_kw?: number
+  // INSTRUCTION-339B/C: per-source command-to-fire response timeout (s).
+  // Times the dead-time gate's operator readback alarm. Validity [30, 900] s.
+  // Unset → resolves to the per-source-type default (HP/GSHP 180, boilers 300).
+  response_timeout_s?: number
   flow_min?: number
   flow_max?: number
   flow_min_entity?: string

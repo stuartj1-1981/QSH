@@ -701,3 +701,72 @@ describe('StatusBanner control-method badge', () => {
     expect(badge.textContent).toBe('future_method')
   })
 })
+
+// INSTRUCTION-322B — dormancy banner + pre-shutdown countdown + precedence.
+const apoptosisBase = {
+  known: true,
+  hormesis: false,
+  armed: false,
+  suspended: false,
+  enabled: true,
+  trigger_a: false,
+  trigger_b: false,
+  trigger_c: false,
+}
+
+describe('StatusBanner dormancy + pre-shutdown (INSTRUCTION-322B)', () => {
+  it('renders the dormancy banner when dormant is true', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        apoptosis={{ ...apoptosisBase, dormant: true }}
+      />
+    )
+    expect(screen.getByTestId('dormancy-banner')).toBeDefined()
+    expect(screen.getByText(/released to native control/i)).toBeDefined()
+  })
+
+  it('dormancy banner suppresses the self-suspension and hormesis banners', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        apoptosis={{ ...apoptosisBase, dormant: true, suspended: true, hormesis: true }}
+      />
+    )
+    expect(screen.getByTestId('dormancy-banner')).toBeDefined()
+    expect(screen.queryByTestId('apoptosis-banner')).toBeNull()
+    expect(screen.queryByTestId('hormesis-banner')).toBeNull()
+  })
+
+  it('renders the pre-shutdown countdown with remaining hours', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        apoptosis={{
+          ...apoptosisBase,
+          pre_shutdown_active: true,
+          pre_shutdown_remaining_hours: 6,
+        }}
+      />
+    )
+    expect(screen.getByTestId('pre-shutdown-banner')).toBeDefined()
+    expect(screen.getByText(/6 hours remaining/i)).toBeDefined()
+  })
+
+  it('pre-shutdown banner is suppressed once dormant', () => {
+    render(
+      <StatusBanner
+        {...baseProps}
+        apoptosis={{ ...apoptosisBase, pre_shutdown_active: true, dormant: true }}
+      />
+    )
+    expect(screen.queryByTestId('pre-shutdown-banner')).toBeNull()
+    expect(screen.getByTestId('dormancy-banner')).toBeDefined()
+  })
+
+  it('renders neither dormancy nor pre-shutdown banner on the happy path', () => {
+    render(<StatusBanner {...baseProps} apoptosis={apoptosisBase} />)
+    expect(screen.queryByTestId('dormancy-banner')).toBeNull()
+    expect(screen.queryByTestId('pre-shutdown-banner')).toBeNull()
+  })
+})

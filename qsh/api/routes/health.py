@@ -1,13 +1,12 @@
 """Health check endpoint."""
 
-import json
 import logging
 import time
-from pathlib import Path
 
 from fastapi import APIRouter
 
 from ..state import shared_state
+from qsh.version import read_addon_version
 from qsh.utils import (
     get_local_tz,
     get_local_tz_source,
@@ -17,33 +16,12 @@ from qsh.utils import (
 router = APIRouter()
 
 
-def _read_addon_version() -> str:
-    # COUPLING: this candidate list mirrors the target paths in:
-    #   - quantum_swarm_heating/Dockerfile        (COPY config.json /config.json)
-    #   - quantum_swarm_heating/Dockerfile.public (COPY config.json /app/config.json)
-    # If either Dockerfile is changed, update this list in lockstep, or
-    # the addon will silently fall back to the "unknown" sentinel.
-    candidates = [
-        # Dev mode: quantum_swarm_heating/qsh/api/routes/health.py
-        # parents[3] is the addon source root (where config.json lives).
-        Path(__file__).resolve().parents[3] / "config.json",
-        # Dockerfile.public: qsh/ copied to /app/qsh/, config.json → /app/
-        Path("/app/config.json"),
-        # Dockerfile (local build): qsh/ copied to /qsh, config.json → /
-        Path("/config.json"),
-    ]
-    for cfg in candidates:
-        try:
-            if cfg.is_file():
-                version = json.loads(cfg.read_text()).get("version")
-                if version:
-                    return str(version)
-        except Exception:  # noqa: BLE001 — truly defensive, any failure falls through
-            continue
-    return "unknown"
-
-
-_ADDON_VERSION = _read_addon_version()
+# INSTRUCTION-320 Task 1: the version reader was lifted verbatim into
+# qsh/version.py so the swarm layer can read it without an api → swarm import.
+# read_addon_version() returns Optional[str]; the "unknown" sentinel is applied
+# here so the /health response shape is unchanged (behaviour identical per-process
+# — the add-on version is process-lifetime-stable, container-replaced on update).
+_ADDON_VERSION = read_addon_version() or "unknown"
 logging.info("health: addon_version=%s", _ADDON_VERSION)
 
 

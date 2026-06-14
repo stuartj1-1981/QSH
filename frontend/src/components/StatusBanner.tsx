@@ -9,6 +9,7 @@ import type {
   HeatSourceState,
   SourceSelectionPayload,
   QuarantineStatus,
+  ApoptosisStatus,
 } from '../types/api'
 import type { TariffAggressionMode } from '../types/config'
 import type { Page } from '../App'
@@ -118,6 +119,11 @@ interface StatusBannerProps {
   // prominent "flagged for review — contact support" alert. Absent / false →
   // nothing quarantine-related renders (happy path byte-identical).
   quarantine?: QuarantineStatus
+  // INSTRUCTION-321B: apoptosis detector signal. When `suspended` is true the
+  // unit has self-suspended (dropped out of cohort priors) — a prominent
+  // phone-home alert. When `hormesis` is true (2-of-3) a softer "approaching
+  // apoptosis criteria" warning shows. Absent / all-false → nothing renders.
+  apoptosis?: ApoptosisStatus
 }
 
 export const StatusBanner = memo(function StatusBanner({
@@ -145,6 +151,7 @@ export const StatusBanner = memo(function StatusBanner({
   sourceSelection,
   heatSourceCount,
   quarantine,
+  apoptosis,
 }: StatusBannerProps) {
   const isPaused = PAUSE_STRATEGIES.some(s => operatingState.toLowerCase().includes(s))
   const stateColor = getStateColor(operatingState)
@@ -260,6 +267,95 @@ export const StatusBanner = memo(function StatusBanner({
                 Contact: <span className="font-medium break-all">{quarantine.contact}</span>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-322B dormancy banner — supervisory control has been
+          RELEASED to native control (SENESCENT_DORMANT). The strongest swarm
+          banner: takes precedence over self-suspension + hormesis (both
+          suppressed below while dormant). Recommissioning is operator-driven. */}
+      {apoptosis?.dormant && (
+        <div
+          role="alert"
+          data-testid="dormancy-banner"
+          className="rounded-xl border p-4 mb-2 bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">
+              Supervisory control has been released to native control — contact support to recommission.
+            </div>
+            <div className="mt-1 text-xs opacity-80">
+              This unit went dormant after an extended suspension. Heating now runs on the
+              manufacturer&apos;s native controller until a support engineer recommissions it.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-322B pre-shutdown countdown — the unit is inside the 24 h
+          window before supervisory control is released. Shown while
+          pre_shutdown_active and not yet dormant. */}
+      {apoptosis?.pre_shutdown_active && !apoptosis?.dormant && (
+        <div
+          role="alert"
+          data-testid="pre-shutdown-banner"
+          className="rounded-xl border p-4 mb-2 bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">
+              Pre-shutdown countdown — supervisory control will be released soon. Contact support.
+            </div>
+            <div className="mt-1 text-xs opacity-80">
+              {apoptosis.pre_shutdown_remaining_hours != null
+                ? `Approximately ${apoptosis.pre_shutdown_remaining_hours} hour${apoptosis.pre_shutdown_remaining_hours === 1 ? '' : 's'} remaining before native-control handover.`
+                : 'Native-control handover is imminent.'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-321B apoptosis suspension banner — the unit has
+          self-suspended (three-condition AND gate armed) and dropped out of
+          cohort priors. Supervisory control is retained; this is the phone-home
+          path. Suppressed while dormant (the stronger 322B banner takes over). */}
+      {apoptosis?.suspended && !apoptosis?.dormant && (
+        <div
+          role="alert"
+          data-testid="apoptosis-banner"
+          className="rounded-xl border p-4 mb-2 bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">
+              This unit has self-suspended from the swarm. Contact support to be re-instated.
+            </div>
+            <div className="mt-1 text-xs opacity-80">
+              Supervisory heating control is unaffected — only swarm participation is paused.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INSTRUCTION-321B hormesis warning — the unit meets 2 of the 3
+          apoptosis conditions (a soft early-warning; no suspension). Suppressed
+          while suspended OR dormant (the stronger banner takes over). */}
+      {apoptosis?.hormesis && !apoptosis?.suspended && !apoptosis?.dormant && (
+        <div
+          role="status"
+          data-testid="hormesis-banner"
+          className="rounded-xl border p-4 mb-2 bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-start gap-3 text-sm"
+        >
+          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">
+              This unit meets 2 of 3 apoptosis conditions — please review system health.
+            </div>
+            <div className="mt-1 text-xs opacity-80">
+              No action has been taken. A real install with a fault gets this warning; it does not suspend.
+            </div>
           </div>
         </div>
       )}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ...signal_bus import InputBlock, OutputBlock
@@ -552,6 +553,34 @@ class HADriver:
                     logging.debug(
                         "SHADOW MODE: suppressed aux %s=%s → %s", room, state, entity
                     )
+
+        # ── Apoptosis dormancy supervisory release (INSTRUCTION-322A) ──────
+        # Side-channel write, same shadow gate as the source/Type-2/aux writes
+        # above: in shadow mode the release is recorded locally for audit
+        # (dispatched=False) but NEVER dispatched. The 225A manual-TRV carve-out is
+        # NOT extended — the release honours control_enabled without exception. The
+        # senescent packet was already sent at arm; this is the post-ack hand-back.
+        if outputs.supervisory_release_requested and outputs.supervisory_release:
+            from .hardware_dispatch import release_supervisory_surface
+
+            released_iso = datetime.now(timezone.utc).isoformat()
+            for record in outputs.supervisory_release:
+                surface = record.get("surface")
+                if control_enabled:
+                    try:
+                        release_supervisory_surface(config, surface, record)
+                    except Exception as e:
+                        logging.warning(
+                            "HADriver: supervisory release failed for %s: %s",
+                            surface, e,
+                        )
+                else:
+                    logging.debug(
+                        "SHADOW MODE: suppressed supervisory release → %s", surface
+                    )
+                # Unit-local audit fields (NOT on the already-sent wire packet).
+                record["dispatched"] = control_enabled
+                record["released_at"] = released_iso
 
         # ── Notifications ──
         if outputs.notifications:

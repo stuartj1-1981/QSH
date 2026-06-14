@@ -527,6 +527,19 @@ function SourceCard({
   const [showFlowControl, setShowFlowControl] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
 
+  // INSTRUCTION-339C — per-source command-to-fire response timeout (dead-time
+  // gate). Resolved default mirrors the backend capability table (339B Task 1):
+  // HP/GSHP 180 s, boilers 300 s. Validity band [30, 900] s mirrors the
+  // backend config-load + PATCH guard so the UI flags it before a restart.
+  const RESPONSE_TIMEOUT_MIN = 30
+  const RESPONSE_TIMEOUT_MAX = 900
+  const responseTimeoutDefault =
+    hs.type === 'heat_pump' || hs.type === 'gshp' ? 180 : 300
+  const responseTimeoutError =
+    hs.response_timeout_s !== undefined &&
+    (hs.response_timeout_s < RESPONSE_TIMEOUT_MIN ||
+      hs.response_timeout_s > RESPONSE_TIMEOUT_MAX)
+
   const entityIds = useMemo(() => {
     if (driver === 'mqtt') {
       return [
@@ -799,6 +812,46 @@ function SourceCard({
               }
               className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
             />
+          </div>
+
+          {/* Response timeout (dead-time gate) — INSTRUCTION-339C */}
+          <div>
+            <label
+              htmlFor={`source-${index}-response-timeout`}
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Source response timeout (s)
+            </label>
+            <input
+              id={`source-${index}-response-timeout`}
+              type="number"
+              min={RESPONSE_TIMEOUT_MIN}
+              max={RESPONSE_TIMEOUT_MAX}
+              step={10}
+              value={hs.response_timeout_s ?? ''}
+              placeholder={`default ${responseTimeoutDefault}`}
+              aria-invalid={responseTimeoutError}
+              onChange={(e) =>
+                onChange({
+                  response_timeout_s:
+                    e.target.value === ''
+                      ? undefined
+                      : parseFloat(e.target.value),
+                })
+              }
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+            />
+            {responseTimeoutError ? (
+              <p className="mt-1 text-xs text-red-500">
+                Must be between {RESPONSE_TIMEOUT_MIN} and {RESPONSE_TIMEOUT_MAX}{' '}
+                seconds.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Command-to-fire window before a no-response alarm. Unset uses{' '}
+                {responseTimeoutDefault} s.
+              </p>
+            )}
           </div>
 
           {/* Flow temp range */}

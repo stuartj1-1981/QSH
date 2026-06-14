@@ -13,6 +13,7 @@ Control methods:
 
 import logging
 import math
+from typing import Optional
 from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
 
@@ -47,19 +48,36 @@ READBACK_SAFETY_MARGIN_CYCLES = 6
 READBACK_MISMATCH_ALARM_THRESHOLD = READBACK_MISMATCH_FLOOR_CYCLES
 
 
-def _derive_readback_threshold(mode_debounce_time_s: float) -> int:
-    """Compute the readback mismatch alarm threshold (in cycles) for a
-    given mode-write debounce time.
+def _derive_readback_threshold(
+    mode_debounce_time_s: float,
+    response_timeout_s: Optional[float] = None,
+) -> int:
+    """Compute the readback mismatch alarm threshold (in cycles).
 
-    Logic: the operator alarm must not fire before the debouncer has
-    permitted the corresponding mode-write to land AND the HP has had
-    time to respond observably. Threshold is at least
-    ceil(mode_debounce_time / cycle_time) + safety_margin, floored at
-    READBACK_MISMATCH_FLOOR_CYCLES.
+    The single threshold (INSTRUCTION-339B B-1). The operator alarm must not
+    fire before:
+      - the debouncer has permitted the corresponding mode-write to land AND the
+        HP has had time to respond observably:
+        ceil(mode_debounce_time / cycle_time) + safety_margin; AND
+      - the active source's configured command-to-fire latency has elapsed:
+        ceil(response_timeout_s / cycle_time) (INSTRUCTION-339B).
+    Floored at READBACK_MISMATCH_FLOOR_CYCLES. The floor/margin are a lower bound,
+    so a configured response_timeout_s below the floor is clamped up and no HA
+    install regresses. response_timeout_s=None (or 0) drops the timeout term,
+    preserving the pre-339B value for any caller that does not supply it.
+
+    `mode_debounce_time_s` stays the first positional argument for backward
+    compatibility with the pre-339B single-arg callers; `response_timeout_s` is
+    an optional keyword (HardwareController / the MQTT injection pass it through).
     """
     debounce_cycles = int(math.ceil(mode_debounce_time_s / PIPELINE_CYCLE_SECONDS))
     derived = debounce_cycles + READBACK_SAFETY_MARGIN_CYCLES
-    return max(derived, READBACK_MISMATCH_FLOOR_CYCLES)
+    timeout_cycles = (
+        int(math.ceil(response_timeout_s / PIPELINE_CYCLE_SECONDS))
+        if response_timeout_s
+        else 0
+    )
+    return max(timeout_cycles, derived, READBACK_MISMATCH_FLOOR_CYCLES)
 
 
 # ========================================================================
@@ -357,6 +375,95 @@ def _apply_mode_ha_service(config, optimal_mode):
 # ========================================================================
 
 
+def compute_mode_readback(
+    prev_mismatch_count: int,
+    optimal_mode: Optional[str],
+    prev_mode: Optional[str],
+    hp_power_kw: Optional[float],
+    optimal_flow: float,
+    return_temp: Optional[float],
+    has_live_return_temp: bool,
+    readback_threshold: int,
+    should_update_mode: bool,
+) -> tuple[Optional[str], int]:
+    """Driver-agnostic mode readback. Returns (observed_mode_or_prev, new_mismatch_count).
+
+    Derives observed_mode from HP power draw (>= 0.1 kW => "heat", else "off"),
+    counts consecutive cycles where observed_mode != optimal_mode, suppresses the
+    count when the HP is legitimately idle because demand is satisfied (commanded
+    flow <= return + margin), and raises an operator alarm at readback_threshold.
+
+    The mismatch counter is independent of should_update_mode — alarm semantics are
+    intent-vs-reality, not debouncer state (INSTRUCTION-116 D1). should_update_mode
+    only selects log severity: WARNING when QSH just attempted the mode-write,
+    INFO when quiescent.
+
+    This is the single shared readback computation for every driver: the HA driver
+    (apply_hardware_control below) and the MQTT injection slot
+    (qsh/pipeline/__init__.py) both call it, so the readback math cannot drift
+    between drivers (INSTRUCTION-339A). It is pure — no I/O beyond logging, and it
+    references no apply_hardware_control local beyond its own parameters.
+
+    Args mirror the readback inputs only; the dispatch/shadow-mode wrapper is the
+    caller's responsibility (HA gates dispatch at the top of apply_hardware_control;
+    the MQTT injection is readback-only and never dispatches).
+
+    Returns:
+        (applied_mode, new_mismatch_count)
+          applied_mode -- observed_mode when readback is available; otherwise the
+            pre-readback fallback (optimal_mode if should_update_mode else prev_mode).
+          new_mismatch_count -- consecutive-cycle mismatch count after this cycle.
+            Increments on observed_mode != optimal_mode, resets to zero when they
+            match or when demand-satisfied suppression fires, and passes through
+            unchanged when readback is unavailable (hp_power_kw is None or
+            optimal_mode is None).
+    """
+    applied_mode = optimal_mode if should_update_mode else prev_mode
+    new_mismatch_count = prev_mismatch_count
+    if hp_power_kw is not None and optimal_mode is not None:
+        observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
+        if observed_mode != optimal_mode:
+            flow_below_return = (
+                has_live_return_temp
+                and return_temp is not None
+                and optimal_flow <= return_temp + FLOW_BELOW_RETURN_MARGIN_C
+            )
+            if optimal_mode == "heat" and flow_below_return:
+                # QSH commanded flow at/below return — HP idle is demand-satisfied,
+                # not an unresponsive HP. Do not escalate; reset the counter.
+                new_mismatch_count = 0
+                logging.debug(
+                    "Readback: commanded heat but HP idle with flow %.1f°C <= return "
+                    "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
+                    optimal_flow, return_temp, FLOW_BELOW_RETURN_MARGIN_C,
+                )
+            else:
+                new_mismatch_count = prev_mismatch_count + 1
+                if new_mismatch_count >= readback_threshold:
+                    logging.error(
+                        "Mode readback mismatch persisted for %d cycles "
+                        "(threshold %d) — HP not responding to commanded '%s'. "
+                        "Check Octopus API status and HP connectivity.",
+                        new_mismatch_count, readback_threshold, optimal_mode,
+                    )
+                elif should_update_mode:
+                    logging.warning(
+                        "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
+                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
+                    )
+                else:
+                    logging.info(
+                        "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
+                        "will trigger re-command next cycle",
+                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
+                    )
+        else:
+            new_mismatch_count = 0
+        applied_mode = observed_mode
+
+    return applied_mode, new_mismatch_count
+
+
 def apply_hardware_control(
     config,
     optimal_mode,
@@ -376,6 +483,7 @@ def apply_hardware_control(
     prev_mismatch_count=0,
     return_temp=None,
     has_live_return_temp=False,
+    response_timeout_s=None,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -406,8 +514,8 @@ def apply_hardware_control(
 
     should_update_mode = debouncer.should_update_mode(optimal_mode, prev_mode, current_time, urgent=urgent)
 
-    # Track what mode was actually applied to the HP
-    applied_mode = optimal_mode if should_update_mode else prev_mode
+    # The mode actually applied to the HP (observed readback or pre-readback
+    # fallback) is computed by compute_mode_readback at the tail of this function.
 
     should_update_flow = debouncer.should_update_flow(optimal_flow, prev_flow, current_time, urgent=urgent)
     should_update_trvs = debouncer.should_update_trvs(room_targets, current_time, urgent=urgent)
@@ -502,7 +610,9 @@ def apply_hardware_control(
     # The legacy hardcoded 5-cycle threshold fired before the debouncer
     # could even permit the next mode-write at any mode_writes_per_hour in
     # [3,6], rendering the alarm meaningless on tight write budgets.
-    readback_threshold = _derive_readback_threshold(debouncer.mode_debounce_time)
+    readback_threshold = _derive_readback_threshold(
+        debouncer.mode_debounce_time, response_timeout_s=response_timeout_s
+    )
     if not getattr(debouncer, "_readback_threshold_logged", False):
         logging.info(
             "Readback mismatch ERROR threshold = %d cycles (%.0fs) "
@@ -516,49 +626,19 @@ def apply_hardware_control(
         )
         debouncer._readback_threshold_logged = True
 
-    new_mismatch_count = prev_mismatch_count
-    if hp_power_kw is not None and optimal_mode is not None:
-        observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
-        if observed_mode != optimal_mode:
-            flow_below_return = (
-                has_live_return_temp
-                and return_temp is not None
-                and optimal_flow <= return_temp + FLOW_BELOW_RETURN_MARGIN_C
-            )
-            if optimal_mode == "heat" and flow_below_return:
-                # QSH commanded flow at/below return — HP idle is demand-satisfied,
-                # not an unresponsive HP. Do not escalate; reset the counter.
-                new_mismatch_count = 0
-                logging.debug(
-                    "Readback: commanded heat but HP idle with flow %.1f°C <= return "
-                    "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
-                    optimal_flow, return_temp, FLOW_BELOW_RETURN_MARGIN_C,
-                )
-            else:
-                new_mismatch_count = prev_mismatch_count + 1
-                if new_mismatch_count >= readback_threshold:
-                    logging.error(
-                        "Mode readback mismatch persisted for %d cycles "
-                        "(threshold %d) — HP not responding to commanded '%s'. "
-                        "Check Octopus API status and HP connectivity.",
-                        new_mismatch_count, readback_threshold, optimal_mode,
-                    )
-                elif should_update_mode:
-                    logging.warning(
-                        "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
-                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
-                    )
-                else:
-                    logging.info(
-                        "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
-                        "will trigger re-command next cycle",
-                        new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
-                    )
-        else:
-            new_mismatch_count = 0
-        applied_mode = observed_mode
-
-    return applied_mode, new_mismatch_count
+    # Readback computation is the driver-agnostic shared helper (the same one
+    # the MQTT injection calls), so HA and MQTT cannot drift. INSTRUCTION-339A.
+    return compute_mode_readback(
+        prev_mismatch_count=prev_mismatch_count,
+        optimal_mode=optimal_mode,
+        prev_mode=prev_mode,
+        hp_power_kw=hp_power_kw,
+        optimal_flow=optimal_flow,
+        return_temp=return_temp,
+        has_live_return_temp=has_live_return_temp,
+        readback_threshold=readback_threshold,
+        should_update_mode=should_update_mode,
+    )
 
 
 def apply_source_command(config, commands, dfan_control=True):
@@ -679,6 +759,64 @@ def set_auxiliary_output(config, entity: str, state: bool) -> bool:
         return True
     except Exception as e:
         logging.warning("set_auxiliary_output: dispatch failed for %s: %s", entity, e)
+        return False
+
+
+def release_supervisory_surface(config, surface, record=None) -> bool:
+    """Hand one supervisory surface back to native control on apoptosis dormancy
+    (INSTRUCTION-322A).
+
+    The hand-back is "stop overriding", not a new control action — the manufacturer
+    / native controller resumes ownership. Best-effort and defensive: never raises;
+    a surface with no actuatable hand-back is a logged no-op. Returns True when a
+    native hand-back dispatch was attempted, False otherwise.
+
+    Shadow-mode gating is the CALLER's responsibility — write_outputs only calls
+    this when control_enabled is True. The 225A manual-TRV carve-out is NOT used.
+    """
+    try:
+        if surface in ("hp_mode", "shoulder_command"):
+            # Release heat-source mode: command native 'heat' per source so the
+            # manufacturer controller (incl. native antifrost) resumes ownership.
+            sources = config.get("heat_sources", []) or []
+            named = {s.get("name", ""): "heat" for s in sources if s.get("name")}
+            if named:
+                apply_source_command(config, named, dfan_control=True)
+                return True
+            # Legacy single-source install with no per-source list — fall back to
+            # the configured control_method's native mode write.
+            apply_source_command(config, {}, dfan_control=True)
+            return False
+        if surface == "hp_flow_setpoint":
+            # Nothing to actively write — native weather compensation resumes once
+            # QSH ceases flow writes. The override simply stops.
+            return False
+        if surface in ("trv_position", "type2_external_temp"):
+            # Reset every direct-control valve (Type1/Type2) to native thermostat
+            # operation; this also drops any Type-2 external-temperature push.
+            from .valve_dispatch import reset_all_direct_valves_to_normal
+
+            count = reset_all_direct_valves_to_normal(config)
+            return count > 0
+        if surface == "auxiliary_output":
+            # Release every configured aux actuator to its native (off) state.
+            aux_cfg = config.get("auxiliary_outputs", {}) or {}
+            dispatched = False
+            for _room, room_aux in aux_cfg.items():
+                if not isinstance(room_aux, dict) or not room_aux.get("enabled"):
+                    continue
+                entity = room_aux.get("ha_entity")
+                if entity and set_auxiliary_output(config, entity, False):
+                    dispatched = True
+            return dispatched
+        logging.warning(
+            "release_supervisory_surface: unknown surface '%s' — skipped", surface
+        )
+        return False
+    except Exception as e:
+        logging.warning(
+            "release_supervisory_surface: %s hand-back failed: %s", surface, e
+        )
         return False
 
 
