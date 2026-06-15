@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.5.6] — 2026-06-15
+
+### Fixed
+- On installs that pair a boiler with a heat pump, the low-flow safety
+  lock no longer misreads a boiler's normal burner cycling as a fault. It
+  previously could block the heat call; it now applies only while a heat
+  pump is the active source. Boilers keep their dead-head bypass
+  protection.
+- Fixed a historian logging conflict on shadow-mode installs that was
+  silently dropping data points on each write.
+
+### Changed
+- MQTT installs now log when the outdoor temperature falls back to a
+  last-known or default value. Previously a missing outdoor-temperature
+  mapping could pin the reading at 5°C and quietly push the system into
+  winter-hold.
+
 ## [1.5.5] — 2026-06-15
 
 ### Changed
