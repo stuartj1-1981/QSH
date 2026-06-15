@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.5] — 2026-06-15
+
+### Changed
+- On mixed-source installs (for example a boiler alongside a heat pump), the
+  system now records the measured data — power and flow/return temperatures —
+  from whichever heat source is actually running. System identification and the
+  historian now reflect the active source rather than a fixed one.
+- The unit self-suspension safety check (sensor–actuator coupling) is now
+  source-agnostic: it evaluates the heat source currently in use, so it behaves
+  correctly on installs that switch between sources.
+
 ## [1.5.4] — 2026-06-14
 
 ### Added
