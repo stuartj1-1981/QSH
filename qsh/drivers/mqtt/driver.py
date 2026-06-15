@@ -106,6 +106,27 @@ def _register_mqtt_events() -> None:
         payload_fields=("fallback",),
         default_level=logging.WARNING,
     ))
+    # INSTRUCTION-337 — annunciate the two previously-silent outdoor arms.
+    # Stale-passthrough: an aged (still parseable, not yet unavailable) reading
+    # drives control with has_outdoor=False. INFO — the value is real (if aged),
+    # and has_outdoor=False already makes antifrost conservative. Singleton
+    # latch; temp is diagnostic context only (T-33).
+    ann.register(EventSpec(
+        name="MQTT.outdoor_stale_passthrough",
+        kind=EventKind.LATCHED,
+        payload_fields=("temp",),
+        default_level=logging.INFO,
+    ))
+    # No outdoor_temp mapping declared — the driver holds last-valid or falls
+    # back to a synthetic 5.0. WARNING — no outdoor sensor is wired (the
+    # condition that pinned OAT at 5.0 below the antifrost threshold, silently,
+    # on the MQTT dual-source install). Singleton latch; payload diagnostic only.
+    ann.register(EventSpec(
+        name="MQTT.outdoor_no_mapping_fallback",
+        kind=EventKind.LATCHED,
+        payload_fields=("value", "from_last_valid"),
+        default_level=logging.WARNING,
+    ))
 
 
 # INSTRUCTION-268 — writeback round-trip verification tolerance.
@@ -1246,6 +1267,8 @@ class MQTTDriver:
             has_outdoor = True
             _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
             _oat_ann.exited("MQTT.outdoor_stale_no_history")
+            _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+            _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
         elif _oat_val is not None:
             # quality == "stale": the aged payload passes through (current
             # behaviour, not a substitution). has_outdoor=False so the
@@ -1255,6 +1278,13 @@ class MQTTDriver:
             has_outdoor = False
             _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
             _oat_ann.exited("MQTT.outdoor_stale_no_history")
+            _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+            # INSTRUCTION-337 — an aged reading driving control is no longer
+            # silent (the prior arm only exited prior latches, never entered).
+            _oat_ann.entered(
+                "MQTT.outdoor_stale_passthrough",
+                temp=round(outdoor_temp, 1),
+            )
         elif outdoor_declared:
             # No parsed candidate this cycle. q is never None when declared
             # (never-received resolves "unavailable"); a parse failure can
@@ -1273,17 +1303,30 @@ class MQTTDriver:
                     age_s=int(_oat_age),
                     reason=_oat_reason,
                 )
+                _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
             else:
                 outdoor_temp = 5.0
                 _oat_ann.entered("MQTT.outdoor_stale_no_history", fallback=5.0)
+                _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
         else:
-            # No outdoor mapping configured — quiet hold-or-5.0 arm, mirroring
-            # the HA no-entity branch (sensor_fetcher.py:1184-1186). No events.
+            # No outdoor mapping configured — hold-or-5.0 arm, mirroring the HA
+            # no-entity branch (sensor_fetcher.py:1184-1186). INSTRUCTION-337 —
+            # no longer silent: WARNING because no outdoor sensor is wired and
+            # the value is synthetic/held. Deliberately louder than the HA
+            # equivalent; HA-side parity is a named follow-up (INSTRUCTION-338).
             outdoor_temp = (
                 self._outdoor_last_valid
                 if self._outdoor_last_valid is not None else 5.0
             )
             has_outdoor = False
+            _oat_ann.entered(
+                "MQTT.outdoor_no_mapping_fallback",
+                value=round(outdoor_temp, 1),
+                from_last_valid=self._outdoor_last_valid is not None,
+            )
+            _oat_ann.exited("MQTT.outdoor_stale_passthrough")
 
         return InputBlock(
             room_temps=room_temps,
