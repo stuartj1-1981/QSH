@@ -33,6 +33,9 @@ class _Performance(BaseModel):
 
 class HeatSourceState(BaseModel):
     type: Literal["heat_pump", "gas_boiler", "lpg_boiler", "oil_boiler"]
+    # INSTRUCTION-340 — additive optional name of the selected source. Optional
+    # so existing clients and payloads that predate 340 keep validating.
+    name: Optional[str] = None
     input_power_kw: float
     thermal_output_kw: Optional[float]
     thermal_output_source: Literal["measured", "computed", "unknown"]

@@ -190,6 +190,8 @@ class CycleSnapshot:
     # "nameplate" (caps.rated_kw fallback) | "unknown" (128A future-strengthening
     # sentinel — no information at all).
     active_source_input_power_source: str = "unknown"
+    # INSTRUCTION-340 — name of the source selected for recording this cycle.
+    active_source_name: str = ""
 
     # Tariff providers (INSTRUCTION-150C V5 E-M1).
     # tariff_providers_status: per-fuel snapshot of provider state (read off
@@ -301,6 +303,8 @@ def build_heat_source_payload(snap: "CycleSnapshot") -> Dict[str, Any]:
     perf_source = perf.source if perf is not None else "config"
     return {
         "type": snap.active_source_type,
+        # INSTRUCTION-340 — additive: name of the selected source.
+        "name": snap.active_source_name,
         "input_power_kw": round(snap.active_source_input_power_kw, 3),
         "thermal_output_kw": (
             round(snap.active_source_thermal_output_kw, 3)
@@ -773,6 +777,9 @@ class SharedState:
             active_source_input_power_source=getattr(
                 ctx, "active_source_input_power_source", "unknown"
             ),
+            # INSTRUCTION-340 — selected source name (defence-in-depth getattr
+            # for pre-340 test contexts that lack the attribute).
+            active_source_name=getattr(ctx, "active_source_name", ""),
             tariff_providers_status=_collect_tariff_providers_status(),
             available_provider_kinds=SUPPORTED_PROVIDER_KINDS,
             # INSTRUCTION-224D — per-emitter valve readings deep-copied from
