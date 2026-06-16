@@ -24,7 +24,6 @@
 15e1c6be4acb6a97e6a9d6938f84ded2eb6eac7493eec760cbba5ab14488d67d  ./swarm/consumers/rl_benchmarks.cpython-312-aarch64-linux-gnu.so
 164acb08d297a3ab31b0e37463225668c2ea473cf284e4de5beb121bdeec3689  ./forecast/parse.cpython-312-aarch64-linux-gnu.so
 1679c78164858d0218fab8182f253302c615c79d29ffb4dca4bfbdd6afc8321e  ./config_io.cpython-312-x86_64-linux-gnu.so
-1943321a74944ad56345e46ffcde88e9e59c5d412f0c5b1fad41ea5a9a6be021  ./pipeline/source_capabilities.cpython-312-x86_64-linux-gnu.so
 1a6547368bbab0fb1cdd192052c34e763819aab97686c1e2f9eb06578ed22a6c  ./swarm/builders/disturbance_packet.cpython-312-aarch64-linux-gnu.so
 1a963d46cdd35e9e20c8cc0e461040e92d026565c78318ca675ead89733fd39c  ./hw_aware.cpython-312-aarch64-linux-gnu.so
 1c1eee504a22454f855181ba97ceca3dc1488f66676c919e72a286d608dc3f8c  ./occupancy/schedule_store.cpython-312-x86_64-linux-gnu.so
@@ -63,12 +62,10 @@
 3cfed468db3f4790ff68d4541f367db51170bf6cb3fb89884fdb4e2faf7c2616  ./control.cpython-312-x86_64-linux-gnu.so
 3d69ab8756909b5530056ef2a8b8fe65f1eb66eab6f9fcd3ecf6b10a62ee4110  ./projection/forecast_predictor.cpython-312-x86_64-linux-gnu.so
 3e304310377c99239d64ba6a62e6fef7934576e0353c3870fb452479c9a4269c  ./rl_model.cpython-312-x86_64-linux-gnu.so
-3f459322c1d308864631458a867a05060611eb5c6c1cc535a07db028fda1126e  ./pipeline/controllers/source_selection.cpython-312-aarch64-linux-gnu.so
 3fcc5aeb48b26128ff7e18372ce4b922a8e38e138bc5b3c87756bb3b355ebe3c  ./pipeline/controllers/summer_controller.cpython-312-aarch64-linux-gnu.so
 3fda18240b182ec83c4c8b10d3cce98bc03b540660359b23c234e761b3c2ffdb  ./forecast/providers/mock.cpython-312-x86_64-linux-gnu.so
 4152a54f370701c7baec39aecd48e29b2521c28c3dd3c4de30933ec89eb82b73  ./forecast/providers/ha.cpython-312-x86_64-linux-gnu.so
 41f4a3ac7621c67e04b0c97967dcd64289ea7f1b99be13303f44437ed9983464  ./pipeline/controllers/energy_controller.cpython-312-aarch64-linux-gnu.so
-42911521e8578d8d9ffdb2453d7d1d13f4df4e77e873d660c33f8bd4d1bf4841  ./pipeline/source_capabilities.cpython-312-aarch64-linux-gnu.so
 445df7230d96717fa64475891e9c07745c6ea923e327b0d36f5aac9883874431  ./tariff/octopus_electricity.cpython-312-aarch64-linux-gnu.so
 4625d0168e9deda10ba41746cb839208c8ff53f53daefbac2e44b4fc9f778635  ./swarm/consumers/prior_cache.cpython-312-aarch64-linux-gnu.so
 46444d9e8f3bfa95d1f4dd024d069ba33fc5fa80f3c7bd7d1ec85b467884b53b  ./pipeline/controllers/apoptosis_arbiter.cpython-312-aarch64-linux-gnu.so
@@ -82,6 +79,7 @@
 4bf96f82aa914c35b95e8b4e99351faa789adba32996c627cfaa6a5e439ec4ab  ./pipeline/controllers/thermal_controller.cpython-312-x86_64-linux-gnu.so
 4c6bab6570ae72b4bd4cb69018667c6d575c9dc6f89c12e27e188c55e5d74e9a  ./debounce.cpython-312-x86_64-linux-gnu.so
 4fc0f50f1c717bca3a1019ae877b0400a462d08b394e079ca4c7f7af46ea55ed  ./swarm/confidence.cpython-312-aarch64-linux-gnu.so
+512d259f9b16db85631573056dc0ea7d9c90f3f25997cb83d36a1206aef6f39f  ./pipeline/source_capabilities.cpython-312-x86_64-linux-gnu.so
 51341be3dcf594eb240c8b99b48d58c1503fb5f8ef05e425b68420b552f91ec0  ./swarm/gate_state.cpython-312-aarch64-linux-gnu.so
 51769e4c0ff565aefa20b138c4a61917c4fe104312042b174a558e312361636d  ./tariff/fallback.cpython-312-x86_64-linux-gnu.so
 522ab9611cbb7e0b3ffabec20e84d11f473adeb22d7a5705f20f0f02743d37ce  ./projection/emitter_model.cpython-312-aarch64-linux-gnu.so
@@ -155,7 +153,6 @@
 9243c957f01902b870842008fe1cdfe9e53e74bb83aac63db810e42c2b1edb34  ./pipeline/controllers/boost_controller.cpython-312-aarch64-linux-gnu.so
 9329189f3d2564b40c4f07ab1907bc2a9b9610bf63431afd88bad941d5b97c29  ./swarm/runtime.cpython-312-aarch64-linux-gnu.so
 93760022055d87ed9d42d6aaedf4cb4d01c496d55f6027fa0a3487c28adb835b  ./pipeline/controllers/historian_controller.cpython-312-x86_64-linux-gnu.so
-93a0eb461f4a1c7bda95b9a2663c266c22f7bea789aece678ac382f140978810  ./config.cpython-312-x86_64-linux-gnu.so
 93fd5d0e75a6d7dce104a126f569310f93d6b9520874193a36672fdf574fc028  ./swarm/gates/global_gate.cpython-312-x86_64-linux-gnu.so
 968e2e42ee22e7487377ae5585772af56bec6b4b39d10d3f46a4e77a4d66b191  ./pipeline/controllers/heat_source_sensor_selector.cpython-312-x86_64-linux-gnu.so
 96984c86c7872068a6cc36e226ceb0cc1a1bf6ebb47afab64df6f66f169c39a3  ./pipeline/controllers/frost_constraint.cpython-312-x86_64-linux-gnu.so
@@ -171,8 +168,8 @@
 a01d2fddffeba284758b1838674fda7f82d92fe9a7fa0224211dc999c1c84425  ./forecast_history.cpython-312-x86_64-linux-gnu.so
 a17e0edc7810df9cc849a6c20056df293f24078e4933b9c51688539c38650148  ./tariff/ha_entity.cpython-312-aarch64-linux-gnu.so
 a1deff158b6f80025d891914485a7a88cbff42bd3cb11565036612c3e735b145  ./forecast/compute.cpython-312-x86_64-linux-gnu.so
-a2391b248a5d5bf546616ee792c33d4a68d82ff255c7a2f88ba7f0c166e46e85  ./config.cpython-312-aarch64-linux-gnu.so
 a2486e6548f1b03a8096a323a5252a3ddb94494bf94d4fb640023fb558aa9dd3  ./signal_bus.cpython-312-aarch64-linux-gnu.so
+a2a449b75d33f8d9e5e4a73da11adafabd4d84441da175577671c6ae288fb488  ./config.cpython-312-x86_64-linux-gnu.so
 a36a945e4deb4ea19cd9c4059470917d191ff2a50133c2b6327dd7e451664c6e  ./swarm/publisher.cpython-312-x86_64-linux-gnu.so
 a61c7cf1643517b8d82052645b037f90d3418ab2610d9861ab8a431ff04e6057  ./pipeline/controllers/swarm_context_enricher.cpython-312-aarch64-linux-gnu.so
 a8cfa8b4b2365b48fa2acdde77c33ab23f30a6b198909d21548d688f2c224406  ./projection/heat_source_model.cpython-312-x86_64-linux-gnu.so
@@ -187,11 +184,13 @@ b0ab0b544d34d2829da66f98dc423f9045c776a9df2d5211e2a02cc834319296  ./pipeline/con
 b10eb962849322c091c8f707382e68afee5b843faaf8e78e05014a3b48ba4c2b  ./pipeline/controllers/hw_controller.cpython-312-x86_64-linux-gnu.so
 b1b3918da4d1cf3052aab1e784b024536526a081b7f3668d8da51b5eaec616cc  ./swarm/consumers/disturbance.cpython-312-x86_64-linux-gnu.so
 b23ab1962f2bdded095f2b0eb5faf2d6d64fd6619938b830cf0b221f5d980130  ./forecast/provider.cpython-312-x86_64-linux-gnu.so
+b2d90ab677b2b6adbf329789889a7312a644c496fcb813c79ba096aa8df1edf2  ./config.cpython-312-aarch64-linux-gnu.so
 b30501367c2f7a6f72cff97b4e2e3df3a253a0404739843711cdbe764d89b822  ./octopus_identifiers.cpython-312-x86_64-linux-gnu.so
+b376477a96d7aa51237c05bc3154c1f9f6115774fa6797645d636e7c51995568  ./pipeline/controllers/source_selection.cpython-312-x86_64-linux-gnu.so
+b46e2817902dc5ef11f5ce4376a147f7405d46af67a331cad54cb73983161de6  ./pipeline/source_capabilities.cpython-312-aarch64-linux-gnu.so
 bba1f7f1eb8e176a0c3239616fa9b98e7d814f5645f17709e269447202433df2  ./pipeline/controllers/shadow_controller.cpython-312-x86_64-linux-gnu.so
 bc10f0ea61c572663f1cf34f73c9a5253033db4ace4e2f0467114554c4f8502b  ./swarm/builders/health_packet.cpython-312-x86_64-linux-gnu.so
 bc51e362a6434caba311cf35da0ca4fb17b803427fa8d4f12fb8061f0002aedf  ./occupancy/setback.cpython-312-x86_64-linux-gnu.so
-bd4b4d2f457ce839c35e9d4ed28bf25c36fcb56a8480d72e39e2dbee57bbd707  ./pipeline/controllers/source_selection.cpython-312-x86_64-linux-gnu.so
 be216f052c318527124b7e6f7b9fdfb12355138c87eef2bf5b43bb644b1f011a  ./forecast/providers/mqtt.cpython-312-x86_64-linux-gnu.so
 bf03524e2d3f090ec3eb14d15fcd700cd495d88943e1a1f748e2f1bd61590924  ./forecast_confidence.cpython-312-x86_64-linux-gnu.so
 bf166e749c35546242119935e6c9c892cf5cf366aca1dd30f1aecf843efce9d0  ./pipeline/controllers/tariff_optimiser.cpython-312-x86_64-linux-gnu.so
@@ -223,6 +222,7 @@ db7ada5d68752abe9d13e9ec98a06c990102c5f832c7595fee7a0489a47c882c  ./manual_state
 dc5a4692f8cb0c07571ee5fae355b9a3ab52d0f174a33c3141b30f6b85f298b6  ./events.cpython-312-aarch64-linux-gnu.so
 dce8851000ab6915cdadffd8801a197812db7dc7be20bc5bb0038f722eddce45  ./forecast/edge_detect.cpython-312-aarch64-linux-gnu.so
 ddea6c9998db23608a928182a1f49cd2be19b13aee98637ef2c9be3d747f18b8  ./pipeline/controllers/heat_source_sensor_selector.cpython-312-aarch64-linux-gnu.so
+ddfe2c989638520670db6164cbb1fffcf7464884761708c700754abac75cfa65  ./pipeline/controllers/source_selection.cpython-312-aarch64-linux-gnu.so
 de927238ab5221e59725bb61ebd458d3a8b5f85b68394906cd3a4c01e7277de0  ./paths.cpython-312-x86_64-linux-gnu.so
 deef154e99ea6ce669e24172b01de26000e267fb671eac9b358242d7d8d5fccf  ./swarm/queue.cpython-312-x86_64-linux-gnu.so
 e348da34496a228529ea28778cd2af41bf46086732d3177ff1967f56e6708059  ./events.cpython-312-x86_64-linux-gnu.so
