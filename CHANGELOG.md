@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.7] — 2026-06-16
+
+### Fixed
+- On dual-source installs (e.g. heat pump alongside a boiler), the source
+  selector no longer picks a source that is drivable but cannot be confirmed
+  via power feedback. Each source is now checked for both a command path and
+  a power-feedback slot before it can be selected.
+- If the active heat source is commanded on but fails to respond within its
+  readback window, the system now switches to the next available source
+  rather than waiting out the full error interval with no heat.
+
 ## [1.5.6] — 2026-06-15
 
 ### Fixed
