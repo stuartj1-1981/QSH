@@ -1459,16 +1459,23 @@ class MQTTDriver:
                     and routing.mqtt_flow_topic
                     and routing.mqtt_mode_topic
                 ):
-                    # Per-source addressing — publish verbatim to this source's topics
+                    # Per-source addressing — publish verbatim to this source's topics.
+                    # mqtt_mode_topic is the actuation-mode topic selector; the published
+                    # value is intentionally the command (optimal_mode), not the observed
+                    # readback (applied_mode).  On MQTT installs applied_mode == observed
+                    # mode (compute_mode_readback), so publishing it would be self-
+                    # fulfilling stuck-off while the HP is idle.
                     self._mqtt.publish(routing.mqtt_flow_topic, str(outputs.applied_flow))
-                    self._mqtt.publish(routing.mqtt_mode_topic, outputs.applied_mode)
+                    self._mqtt.publish(routing.mqtt_mode_topic, outputs.optimal_mode)
                 else:
-                    # Fall-back: existing shared output_mappings (prefixed) — unchanged path
+                    # Fall-back: existing shared output_mappings (prefixed) — unchanged path.
+                    # field=="applied_mode" is the actuation-mode topic selector; the
+                    # published value is intentionally the command (optimal_mode).
                     for om in self._topic_map.output_mappings:
                         if om.field == "applied_flow":
                             self._mqtt.publish(om.topic, str(outputs.applied_flow))
                         elif om.field == "applied_mode":
-                            self._mqtt.publish(om.topic, outputs.applied_mode)
+                            self._mqtt.publish(om.topic, outputs.optimal_mode)
             else:
                 logger.debug(
                     "SHADOW MODE: suppressed HP command flow=%.1f mode=%s",
