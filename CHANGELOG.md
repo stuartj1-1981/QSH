@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.5.7] — 2026-06-16
+## [1.5.8] — 2026-06-17
 
 ### Fixed
 - On dual-source installs (e.g. heat pump alongside a boiler), the source
@@ -12,6 +12,11 @@
 - If the active heat source is commanded on but fails to respond within its
   readback window, the system now switches to the next available source
   rather than waiting out the full error interval with no heat.
+- On MQTT installs, the actuation-mode topic was publishing the observed
+  state rather than the commanded mode. This caused a self-fulfilling
+  stuck-off loop where an idle heat pump would see itself commanded off,
+  never fire, and stay off indefinitely. The correct command is now
+  published.
 
 ## [1.5.6] — 2026-06-15
 
