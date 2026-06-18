@@ -318,6 +318,19 @@ def get_config():
         return {"error": "Config not yet loaded"}
 
     safe = _redact_config(config)
+    # INSTRUCTION-351A — derived, READ-ONLY flag the UI uses to gate the 'Octopus'
+    # DHW schedule-source option (351B). Single-sourced from the backend so the
+    # client never re-derives availability (no drift). It is NOT persisted YAML:
+    # it is added only to this GET response (a deep copy via _redact_config),
+    # never to shared_state's config nor to disk, and never appears in a PATCH
+    # *section* body — the 'root' allow-list does not include it either, so a
+    # write-back cannot persist it. Imported lazily (and defensively) so the API
+    # module import graph does not pull the HA driver in at config.py load time.
+    try:
+        from qsh.drivers.ha import octopus_hp_control
+        safe["octopus_dhw_signal_available"] = octopus_hp_control.dhw_activity_available()
+    except Exception:
+        safe["octopus_dhw_signal_available"] = False
     return safe
 
 

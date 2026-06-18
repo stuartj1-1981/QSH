@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Dict, Optional, Set, Tuple
 
+from . import octopus_hp_control
 from .integration import fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
 from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
@@ -1281,8 +1282,26 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     _register_events()
     _hw_ann = get_annunciator()
     hw_sources = []
-    if water_heater_entity:
+    # INSTRUCTION-351A — auto-prefer the Octopus WATER-zone heatDemand/
+    # relaySwitchedOn signal over the water_heater mode string, but ONLY when the
+    # API can actually return a reading (dhw_activity_available() — NOT merely
+    # is_available()). The water_heater entity reports an operation MODE that sits
+    # at 'heat_pump' (classified OFF) under a scheduled DHW cycle, so it never
+    # surfaces scheduled DHW; the per-zone telemetry is the real run-status. On a
+    # non-Octopus install, or an Octopus HP without an account number, the legacy
+    # water_heater classification source is used unchanged — no regression, no
+    # DHW-detection hole. hot_water_boolean (if configured) is an OR-partner in
+    # both branches (and the documented immersion escape hatch).
+    _dhw_prefer_octopus = octopus_hp_control.dhw_activity_available()
+    if _dhw_prefer_octopus:
+        octo_value, octo_live = octopus_hp_control.get_water_zone_activity()
+        hw_sources.append((octo_value, octo_live))
+        _primary_live = octo_live
+    elif water_heater_entity:
         hw_sources.append((wh_value, wh_live))
+        _primary_live = wh_live
+    else:
+        _primary_live = False
     if hw_boolean_entity:
         hw_sources.append((bool_value, bool_live))
 
@@ -1311,8 +1330,10 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         _hw_ann.exited("HA.hot_water_stale_lastvalid", held_value=True)
         _hw_ann.exited("HA.hot_water_stale_lastvalid", held_value=False)
 
-    if water_heater_entity or hw_boolean_entity:
-        data.has_live_hot_water = wh_live or bool_live
+    if _dhw_prefer_octopus or water_heater_entity or hw_boolean_entity:
+        # Liveness of the CHOSEN primary source (Octopus telemetry when preferred,
+        # else the water_heater classification) OR the boolean partner.
+        data.has_live_hot_water = _primary_live or bool_live
 
     data.stale_sensors = sensor_health.get_stale_sensors()
     data.stale_rooms = sensor_health.get_stale_rooms(config)

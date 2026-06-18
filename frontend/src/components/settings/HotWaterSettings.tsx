@@ -32,6 +32,10 @@ interface HotWaterSettingsProps {
   heatSource?: HeatSourceYaml
   mqtt?: MqttConfig
   driver: Driver
+  /** INSTRUCTION-351B — backend octopus_dhw_signal_available (351A Task 4).
+   *  Gates the "Octopus" Schedule Source radio on the authoritative predicate
+   *  under which the API DHW signal actually applies — NOT on driver. */
+  octopusDhwAvailable?: boolean
   onRefetch: () => void
 }
 
@@ -43,6 +47,7 @@ export function HotWaterSettings({
   heatSource: initialHeatSource,
   mqtt: initialMqtt,
   driver,
+  octopusDhwAvailable,
   onRefetch,
 }: HotWaterSettingsProps) {
   const hasCylinder = initialPlan !== undefined && initialPlan !== 'Combi'
@@ -137,10 +142,15 @@ export function HotWaterSettings({
     setHwActiveTopic(extractTopic(inputs.hot_water_active))
   }, [initialMqtt])
 
-  // On MQTT, force schedule source to 'fixed' — HA entity schedule is unavailable
+  // On MQTT, coerce the schedule source to 'fixed'. Neither 'entity' (HA Schedule
+  // integration unavailable on MQTT) nor 'octopus' (the Octopus API is
+  // unreachable, so octopus_dhw_signal_available is False and that radio is
+  // hidden) is displayable or serviceable here — a driver switch must not strand
+  // a source the UI cannot render. INSTRUCTION-351B F5: undisplayable/unreachable,
+  // not "invalid" (351A imposes no allow-list on the value).
   useEffect(() => {
-    if (driver === 'mqtt' && schedule.source === 'entity') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- coerce invalid source on driver change
+    if (driver === 'mqtt' && (schedule.source === 'entity' || schedule.source === 'octopus')) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- coerce undisplayable source on driver change
       setSchedule(prev => ({ ...prev, source: 'fixed' }))
     }
   }, [driver, schedule.source])
@@ -331,11 +341,38 @@ export function HotWaterSettings({
                 />
                 <span className="text-sm text-[var(--text)]">Fixed time</span>
               </label>
+              {/* INSTRUCTION-351B — gated on the backend flag (351A Task 4), NOT
+                  on driver: a non-Octopus HA install must not be offered a source
+                  that would suppress the QSH window while the backend silently
+                  uses the legacy water_heater path. */}
+              {octopusDhwAvailable === true && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="schedule_source"
+                    checked={schedule.source === 'octopus'}
+                    onChange={() => setSchedule(prev => ({ ...prev, source: 'octopus' }))}
+                    className="accent-[var(--accent)]"
+                  />
+                  <span className="text-sm text-[var(--text)] flex items-center gap-1">
+                    Octopus (reactive — live demand) <HelpTip text={HOT_WATER.scheduleOctopus} size={12} />
+                  </span>
+                </label>
+              )}
             </div>
 
             {driver === 'mqtt' && (
               <p className="text-xs text-[var(--text-muted)]">
                 HA Schedule integration is unavailable on MQTT driver. Use fixed-time scheduling.
+              </p>
+            )}
+
+            {schedule.source === 'octopus' && (
+              <p className="text-xs text-[var(--text-muted)]">
+                QSH tracks DHW activity live from the Octopus heat-pump API
+                (WATER-zone heat demand). The Cosy&apos;s own schedule/boost drives
+                the cylinder; QSH does not impose a fixed time and does not read a
+                forward schedule (the Octopus schedule is write-only).
               </p>
             )}
 
@@ -421,6 +458,13 @@ export function HotWaterSettings({
               <p className="text-xs font-medium text-[var(--text-muted)] mb-2 flex items-center gap-1">
                 Hot Water Signals <HelpTip text={HOT_WATER.signalsGroup} size={12} />
               </p>
+              {schedule.source === 'octopus' && (
+                <p className="text-xs text-[var(--text-muted)] mb-2">
+                  On Octopus, the DHW-active signal is taken automatically from the
+                  Octopus API (WATER-zone heat demand). The Water Heater Entity
+                  below is used for tank temperature only, not activity.
+                </p>
+              )}
               {driver === 'mqtt' ? (
                 <>
                   <TopicField

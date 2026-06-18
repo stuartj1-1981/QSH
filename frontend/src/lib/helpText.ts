@@ -20,6 +20,7 @@ export const HOT_WATER = {
   signalsGroup: 'How QSH detects that the heat pump has diverted to hot water. Either signal alone is enough; if both are set, ON from either marks DHW active (logical OR).',
   signalsPrimary: 'The primary DHW active indicator. For HA, a water_heater entity whose state goes off/eco/electric/heat_pump/gas/performance/idle when not heating water and on/high_demand/heat when heating. For MQTT, a topic publishing the same payload set.',
   signalsBoolean: "Optional second indicator OR'd with the primary. Accepts on, true, 1, heat, high_demand as ON. Use when your installation exposes a clean boolean alongside (or instead of) the water_heater entity.",
+  scheduleOctopus: 'For Octopus heat pumps, QSH reads DHW activity live from the Octopus API (WATER-zone heat demand) instead of imposing a fixed time. The Cosy’s own schedule and boost drive the cylinder; QSH reacts to demand and does not read a forward schedule (the Octopus schedule is write-only). The water-heater entity is then used for tank temperature only.',
 } as const
 
 export const SOLAR = {

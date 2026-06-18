@@ -892,3 +892,43 @@ def apply_failsafe(config, safe_flow=40.0, safe_mode="heat"):
 
     except Exception as e:
         logging.error(f"FAILSAFE: Failed to apply safe defaults: {e}")
+
+    # ── INSTRUCTION-346: per-source all-off backstop (dual-fire parity) ──────
+    # The top-level dispatch above commands the active actuator to safe state.
+    # On a multi-source install every NON-active source must additionally be
+    # driven off, or HA relies solely on the edge-gated per-source command loop
+    # (apply_source_command on source_changed) to retire a de-selected source —
+    # no backstop against a stale-retained 'heat' (the INSTRUCTION-328 dual-fire
+    # mechanism) at the one event designed to force safe state. Mirrors the MQTT
+    # failsafe (qsh/drivers/mqtt/driver.py:1768-1781). Dispatched AFTER the
+    # top-level block so an 'off' lands last and wins if the top-level actuator
+    # coincides with a non-active source. 'heat' is NEVER sent to a non-active
+    # source. Own try/except: a backstop failure must not abort failsafe.
+    #
+    # dfan_control=True is deliberate: failsafe runs whenever driver.is_realtime
+    # (main.py:854) — INCLUDING shadow mode — and the top-level block above
+    # writes unconditionally. Passing the shadow flag here would suppress only
+    # the offs while the active source's write proceeds, re-opening dual-fire on
+    # a shadow-mode crash. Unconditional dispatch is the safe parity.
+    heat_sources = config.get("heat_sources", []) or []
+    if heat_sources:
+        try:
+            active_name = config.get("active_source_name")
+            by_name = {s.get("name", ""): s for s in heat_sources}
+            active_src = by_name.get(active_name) or heat_sources[0]
+            active_resolved = active_src.get("name") if active_src else None
+            off_commands = {}
+            for s in heat_sources:
+                name = s.get("name", "")
+                if name and name != active_resolved:
+                    off_commands[name] = "off"
+            if off_commands:
+                logging.warning(
+                    "FAILSAFE: driving %d non-active source(s) off: %s",
+                    len(off_commands), sorted(off_commands),
+                )
+                apply_source_command(config, off_commands, dfan_control=True)
+        except Exception as e:  # noqa: BLE001 — failsafe must never raise
+            logging.error(
+                "FAILSAFE: per-source all-off backstop failed: %s", e,
+            )
