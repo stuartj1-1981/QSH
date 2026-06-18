@@ -31,6 +31,7 @@ import socket  # for socket.timeout exception type in _graphql_request retry bra
 import time    # also used for response-elapsed instrumentation in _graphql_request
 import threading
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional, Tuple
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -81,6 +82,19 @@ _consecutive_failures = 0
 _MAX_FAILURES_BEFORE_BACKOFF = 3
 _zone_setpoint = 23.0  # Safe default; updated by set_zone_setpoint()
 
+# INSTRUCTION-351A — WATER-zone DHW activity read.
+# Bounded TTL cache holds ONLY the last SUCCESSFULLY fetched value so a 30 s
+# pipeline cycle does not hit the Kraken API every cycle. Failures and backoff
+# never write or extend the cache (falling-edge latency is therefore bounded at
+# _ACTIVITY_TTL_S). This keeps the cache and the downstream INSTRUCTION-301
+# last-valid hold SEQUENTIAL, not stacked: within TTL the cache serves the last
+# live value; on TTL expiry a real fetch occurs; a failed fetch returns non-live,
+# which is what engages the 301 hold. The two layers cannot compound to extend
+# "held True" beyond _ACTIVITY_TTL_S + the 301 window.
+_ACTIVITY_TTL_S = 60.0
+_activity_cache_value: Optional[bool] = None
+_activity_cache_ts = 0.0
+
 
 def init(api_key, hp_euid, account_number="", zone_entity_id=""):
     """
@@ -107,6 +121,114 @@ def init(api_key, hp_euid, account_number="", zone_entity_id=""):
 def is_available():
     """Check if direct API is configured and available."""
     return _initialised and _api_key is not None
+
+
+def dhw_activity_available() -> bool:
+    """Single auto-prefer gate for the WATER-zone DHW read (INSTRUCTION-351A).
+
+    is_available() alone is insufficient: _account_number is OPTIONAL at init()
+    (defaults to ""), so is_available() can be True while the status read — which
+    requires the account number AND the EUID — cannot succeed. Gating the
+    sensor_fetcher auto-prefer on this predicate, rather than on is_available(),
+    closes the "drop the water_heater source AND then get (None, False)"
+    DHW-detection hole. Defined as the SOLE gate so the read precondition cannot
+    diverge from the auto-prefer decision.
+    """
+    return is_available() and bool(_account_number) and bool(_hp_euid)
+
+
+# INSTRUCTION-351A — WATER-zone status read. heatPumpControllerStatus is the
+# new-backend (un-prefixed) field, consistent with this module's other mutations
+# on API_URL (heatPumpSetZoneMode / heatPumpUpdateFlowTemperatureConfiguration).
+# heatDemand / relaySwitchedOn are the real DHW run-status; the water_heater
+# entity reports only an operation MODE (sits at 'heat_pump', classified OFF,
+# under a scheduled cycle) and never surfaces scheduled DHW.
+_WATER_ZONE_STATUS_QUERY = """
+query HeatPumpControllerStatus($accountNumber: String!, $euid: String!) {
+  heatPumpControllerStatus(accountNumber: $accountNumber, euid: $euid) {
+    zones {
+      zone
+      telemetry {
+        mode
+        relaySwitchedOn
+        heatDemand
+      }
+    }
+  }
+}
+"""
+
+
+def get_water_zone_activity() -> Tuple[Optional[bool], bool]:
+    """Read the WATER-zone DHW run-status from the Octopus Kraken API.
+
+    Returns (active, live):
+        (True,  True)  -> DHW running   (heatDemand OR relaySwitchedOn True)
+        (False, True)  -> DHW idle      (both False)
+        (None,  False) -> no live reading (not configured, backing off, or
+                          fetch/parse failure)
+
+    A non-live (None, False) is precisely what engages the INSTRUCTION-301
+    last-valid hold in resolve_hot_water_active downstream.
+    """
+    global _consecutive_failures, _activity_cache_value, _activity_cache_ts
+
+    if not dhw_activity_available():
+        logging.debug(
+            "Octopus DHW activity: precondition not met (api_key/euid/account) — no reading"
+        )
+        return (None, False)
+
+    # Backoff guard — does NOT serve the cache (H5). Under backoff the read must
+    # return non-live so the 301 hold engages; serving a stale cached True here
+    # would stack the two hold layers and extend "held True" unbounded.
+    if _consecutive_failures >= _MAX_FAILURES_BEFORE_BACKOFF:
+        _consecutive_failures = max(0, _consecutive_failures - 1)  # slowly recover
+        return (None, False)
+
+    # TTL cache — serves only the last SUCCESSFULLY fetched value (a bool); a
+    # None sentinel means "nothing cached yet". Failures/backoff never reach here.
+    now = time.time()
+    if _activity_cache_value is not None and (now - _activity_cache_ts) <= _ACTIVITY_TTL_S:
+        return (_activity_cache_value, True)
+
+    token = _ensure_token()
+    if not token:
+        return (None, False)
+
+    result = _graphql_request(
+        _WATER_ZONE_STATUS_QUERY,
+        {"accountNumber": _account_number, "euid": _hp_euid},
+        token=token,
+        url=API_URL,
+    )
+    if not result:
+        _consecutive_failures += 1
+        return (None, False)
+
+    try:
+        data = result.get("data") or {}
+        status = data.get("heatPumpControllerStatus") or {}
+        zones = status.get("zones") or []
+        water = next(
+            (z for z in zones if isinstance(z, dict) and z.get("zone") == "WATER"),
+            None,
+        )
+        if water is None:
+            _consecutive_failures += 1
+            logging.debug("Octopus DHW activity: no WATER zone in status response")
+            return (None, False)
+        telemetry = water.get("telemetry") or {}
+        active = bool(telemetry.get("heatDemand")) or bool(telemetry.get("relaySwitchedOn"))
+    except (AttributeError, TypeError) as e:
+        _consecutive_failures += 1
+        logging.debug(f"Octopus DHW activity: malformed status response: {e}")
+        return (None, False)
+
+    _activity_cache_value = active
+    _activity_cache_ts = now
+    _consecutive_failures = 0
+    return (active, True)
 
 
 def set_zone_setpoint(temp):

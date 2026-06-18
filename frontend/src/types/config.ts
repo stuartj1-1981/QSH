@@ -383,7 +383,7 @@ export interface SolarYaml {
 }
 
 export interface HwScheduleYaml {
-  source?: 'entity' | 'fixed'
+  source?: 'entity' | 'fixed' | 'octopus'
   entity_id?: string
   attribute_name?: string
   fixed_start_time?: string
@@ -493,6 +493,13 @@ export interface QshConfigYaml {
   // Vendor write-budget knobs (216A/B). Integers in [3, 6]; default 6.
   flow_writes_per_hour?: number
   mode_writes_per_hour?: number
+
+  /** INSTRUCTION-351A — derived, read-only runtime flag served on the PROCESSED
+   *  GET /api/config (NOT /api/config/raw, NOT a persisted YAML key). True iff
+   *  the Octopus direct API can read live WATER-zone DHW activity
+   *  (dhw_activity_available()). Gates the Hot Water → Schedule Source "Octopus"
+   *  radio. Never written back on PATCH. */
+  octopus_dhw_signal_available?: boolean
 }
 
 /** Entity candidate returned by the wizard scan endpoint. */

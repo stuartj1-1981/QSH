@@ -45,6 +45,25 @@ export function Settings({ onRunWizard }: SettingsProps) {
     return () => { cancelled = true }
   }, [shoulderTick])
 
+  // INSTRUCTION-351B — octopus_dhw_signal_available is a derived runtime flag on
+  // the PROCESSED /api/config (351A Task 4), not a raw-YAML key, so it is absent
+  // from useRawConfig's data. Fetch it directly — the same pattern as
+  // shoulderThreshold above (a non-YAML derived value). Re-read whenever the raw
+  // config reloads (i.e. after any Save → refetch), so configuring the Octopus
+  // API in Tariff settings flips the flag without a manual page reload. Gates the
+  // Hot Water → Schedule Source "Octopus" radio.
+  const [octopusDhwAvailable, setOctopusDhwAvailable] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    fetch(apiUrl('api/config'))
+      .then((resp) => (resp.ok ? resp.json() : null))
+      .then((json) => {
+        if (!cancelled && json) setOctopusDhwAvailable(json.octopus_dhw_signal_available === true)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [data])
+
   const handleSeasonalRefetch = useCallback(() => {
     setShoulderTick((t) => t + 1)
     refetch()
@@ -135,6 +154,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
             heatSource={data.heat_source}
             mqtt={data.mqtt}
             driver={driver}
+            octopusDhwAvailable={octopusDhwAvailable}
             onRefetch={refetch}
           />
         )

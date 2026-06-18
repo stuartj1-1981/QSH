@@ -189,3 +189,118 @@ describe('HotWaterSettings — DHW signals (INSTRUCTION-236)', () => {
     })
   })
 })
+
+describe('HotWaterSettings — Octopus schedule source (INSTRUCTION-351B)', () => {
+  const baseProps = {
+    hwPlan: 'W' as const,
+    hwTank: { volume_litres: 200, target_temperature: 50 },
+    heatSource: { type: 'heat_pump' as const, sensors: { water_heater: 'water_heater.main' } },
+    onRefetch: () => {},
+  }
+
+  it('renders the Octopus radio only when octopusDhwAvailable is true', () => {
+    const { unmount } = render(
+      <HotWaterSettings {...baseProps} driver="ha" octopusDhwAvailable={true} />,
+    )
+    expect(screen.getByRole('radio', { name: /Octopus \(reactive/i })).toBeInTheDocument()
+    unmount()
+
+    // Non-Octopus HA install: flag false → hidden.
+    const ha = render(<HotWaterSettings {...baseProps} driver="ha" octopusDhwAvailable={false} />)
+    expect(screen.queryByRole('radio', { name: /Octopus \(reactive/i })).not.toBeInTheDocument()
+    ha.unmount()
+
+    // Flag undefined (prop omitted) → hidden.
+    const undef = render(<HotWaterSettings {...baseProps} driver="ha" />)
+    expect(screen.queryByRole('radio', { name: /Octopus \(reactive/i })).not.toBeInTheDocument()
+    undef.unmount()
+
+    // MQTT driver (flag false) → hidden.
+    render(<HotWaterSettings {...baseProps} driver="mqtt" octopusDhwAvailable={false} />)
+    expect(screen.queryByRole('radio', { name: /Octopus \(reactive/i })).not.toBeInTheDocument()
+  })
+
+  it('selecting Octopus sets source to octopus and hides the entity/time inputs', () => {
+    render(<HotWaterSettings {...baseProps} driver="ha" octopusDhwAvailable={true} />)
+    // Default source is 'fixed' → Start Time visible to begin with.
+    expect(screen.getByText('Start Time')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: /Octopus \(reactive/i }))
+
+    expect(screen.queryByText('Start Time')).not.toBeInTheDocument()
+    expect(screen.queryByText('Schedule Entity')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/QSH tracks DHW activity live from the Octopus heat-pump API/i),
+    ).toBeInTheDocument()
+  })
+
+  it('Save with source=octopus patches hw_schedule with source octopus', async () => {
+    render(
+      <HotWaterSettings
+        {...baseProps}
+        hwSchedule={{ source: 'octopus' }}
+        driver="ha"
+        octopusDhwAvailable={true}
+      />,
+    )
+    fireEvent.click(screen.getByText('Save Changes'))
+
+    await waitFor(() => {
+      const call = patchOrDelete.mock.calls.find(c => c[0] === 'hw_schedule')
+      expect(call).toBeTruthy()
+      expect(call![1]).toBe(true)
+      expect(call![2].source).toBe('octopus')
+    })
+  })
+
+  it('Hot Water Signals shows the tank-temp-only note iff source is octopus', () => {
+    const note = /Water Heater Entity below is used for tank temperature only/i
+    const oct = render(
+      <HotWaterSettings
+        {...baseProps}
+        hwSchedule={{ source: 'octopus' }}
+        driver="ha"
+        octopusDhwAvailable={true}
+      />,
+    )
+    expect(screen.getByText(note)).toBeInTheDocument()
+    // The Water Heater Entity field itself remains visible (tank temp source).
+    expect(screen.getByText('Water Heater Entity (primary)')).toBeInTheDocument()
+    oct.unmount()
+
+    render(<HotWaterSettings {...baseProps} hwSchedule={{ source: 'fixed' }} driver="ha" />)
+    expect(screen.queryByText(note)).not.toBeInTheDocument()
+  })
+
+  it('MQTT coerces a persisted octopus source to fixed', async () => {
+    render(
+      <HotWaterSettings
+        {...baseProps}
+        hwSchedule={{ source: 'octopus', fixed_start_time: '03:00' }}
+        mqtt={{ broker: 'localhost', port: 1883, inputs: {} } as MqttConfig}
+        driver="mqtt"
+        octopusDhwAvailable={false}
+      />,
+    )
+    // After the coercion effect, the Fixed-time inputs are shown and the Octopus
+    // schedule note is gone.
+    await waitFor(() => expect(screen.getByText('Start Time')).toBeInTheDocument())
+    expect(screen.queryByText(/QSH tracks DHW activity live/i)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => {
+      const call = patchOrDelete.mock.calls.find(c => c[0] === 'hw_schedule')
+      expect(call).toBeTruthy()
+      expect(call![2].source).toBe('fixed')
+    })
+  })
+
+  it('regression: entity/fixed radios and DHW signal fields unaffected when flag absent', () => {
+    render(<HotWaterSettings {...baseProps} hwSchedule={{ source: 'fixed' }} driver="ha" />)
+    expect(screen.getByRole('radio', { name: /HA entity/i })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Fixed time/i })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: /Octopus \(reactive/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Water Heater Entity (primary)')).toBeInTheDocument()
+    expect(screen.getByText("Hot Water Boolean Entity (optional, OR'd)")).toBeInTheDocument()
+  })
+})

@@ -12,18 +12,19 @@ registered through topic_map. They are added inline to MQTTDriver.setup()'s
 subscription set via direct extension of all_topics before
 self._mqtt.subscribe() is called.
 
-The forecast topic (`mqtt.inputs.forecast.topic`) is the first such
-subscribe-only topic and the canonical example of the pattern. Forecast
-data flows through ctx.forecast_state (set by ForecastController via
-the ForecastProvider Protocol introduced by INSTRUCTION-220A), not
-through InputBlock — hence the topic_map exclusion.
+INSTRUCTION-345 (17 June 2026): the subscribe-only exclusion is now
+*implemented* via `SUBSCRIBE_ONLY_INPUT_KEYS` (a frozenset declared after
+`_FIELD_CATEGORY_INFERENCE`). Keys in that set are skipped in the
+`mqtt.inputs` loop — they never produce an InputBlock mapping and never
+enter the signal-quality monitor. The forecast topic is the founding
+member; future subscribe-only topics are added there.
 
-Future subscribe-only topics follow the same pattern: extend setup()'s
-all_topics inline; document the field in this docstring; do not register
-in topic_map. If a third subscribe-only topic surfaces, consider whether
-to extend topic_map for subscribe-only entries as a structural cleanup
-(option (a) of S-4 disposition; cheaper to defer until justified by
-multiple cases).
+`mqtt.inputs` keys that are neither in `SYSTEM_INPUT_FIELDS` /
+`SYSTEM_STRING_INPUT_FIELDS` nor in `SUBSCRIBE_ONLY_INPUT_KEYS` are
+skipped with a one-time config-load WARNING naming the key. Previously
+they silently produced a phantom `_shadow_<key>` field tracked by the
+signal-quality monitor under the 90/300 `default` category, generating
+spurious stale/unavailable transitions for slow-cadence topics.
 """
 
 from __future__ import annotations
@@ -75,6 +76,25 @@ _FIELD_CATEGORY_INFERENCE: Dict[str, str] = {
     "solar_production": "energy",
     "battery_soc": "energy",
 }
+
+
+# ── Subscribe-only mqtt.inputs keys (single source of truth) ─────────────────
+# Topics QSH subscribes to but does NOT route into the per-cycle InputBlock.
+# They are consumed via a dedicated provider/Protocol path and subscribed
+# explicitly in the driver setup(), so they MUST NOT be registered as InputBlock
+# mappings here. Registering one creates a phantom `_shadow_<key>` field that the
+# signal-quality monitor tracks under the 90/300 `default` category, emitting
+# spurious stale/unavailable transitions for slow-cadence topics (forecast
+# publishes every ~20 min). This is the structural form of the exclusion the
+# module docstring describes (S-4 option (a), now implemented — INSTRUCTION-345).
+#
+#   forecast → MQTTForecastProvider, via entities.forecast_mqtt_topic,
+#              subscribed inline in MQTTDriver.setup() (driver.py:391-403).
+#
+# To add a subscribe-only topic: add its mqtt.inputs key here AND wire its
+# subscription in the driver setup(). topic_map then correctly leaves it out of
+# the InputBlock signal-quality pipeline. INSTRUCTION-345.
+SUBSCRIBE_ONLY_INPUT_KEYS: frozenset = frozenset({"forecast"})
 
 
 @dataclass
@@ -619,6 +639,11 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
     # ── System input topics ──
     inputs = mqtt_cfg.get("inputs", {})
     for config_key, topic_cfg in inputs.items():
+        if config_key in SUBSCRIBE_ONLY_INPUT_KEYS:
+            # Subscribe-only — consumed by a provider and subscribed inline in
+            # MQTTDriver.setup(); never an InputBlock mapping. INSTRUCTION-345.
+            continue
+
         if config_key in per_source_covered_slots:
             logger.debug(
                 "L1: skipping legacy mqtt.inputs.%s — covered by per-source "
@@ -648,8 +673,26 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
 
         ib_field = SYSTEM_INPUT_FIELDS.get(
             config_key,
-            SYSTEM_STRING_INPUT_FIELDS.get(config_key, f"_shadow_{config_key}"),
+            SYSTEM_STRING_INPUT_FIELDS.get(config_key),
         )
+        if ib_field is None:
+            # Not a recognised InputBlock field and not a declared subscribe-only
+            # topic. Historically this silently became a phantom _shadow_<key>
+            # field tracked by the signal-quality monitor (INSTRUCTION-345 root
+            # cause). Skip + warn at config-load so a typo or an undeclared
+            # subscribe-only topic surfaces loudly instead of generating
+            # per-cycle signal-quality noise.
+            logger.warning(
+                "mqtt.inputs.%s is not a recognised InputBlock field and is not "
+                "a declared subscribe-only topic %s; ignoring it. If it is "
+                "subscribe-only, add it to SUBSCRIBE_ONLY_INPUT_KEYS and wire its "
+                "subscription in the driver setup(); if it should populate the "
+                "InputBlock, add it to SYSTEM_INPUT_FIELDS / "
+                "SYSTEM_STRING_INPUT_FIELDS.",
+                config_key, sorted(SUBSCRIBE_ONLY_INPUT_KEYS),
+            )
+            continue
+
         inferred_cat = category or infer_category(ib_field, config_key)
         tm.input_mappings.append(TopicMapping(
             topic=_prefixed(prefix, raw_topic),
