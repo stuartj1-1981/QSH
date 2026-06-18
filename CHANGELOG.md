@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [1.5.9] — 2026-06-18
+
+### Added
+- Octopus heat-pump installs can now take hot-water demand directly from the
+  live Octopus signal. On a fully-configured Octopus install, scheduled DHW
+  cycles are detected from the heat pump's own demand telemetry instead of the
+  water-heater entity's operation mode, which never surfaced scheduled cycles.
+  Enable it on Settings → Hot Water with the new "Octopus (reactive — live
+  demand)" source; the water-heater entity is then used for tank temperature
+  only.
+
+### Fixed
+- On Home Assistant installs with two heat sources, the failsafe now forces
+  every non-active heat source off, preventing both sources from firing
+  together during a safety action. This matches the protection the MQTT driver
+  already had.
+
+### Changed
+- MQTT subscribe-only inputs (e.g. forecast) are now handled cleanly and kept
+  out of the signal-quality monitor. Unrecognised input keys are logged once
+  and skipped rather than being silently tracked as phantom fields.
+
 ## [1.5.8] — 2026-06-17
 
 ### Fixed
