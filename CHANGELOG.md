@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.10] — 2026-06-19
+
+### Fixed
+- Fixed the Octopus hot-water demand signal on Octopus heat-pump installs. The
+  heat-pump status query was being rejected by Octopus's API because of an
+  incorrect field type, so scheduled hot-water cycles weren't detected. The
+  query is now accepted and the live demand signal works as intended.
+
 ## [1.5.9] — 2026-06-18
 
 ### Added
