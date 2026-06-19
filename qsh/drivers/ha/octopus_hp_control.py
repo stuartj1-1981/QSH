@@ -144,7 +144,7 @@ def dhw_activity_available() -> bool:
 # entity reports only an operation MODE (sits at 'heat_pump', classified OFF,
 # under a scheduled cycle) and never surfaces scheduled DHW.
 _WATER_ZONE_STATUS_QUERY = """
-query HeatPumpControllerStatus($accountNumber: String!, $euid: String!) {
+query HeatPumpControllerStatus($accountNumber: String!, $euid: ID!) {
   heatPumpControllerStatus(accountNumber: $accountNumber, euid: $euid) {
     zones {
       zone
