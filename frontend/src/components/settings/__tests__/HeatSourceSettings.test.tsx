@@ -470,7 +470,7 @@ describe('HeatSourceSettings — multi-card editor (INSTRUCTION-237B)', () => {
     expect(screen.queryByText(/Lock to Alpha$/)).toBeNull()
   })
 
-  it('fuel_cost fields visible for gas_boiler card, hidden for heat_pump card (case 14)', () => {
+  it('fuel_cost fields visible for both heat_pump and gas_boiler cards (case 14, 354B)', () => {
     render(
       <HeatSourceSettings
         heatSource={baseHs}
@@ -482,9 +482,10 @@ describe('HeatSourceSettings — multi-card editor (INSTRUCTION-237B)', () => {
         onRefetch={noop}
       />,
     )
-    // Card 1 (HP) is expanded by default — no fuel cost field on disk.
-    expect(document.getElementById('source-0-fuel-cost')).toBeNull()
-    // Expand card 2 (gas_boiler).
+    // Card 1 (HP) is expanded by default — 354B lifts the HP gate so the
+    // fuel cost field now renders for the heat pump too.
+    expect(document.getElementById('source-0-fuel-cost')).not.toBeNull()
+    // Expand card 2 (gas_boiler) — still present (no regression).
     fireEvent.click(screen.getByRole('button', { name: 'Expand source 2' }))
     expect(document.getElementById('source-1-fuel-cost')).not.toBeNull()
   })
@@ -898,7 +899,7 @@ describe('HeatSourceSettings — GSHP source type (INSTRUCTION-242)', () => {
     expect(screen.getByText(/^COP$/)).toBeInTheDocument()
   })
 
-  it('does not render fuel cost block for gshp source (HP-class suppression)', () => {
+  it('renders fuel cost block for gshp source (354B — HP-class no longer suppressed)', () => {
     render(
       <HeatSourceSettings
         heatSource={{ type: 'gshp', efficiency: 4.0 }}
@@ -906,9 +907,9 @@ describe('HeatSourceSettings — GSHP source type (INSTRUCTION-242)', () => {
         onRefetch={noop}
       />,
     )
-    // The carbon factor / fuel cost field labels are gated on isNonHp.
-    // For a gshp source isHeatPumpType is true → isNonHp is false → block hidden.
-    expect(screen.queryByText(/^Fuel cost/i)).toBeNull()
+    // 354B: the fuel-cost block renders for all source types, including the
+    // HP-class gshp (electricity import rate basis).
+    expect(screen.getByText(/^Fuel cost \(£/)).toBeInTheDocument()
   })
 
   it('exposes gshp as a selectable source type in the type picker', () => {
@@ -1301,5 +1302,62 @@ describe('HeatSourceSettings — response timeout (INSTRUCTION-339C)', () => {
       const sources = hsCall[1] as Array<{ response_timeout_s?: number }>
       expect(sources[0].response_timeout_s).toBe(240)
     })
+  })
+})
+
+/**
+ * INSTRUCTION-354B — the fuel-cost and carbon blocks now render for
+ * heat-pump source types too (electricity import rate basis). On the MQTT
+ * driver each shows a TopicPicker; the HP carries a "divide by live COP"
+ * help line. Boiler sources are unchanged.
+ */
+describe('HeatSourceSettings — HP fuel-cost / carbon topics (INSTRUCTION-354B)', () => {
+  it('HP source on MQTT: fuel-cost + carbon TopicPickers render, HP help line shown, fuel topic saves MqttTopicInput', async () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'heat_pump', name: 'HP' }]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    // Both topic pickers render for the HP source (electricity rate + grid CO₂).
+    const fuelTopic = screen.getByPlaceholderText(
+      'qsh/sources/heat_pump/cost',
+    ) as HTMLInputElement
+    expect(fuelTopic).not.toBeNull()
+    expect(screen.getByPlaceholderText('qsh/grid/co2_factor')).not.toBeNull()
+    // HP electricity-basis help line.
+    expect(screen.getByText(/divides by live COP/i)).toBeInTheDocument()
+
+    // Editing the fuel topic and saving writes an MqttTopicInput object.
+    fireEvent.change(fuelTopic, {
+      target: { value: 'qsh/sources/heat_pump/cost' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+    await waitFor(() => {
+      const calls = patch.mock.calls.filter((c) => c[0] === 'heat_sources')
+      expect(calls).toHaveLength(1)
+      const payload = calls[0][1] as Array<{
+        fuel_cost_entity?: { topic: string; format: string }
+      }>
+      expect(payload[0].fuel_cost_entity).toEqual({
+        topic: 'qsh/sources/heat_pump/cost',
+        format: 'plain',
+      })
+    })
+  })
+
+  it('boiler source on MQTT still renders the fuel-cost TopicPicker and shows no HP help line (no regression)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler' }]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByPlaceholderText('qsh/sources/boiler/cost')).not.toBeNull()
+    expect(screen.queryByText(/divides by live COP/i)).toBeNull()
   })
 })

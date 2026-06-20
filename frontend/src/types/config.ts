@@ -353,6 +353,8 @@ export interface ControlYaml {
   pid_target_entity?: string
   dfan_control_topic?: string
   pid_target_topic?: string
+  dfan_control_json_path?: string   // optional JSON dot-path for the Active-Control payload
+  pid_target_json_path?: string     // optional JSON dot-path for the PID-Target payload
   nudge_budget?: number
 }
 

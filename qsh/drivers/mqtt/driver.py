@@ -30,6 +30,8 @@ from .topic_map import (
     TopicMapping,
     build_topic_map,
     command_topic_for_source,
+    configured_control_json_path,
+    configured_control_topic,
     evaluate_availability_match,
     extract_json_value,
     get_control_topics,
@@ -477,6 +479,8 @@ class MQTTDriver:
         internal_key: str,
         default: Any,
         validate=None,
+        *,
+        json_path: Optional[str] = None,
     ) -> ResolvedValue:
         """Read from auto-subscribed MQTT control topic cache, fall back to internal value.
 
@@ -488,6 +492,12 @@ class MQTTDriver:
             default:      Value when both MQTT cache and internal key are absent.
             validate:     Optional callable(raw_str) -> typed_value or None.
                           Contract: MUST never raise.  Returns None on invalid input.
+            json_path:    Optional dot-path (INSTRUCTION-353A). When set, the
+                          cached payload is decoded via extract_json_value before
+                          validation; a parse failure or path miss yields a None
+                          candidate, which takes the invalid-payload branch
+                          identically to a failed scalar validation. Blank/None ⇒
+                          plain-scalar behaviour (byte-identical to pre-353A).
 
         Returns:
             ResolvedValue with source="external" when MQTT cache hit+valid,
@@ -499,7 +509,15 @@ class MQTTDriver:
         entry = cache.get(full_topic)
         if entry is not None:
             raw_str = entry[0]  # (payload_str, timestamp)
-            typed = validate(raw_str) if validate is not None else raw_str
+            if json_path:
+                leaf = extract_json_value(raw_str, json_path)
+                candidate = None if leaf is None else str(leaf)
+            else:
+                candidate = raw_str
+            if candidate is None:
+                typed = None
+            else:
+                typed = validate(candidate) if validate is not None else candidate
             if typed is not None:
                 # Validator returned non-None — bad payload (if any) is
                 # resolved. Clear the latch for this topic. Per H5: only a
@@ -1070,10 +1088,11 @@ class MQTTDriver:
 
         dfan_rv = self._resolve_mqtt_control(
             cache,
-            "control/dfan_control",
+            configured_control_topic(config, "dfan"),
             "control_enabled",
             default=False,
             validate=_parse_bool_payload,
+            json_path=configured_control_json_path(config, "dfan"),
         )
         self._last_resolved["dfan_control"] = dfan_rv
 
@@ -1097,10 +1116,11 @@ class MQTTDriver:
 
         comfort_temp_rv = self._resolve_mqtt_control(
             cache,
-            "control/comfort_temp",
+            configured_control_topic(config, "pid_target"),
             "pid_target_internal",
             default=20.0,
             validate=lambda s: _validate_range(s, 10.0, 30.0),
+            json_path=configured_control_json_path(config, "pid_target"),
         )
         self._last_resolved["comfort_temp"] = comfort_temp_rv
 
@@ -1245,6 +1265,29 @@ class MQTTDriver:
             elif slot == "pump_power":
                 reading.pump_power = fval
 
+        # ── INSTRUCTION-354A — per-source cost/carbon → source_states ──
+        # Walk system_values for "source_cost__<name>__<slot>" fields (registered
+        # by build_topic_map for dict-form fuel_cost_entity / carbon_factor_entity)
+        # and route into InputBlock.source_states[name][slot]. Nothing else writes
+        # source_states, so there is no merge concern. The float() coercion keeps
+        # the stored slot numeric so SourceSelectionController Path 1 returns a
+        # number into the cost_thermal = fuel_cost / efficiency scoring.
+        source_states_block: Dict[str, Dict[str, Any]] = {}
+        for fkey, fval in list(system_values.items()):
+            if not fkey.startswith("source_cost__"):
+                continue
+            try:
+                _, name_slot = fkey.split("__", 1)
+                name, slot = name_slot.rsplit("__", 1)
+            except ValueError:
+                continue
+            if fval is None:
+                continue
+            try:
+                source_states_block.setdefault(name, {})[slot] = float(fval)
+            except (TypeError, ValueError):
+                continue  # non-numeric cost payload — leave Path 1 to fall through
+
         # ── INSTRUCTION-332 — outdoor_temp last-valid hold + has_outdoor ──
         # Driver parity with the HA path (sensor_fetcher.py:1162-1186). A
         # cycle with no parsed outdoor candidate — quality "unavailable" (LWT
@@ -1370,6 +1413,7 @@ class MQTTDriver:
             per_room_comfort_overrides=per_room_comfort,
             occupancy_sensor_states=occupancy_sensor_states,
             heat_sources=heat_sources_block,
+            source_states=source_states_block,
             timestamp=now,
         )
 

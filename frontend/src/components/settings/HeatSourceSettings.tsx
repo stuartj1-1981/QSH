@@ -1020,150 +1020,159 @@ function SourceCard({
             </div>
           )}
 
-          {/* Fuel cost — non-HP sources only */}
-          {isNonHp && (
-            <div className="grid grid-cols-2 gap-4">
+          {/* Fuel cost — all source types (INSTRUCTION-354B). For a heat
+              pump the value is the electricity import rate; QSH divides by
+              live COP to compare against other sources (354 decision 1). */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor={`source-${index}-fuel-cost`}
+                className="block text-xs font-medium text-[var(--text)] mb-1"
+              >
+                Fuel cost (£/kWh)
+              </label>
+              <input
+                id={`source-${index}-fuel-cost`}
+                type="number"
+                step="0.001"
+                value={hs.fuel_cost_per_kwh ?? ''}
+                placeholder={isNonHp ? '0.060' : '0.245'}
+                onChange={(e) =>
+                  onChange({
+                    fuel_cost_per_kwh:
+                      e.target.value === ''
+                        ? undefined
+                        : parseFloat(e.target.value),
+                  })
+                }
+                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              />
+            </div>
+            {driver === 'mqtt' ? (
               <div>
-                <label
-                  htmlFor={`source-${index}-fuel-cost`}
-                  className="block text-xs font-medium text-[var(--text)] mb-1"
-                >
-                  Fuel cost (£/kWh)
+                <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
+                  Fuel cost topic
+                  <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
                 </label>
-                <input
-                  id={`source-${index}-fuel-cost`}
-                  type="number"
-                  step="0.001"
-                  value={hs.fuel_cost_per_kwh ?? ''}
-                  placeholder="0.060"
-                  onChange={(e) =>
-                    onChange({
-                      fuel_cost_per_kwh:
-                        e.target.value === ''
-                          ? undefined
-                          : parseFloat(e.target.value),
-                    })
+                <TopicPicker
+                  value={extractTopic(hs.fuel_cost_entity)}
+                  format={extractFormat(hs.fuel_cost_entity)}
+                  jsonPath={extractJsonPath(hs.fuel_cost_entity)}
+                  onChange={(topic, fmt, jp) => {
+                    if (!topic) {
+                      onChange({ fuel_cost_entity: undefined })
+                      return
+                    }
+                    const entry: MqttTopicInput = {
+                      topic,
+                      format: (fmt ?? 'plain') as 'plain' | 'json',
+                    }
+                    if (jp) entry.json_path = jp
+                    onChange({ fuel_cost_entity: entry })
+                  }}
+                  placeholder={
+                    isNonHp ? 'qsh/sources/boiler/cost' : 'qsh/sources/heat_pump/cost'
                   }
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                  scanResults={[]}
                 />
               </div>
-              {driver === 'mqtt' ? (
-                <div>
-                  <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
-                    Fuel cost topic
-                    <HelpTip text={SOURCE_SELECTION.fuelCostEntity} size={12} />
-                  </label>
-                  <TopicPicker
-                    value={extractTopic(hs.fuel_cost_entity)}
-                    format={extractFormat(hs.fuel_cost_entity)}
-                    jsonPath={extractJsonPath(hs.fuel_cost_entity)}
-                    onChange={(topic, fmt, jp) => {
-                      if (!topic) {
-                        onChange({ fuel_cost_entity: undefined })
-                        return
-                      }
-                      const entry: MqttTopicInput = {
-                        topic,
-                        format: (fmt ?? 'plain') as 'plain' | 'json',
-                      }
-                      if (jp) entry.json_path = jp
-                      onChange({ fuel_cost_entity: entry })
-                    }}
-                    placeholder="qsh/sources/boiler/cost"
-                    scanResults={[]}
-                  />
-                </div>
-              ) : (
-                <EntityField
-                  label="Fuel cost entity"
-                  helpText={SOURCE_SELECTION.fuelCostEntity}
-                  value={extractTopic(hs.fuel_cost_entity)}
-                  friendlyName={
-                    resolved[extractTopic(hs.fuel_cost_entity)]?.friendly_name
-                  }
-                  state={resolved[extractTopic(hs.fuel_cost_entity)]?.state}
-                  unit={resolved[extractTopic(hs.fuel_cost_entity)]?.unit}
-                  onChange={(v) =>
-                    onChange({ fuel_cost_entity: v || undefined })
-                  }
-                  placeholder="sensor.gas_unit_rate"
-                />
-              )}
-            </div>
+            ) : (
+              <EntityField
+                label="Fuel cost entity"
+                helpText={SOURCE_SELECTION.fuelCostEntity}
+                value={extractTopic(hs.fuel_cost_entity)}
+                friendlyName={
+                  resolved[extractTopic(hs.fuel_cost_entity)]?.friendly_name
+                }
+                state={resolved[extractTopic(hs.fuel_cost_entity)]?.state}
+                unit={resolved[extractTopic(hs.fuel_cost_entity)]?.unit}
+                onChange={(v) =>
+                  onChange({ fuel_cost_entity: v || undefined })
+                }
+                placeholder={
+                  isNonHp ? 'sensor.gas_unit_rate' : 'sensor.electricity_import_rate'
+                }
+              />
+            )}
+          </div>
+          {!isNonHp && (
+            <p className="text-xs text-[var(--text-muted)] -mt-2">
+              Publish your import electricity rate (£/kWh). QSH divides by live
+              COP to compare against other sources.
+            </p>
           )}
 
-          {/* Carbon factor — non-HP sources only. V2 G-N3: placeholder only,
-              never written to state on render. */}
-          {isNonHp && (
-            <div className="grid grid-cols-2 gap-4">
+          {/* Carbon factor — all source types (INSTRUCTION-354B). V2 G-N3:
+              placeholder only, never written to state on render. The grid CO₂
+              factor applies to electricity (heat-pump) sources too. */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor={`source-${index}-carbon-factor`}
+                className="text-xs font-medium text-[var(--text)] mb-1 flex items-center gap-1"
+              >
+                Carbon factor (kgCO₂e/kWh){' '}
+                <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
+              </label>
+              <input
+                id={`source-${index}-carbon-factor`}
+                type="number"
+                step="0.001"
+                value={hs.carbon_factor ?? ''}
+                placeholder={carbonFactorPlaceholder(hs.type)}
+                onChange={(e) =>
+                  onChange({
+                    carbon_factor:
+                      e.target.value === ''
+                        ? undefined
+                        : parseFloat(e.target.value),
+                  })
+                }
+                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              />
+            </div>
+            {driver === 'mqtt' ? (
               <div>
-                <label
-                  htmlFor={`source-${index}-carbon-factor`}
-                  className="text-xs font-medium text-[var(--text)] mb-1 flex items-center gap-1"
-                >
-                  Carbon factor (kgCO₂e/kWh){' '}
+                <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
+                  Carbon factor topic
                   <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
                 </label>
-                <input
-                  id={`source-${index}-carbon-factor`}
-                  type="number"
-                  step="0.001"
-                  value={hs.carbon_factor ?? ''}
-                  placeholder={carbonFactorPlaceholder(hs.type)}
-                  onChange={(e) =>
-                    onChange({
-                      carbon_factor:
-                        e.target.value === ''
-                          ? undefined
-                          : parseFloat(e.target.value),
-                    })
-                  }
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                <TopicPicker
+                  value={extractTopic(hs.carbon_factor_entity)}
+                  format={extractFormat(hs.carbon_factor_entity)}
+                  jsonPath={extractJsonPath(hs.carbon_factor_entity)}
+                  onChange={(topic, fmt, jp) => {
+                    if (!topic) {
+                      onChange({ carbon_factor_entity: undefined })
+                      return
+                    }
+                    const entry: MqttTopicInput = {
+                      topic,
+                      format: (fmt ?? 'plain') as 'plain' | 'json',
+                    }
+                    if (jp) entry.json_path = jp
+                    onChange({ carbon_factor_entity: entry })
+                  }}
+                  placeholder="qsh/grid/co2_factor"
+                  scanResults={[]}
                 />
               </div>
-              {driver === 'mqtt' ? (
-                <div>
-                  <label className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1">
-                    Carbon factor topic
-                    <HelpTip text={SOURCE_SELECTION.carbonFactor} size={12} />
-                  </label>
-                  <TopicPicker
-                    value={extractTopic(hs.carbon_factor_entity)}
-                    format={extractFormat(hs.carbon_factor_entity)}
-                    jsonPath={extractJsonPath(hs.carbon_factor_entity)}
-                    onChange={(topic, fmt, jp) => {
-                      if (!topic) {
-                        onChange({ carbon_factor_entity: undefined })
-                        return
-                      }
-                      const entry: MqttTopicInput = {
-                        topic,
-                        format: (fmt ?? 'plain') as 'plain' | 'json',
-                      }
-                      if (jp) entry.json_path = jp
-                      onChange({ carbon_factor_entity: entry })
-                    }}
-                    placeholder="qsh/grid/co2_factor"
-                    scanResults={[]}
-                  />
-                </div>
-              ) : (
-                <EntityField
-                  label="Carbon factor entity"
-                  value={extractTopic(hs.carbon_factor_entity)}
-                  friendlyName={
-                    resolved[extractTopic(hs.carbon_factor_entity)]?.friendly_name
-                  }
-                  state={resolved[extractTopic(hs.carbon_factor_entity)]?.state}
-                  unit={resolved[extractTopic(hs.carbon_factor_entity)]?.unit}
-                  onChange={(v) =>
-                    onChange({ carbon_factor_entity: v || undefined })
-                  }
-                  placeholder="sensor.grid_carbon_intensity"
-                />
-              )}
-            </div>
-          )}
+            ) : (
+              <EntityField
+                label="Carbon factor entity"
+                value={extractTopic(hs.carbon_factor_entity)}
+                friendlyName={
+                  resolved[extractTopic(hs.carbon_factor_entity)]?.friendly_name
+                }
+                state={resolved[extractTopic(hs.carbon_factor_entity)]?.state}
+                unit={resolved[extractTopic(hs.carbon_factor_entity)]?.unit}
+                onChange={(v) =>
+                  onChange({ carbon_factor_entity: v || undefined })
+                }
+                placeholder="sensor.grid_carbon_intensity"
+              />
+            )}
+          </div>
 
           {/* Pump control — non-HP sources only. V3 G-V3-2: max-speed
               placeholder only, never written to state on render. */}
