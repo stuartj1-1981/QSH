@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.11] — 2026-06-20
+
+### Added
+- Multi-source installs can now feed live per-source running-cost and
+  carbon-intensity signals into the economic source selector — via either MQTT
+  topics or Home Assistant entities — so the system picks the cheapest or
+  lowest-carbon heat source dynamically.
+- MQTT control topics are now individually configurable, with per-topic JSON
+  dot-path extraction for brokers that publish nested JSON payloads rather than
+  a bare scalar value.
+
 ## [1.5.10] — 2026-06-19
 
 ### Fixed
