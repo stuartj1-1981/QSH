@@ -1148,6 +1148,37 @@ def fetch_source_raw_values(config: Dict) -> Dict[str, Any]:
     return out
 
 
+def fetch_source_cost_values(config: Dict) -> Dict[str, Dict[str, float]]:
+    """Per-source fuel-cost / carbon-factor HA-entity reads → source_states.
+
+    For each heat source, when fuel_cost_entity / carbon_factor_entity is a
+    STRING (HA entity id), read its state and coerce to float. Dict-form values
+    are MQTT topics (handled by the MQTT driver, INSTRUCTION-354A) and are
+    skipped here. A slot is written only when a numeric value resolves; absent /
+    'unavailable' / non-numeric entities are omitted. A written slot — including a
+    legitimately <=0 electricity rate or a 0 carbon factor — is honoured by
+    SourceSelectionController Path 1's presence gate (354A Task 5); an omitted slot
+    falls through to the static / tariff / fallback rate.
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for source in config.get("heat_sources", []) or []:
+        name = source.get("name") or "heat_source"
+        slots: Dict[str, float] = {}
+        for cfg_key, slot in (
+            ("fuel_cost_entity", "fuel_cost"),
+            ("carbon_factor_entity", "carbon_factor"),
+        ):
+            entity = source.get(cfg_key)
+            if not isinstance(entity, str) or not entity:
+                continue  # dict = MQTT topic (354A) or unset
+            val = safe_float(fetch_ha_entity(entity, default=None), None)
+            if val is not None:
+                slots[slot] = val
+        if slots:
+            out[name] = slots
+    return out
+
+
 def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     """Fetch all sensor data in one go with capability-aware degradation."""
     global _last_valid_outdoor_temp, _hw_last_valid_value, _hw_last_valid_ts
@@ -1249,6 +1280,11 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         else:
             data.boiler_power = float(boiler_kw)
             data.has_live_boiler_power = True
+
+    # INSTRUCTION-354C — per-source fuel-cost / carbon-factor HA-entity reads.
+    # Co-located with the 246 boiler-power acquisition above. Populates
+    # source_states for SourceSelectionController Path 1 on HA installs.
+    data.source_states = fetch_source_cost_values(config)
 
     energy_data = fetch_energy_data(config)
     data.battery_soc = energy_data["battery_soc"]

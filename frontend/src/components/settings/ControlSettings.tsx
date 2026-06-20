@@ -69,6 +69,17 @@ export function ControlSettings({ control: initial, rootConfig, driver: _driver,
               placeholder="control/dfan_control"
             />
           )}
+          {effectiveDriver === 'mqtt' && (
+            <div className="mt-2">
+              <TopicField
+                label="JSON key (optional)"
+                value={ctrl.dfan_control_json_path ?? ''}
+                onChange={(v) => setCtrl(prev => ({ ...prev, dfan_control_json_path: v }))}
+                placeholder="e.g. state or value.enabled"
+                helpText="Leave blank for a plain payload (true/on/off). If your publisher sends JSON, set the key or dot-path to read."
+              />
+            </div>
+          )}
           {effectiveDriver === 'ha' && !ctrl.dfan_control_entity && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>
           )}
@@ -101,8 +112,19 @@ export function ControlSettings({ control: initial, rootConfig, driver: _driver,
               label="PID Target Temperature Topic (°C)"
               value={ctrl.pid_target_topic ?? ''}
               onChange={(v) => setCtrl(prev => ({ ...prev, pid_target_topic: v }))}
-              placeholder="control/pid_target"
+              placeholder="control/comfort_temp"
             />
+          )}
+          {effectiveDriver === 'mqtt' && (
+            <div className="mt-2">
+              <TopicField
+                label="JSON key (optional)"
+                value={ctrl.pid_target_json_path ?? ''}
+                onChange={(v) => setCtrl(prev => ({ ...prev, pid_target_json_path: v }))}
+                placeholder="e.g. value or payload.setpoint"
+                helpText="Leave blank for a plain numeric payload. If your publisher sends JSON, set the key or dot-path to the temperature value."
+              />
+            </div>
           )}
           {effectiveDriver === 'ha' && !ctrl.pid_target_entity && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">(using internal value)</p>

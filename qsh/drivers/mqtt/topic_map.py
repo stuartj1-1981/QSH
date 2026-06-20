@@ -539,6 +539,9 @@ CAPABILITY_FIELDS = {
 
 # Static system-level control topics (no config dependency).
 # Per-room topics require config and are built by get_control_topics().
+# Retained as documentation of the default set; the dfan_control and
+# comfort_temp entries are now resolved per-config via configured_control_topic
+# (INSTRUCTION-353A) and are no longer the literal source for those two.
 _SYSTEM_CONTROL_TOPICS = [
     "control/away",
     "control/away_days",
@@ -547,6 +550,33 @@ _SYSTEM_CONTROL_TOPICS = [
     "control/flow_max",
     "control/comfort_temp",
 ]
+
+
+# INSTRUCTION-353A — Active-Control / PID-Target topics are configurable from
+# config["control"]. Blank/whitespace fields fall back to these legacy defaults.
+_DEFAULT_DFAN_CONTROL_TOPIC = "control/dfan_control"
+_DEFAULT_PID_TARGET_TOPIC = "control/comfort_temp"
+
+
+def configured_control_topic(config: Dict[str, Any], which: str) -> str:
+    """Resolve the Active-Control ('dfan') or PID-Target ('pid_target') topic
+    SUFFIX from config['control'], falling back to the legacy default. Prefix is
+    applied by the caller (driver). Blank/whitespace ⇒ default."""
+    ctrl = config.get("control", {}) or {}
+    if which == "dfan":
+        return (str(ctrl.get("dfan_control_topic") or "").strip()) or _DEFAULT_DFAN_CONTROL_TOPIC
+    if which == "pid_target":
+        return (str(ctrl.get("pid_target_topic") or "").strip()) or _DEFAULT_PID_TARGET_TOPIC
+    raise ValueError(f"unknown control topic selector: {which!r}")
+
+
+def configured_control_json_path(config: Dict[str, Any], which: str) -> Optional[str]:
+    """Resolve the optional JSON dot-path for the Active-Control / PID-Target
+    payload. Blank ⇒ None (plain scalar)."""
+    ctrl = config.get("control", {}) or {}
+    key = "dfan_control_json_path" if which == "dfan" else "pid_target_json_path"
+    jp = str(ctrl.get(key) or "").strip()
+    return jp or None
 
 
 def _slug(name: str) -> str:
@@ -582,8 +612,18 @@ def get_control_topics(config: Dict[str, Any]) -> list:
     Called from MqttDriver.setup(), NOT at import time.  Per-room topics
     depend on config which is not available at module import time.
     Returned topics do NOT include the topic prefix — the caller applies it.
+
+    INSTRUCTION-353A: the dfan_control and comfort_temp suffixes are resolved
+    from config["control"] (configured_control_topic); the other four are fixed.
     """
-    topics = list(_SYSTEM_CONTROL_TOPICS)
+    topics = [
+        "control/away",
+        "control/away_days",
+        configured_control_topic(config, "dfan"),
+        "control/flow_min",
+        "control/flow_max",
+        configured_control_topic(config, "pid_target"),
+    ]
     for room in config.get("rooms", {}):
         topics.append(f"control/{room}/away")
         topics.append(f"control/{room}/away_days")
@@ -760,6 +800,34 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                 category=category,
                 availability=availability,
                 last_seen=last_seen,
+            ))
+
+    # ── Per-source cost/carbon topics → source_states[name][slot] (INSTRUCTION-354A) ──
+    # fuel_cost_entity / carbon_factor_entity accept an MQTT topic object
+    # {topic, format, json_path?} (INSTRUCTION-245). The MQTT driver routes
+    # these into InputBlock.source_states for SourceSelectionController Path 1.
+    # String-form values are HA entity ids — not subscribed here.
+    for source in sources:
+        name = source.get("name") or "heat_source"
+        for cfg_key, slot in (
+            ("fuel_cost_entity", "fuel_cost"),
+            ("carbon_factor_entity", "carbon_factor"),
+        ):
+            entry = source.get(cfg_key)
+            if not isinstance(entry, dict):
+                continue
+            raw_topic = entry.get("topic", "")
+            if not raw_topic:
+                continue
+            tm.input_mappings.append(TopicMapping(
+                topic=_prefixed(prefix, raw_topic),
+                field=f"source_cost__{name}__{slot}",
+                room=None,
+                payload_format=entry.get("format", "plain"),
+                json_path=entry.get("json_path"),
+                category="default",
+                availability=_build_availability_spec(entry.get("availability"), prefix),
+                last_seen=_build_last_seen_spec(entry.get("last_seen")),
             ))
 
     # ── Per-room input topics ──

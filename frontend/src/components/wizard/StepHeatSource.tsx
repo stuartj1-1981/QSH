@@ -417,8 +417,10 @@ function SourceCard({
             </div>
           )}
 
-          {/* Fuel cost — non-HP sources only */}
-          {hs.type && !isHeatPumpType(hs.type) && (
+          {/* Fuel cost — all source types (INSTRUCTION-354B). For a heat pump
+              the value is the electricity import rate; QSH divides by live COP
+              to compare against other sources (354 decision 1). */}
+          {hs.type && (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
@@ -438,7 +440,7 @@ function SourceCard({
                         e.target.value === '' ? undefined : parseFloat(e.target.value),
                     })
                   }
-                  placeholder="0.060"
+                  placeholder={isHeatPumpType(hs.type) ? '0.245' : '0.060'}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
@@ -464,7 +466,11 @@ function SourceCard({
                       if (jp) entry.json_path = jp
                       onUpdate({ fuel_cost_entity: entry })
                     }}
-                    placeholder="qsh/sources/boiler/cost"
+                    placeholder={
+                      isHeatPumpType(hs.type)
+                        ? 'qsh/sources/heat_pump/cost'
+                        : 'qsh/sources/boiler/cost'
+                    }
                     scanResults={[]}
                   />
                 </div>
@@ -481,12 +487,22 @@ function SourceCard({
                     type="text"
                     value={typeof hs.fuel_cost_entity === 'string' ? hs.fuel_cost_entity : ''}
                     onChange={(e) => onUpdate({ fuel_cost_entity: e.target.value || undefined })}
-                    placeholder="sensor.gas_unit_rate"
+                    placeholder={
+                      isHeatPumpType(hs.type)
+                        ? 'sensor.electricity_import_rate'
+                        : 'sensor.gas_unit_rate'
+                    }
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
                   />
                 </div>
               )}
             </div>
+          )}
+          {hs.type && isHeatPumpType(hs.type) && (
+            <p className="text-xs text-[var(--text-muted)] -mt-2">
+              Publish your import electricity rate (£/kWh). QSH divides by live
+              COP to compare against other sources.
+            </p>
           )}
 
           {/* Carbon factor — all source types */}

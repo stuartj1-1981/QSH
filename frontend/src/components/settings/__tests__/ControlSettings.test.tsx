@@ -150,4 +150,65 @@ describe('ControlSettings', () => {
     fireEvent.change(input, { target: { value: 'input_boolean.my_control' } })
     expect(input).toHaveValue('input_boolean.my_control')
   })
+
+  // ── INSTRUCTION-353B: MQTT control-topic JSON key ──
+
+  it('MQTT driver: renders a JSON key input under each topic field', () => {
+    render(
+      <ControlSettings
+        control={{}}
+        rootConfig={{ driver: 'mqtt' }}
+        driver="mqtt"
+        onRefetch={() => {}}
+      />
+    )
+    // One JSON-key input for Active-Control, one for PID-Target.
+    expect(screen.getAllByText('JSON key (optional)')).toHaveLength(2)
+    expect(screen.getByPlaceholderText('e.g. state or value.enabled')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('e.g. value or payload.setpoint')).toBeInTheDocument()
+  })
+
+  it('HA driver: does not render JSON key inputs', () => {
+    render(
+      <ControlSettings
+        control={{}}
+        rootConfig={{ driver: 'ha' }}
+        driver="ha"
+        onRefetch={() => {}}
+      />
+    )
+    expect(screen.queryByText('JSON key (optional)')).toBeNull()
+    expect(screen.queryByPlaceholderText('e.g. state or value.enabled')).toBeNull()
+    expect(screen.queryByPlaceholderText('e.g. value or payload.setpoint')).toBeNull()
+  })
+
+  it('MQTT driver: hydrates a pre-existing dfan_control_json_path value', () => {
+    render(
+      <ControlSettings
+        control={{ dfan_control_json_path: 'value.enabled' }}
+        rootConfig={{ driver: 'mqtt' }}
+        driver="mqtt"
+        onRefetch={() => {}}
+      />
+    )
+    expect(screen.getByDisplayValue('value.enabled')).toBeInTheDocument()
+  })
+
+  it('MQTT driver: editing a JSON key persists via the control PATCH', () => {
+    render(
+      <ControlSettings
+        control={{}}
+        rootConfig={{ driver: 'mqtt' }}
+        driver="mqtt"
+        onRefetch={() => {}}
+      />
+    )
+    const input = screen.getByPlaceholderText('e.g. value or payload.setpoint')
+    fireEvent.change(input, { target: { value: 'payload.setpoint' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/ }))
+    expect(mockPatch).toHaveBeenCalledWith(
+      'control',
+      expect.objectContaining({ pid_target_json_path: 'payload.setpoint' }),
+    )
+  })
 })

@@ -386,15 +386,16 @@ describe('StepHeatSource — multi-source (INSTRUCTION-237A)', () => {
     expect(screen.getByLabelText(/Min Output/i)).toBeInTheDocument()
   })
 
-  it('shows fuel_cost fields for non-HP sources only', () => {
-    // HP — fuel cost hidden.
+  it('shows fuel_cost fields for all source types (354B)', () => {
+    // HP — fuel cost now visible (354B lifts the HP gate; the HP value is
+    // the electricity import rate).
     const { unmount } = render(
       <StepHeatSource
         config={{ heat_source: { type: 'heat_pump', name: 'HP' } }}
         onUpdate={vi.fn()}
       />,
     )
-    expect(screen.queryByLabelText(/Fuel cost \(£/)).toBeNull()
+    expect(screen.getByLabelText(/Fuel cost \(£/)).toBeInTheDocument()
     unmount()
 
     // Gas boiler — fuel cost visible.
@@ -464,14 +465,32 @@ describe('StepHeatSource — GSHP source type (INSTRUCTION-242)', () => {
     expect(screen.getByText(/Expected COP/i)).toBeInTheDocument()
   })
 
-  it('hides fuel cost block for gshp source', () => {
+  it('shows fuel cost block for gshp source (354B)', () => {
     render(
       <StepHeatSource
         config={{ heat_source: { type: 'gshp', name: 'GSHP' } }}
         onUpdate={vi.fn()}
       />,
     )
-    expect(screen.queryByText(/Fuel cost/i)).not.toBeInTheDocument()
+    // 354B: the HP-class gshp now exposes the fuel-cost field (electricity
+    // import rate basis), matching Settings.
+    expect(screen.getByLabelText(/Fuel cost \(£/)).toBeInTheDocument()
+  })
+
+  it('MQTT driver: HP source shows the fuel-cost topic input (354B parity)', () => {
+    render(
+      <StepHeatSource
+        config={{
+          driver: 'mqtt',
+          heat_source: { type: 'heat_pump', name: 'HP' },
+        }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    // The electricity-rate topic-picker placeholder is present for the HP.
+    expect(
+      screen.getByPlaceholderText('qsh/sources/heat_pump/cost'),
+    ).toBeInTheDocument()
   })
 })
 

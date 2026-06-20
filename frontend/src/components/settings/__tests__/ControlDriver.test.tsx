@@ -44,7 +44,7 @@ describe('ControlSettings driver branching', () => {
     expect(screen.getByText('Active Control Topic')).toBeInTheDocument()
     expect(screen.getByText('PID Target Temperature Topic (°C)')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('control/dfan_control')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('control/pid_target')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('control/comfort_temp')).toBeInTheDocument()
     // No EntityField labels
     expect(screen.queryByText('Active Control')).toBeNull()
     expect(screen.queryByText('PID Target Temperature (°C)')).toBeNull()

@@ -462,6 +462,9 @@ class HADriver:
             # Per-source readings (INSTRUCTION-241A) — copied from
             # sensor_fetcher's fetch_all_sensor_data → SensorData.heat_sources.
             heat_sources=dict(getattr(sensor_data, "heat_sources", {})),
+            # Per-source fuel-cost / carbon-factor (INSTRUCTION-354C) — copied
+            # from SensorData.source_states; drives _get_fuel_cost Path 1.
+            source_states=dict(getattr(sensor_data, "source_states", {})),
         )
 
     # ── Write ──────────────────────────────────────────────────────────
