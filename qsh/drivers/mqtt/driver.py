@@ -177,6 +177,7 @@ def _resolve_signal_quality(
     cache: Dict[str, Tuple[str, float]],
     staleness_defaults: Dict[str, Dict[str, int]],
     now: float,
+    field_last_present_ts: Optional[float] = None,
 ) -> Tuple[str, Optional[str], Optional[float]]:
     """Resolve (signal_quality, payload_str, timestamp) for a mapping.
 
@@ -248,7 +249,16 @@ def _resolve_signal_quality(
 
     # ── Step 3: arrival age ────────────────────────────────────────────
     if value_entry is not None:
-        age = now - value_entry[1]
+        # INSTRUCTION-359 — clock b when supplied (per-field last-present ts),
+        # else clock a (topic arrival). field_last_present_ts <= value_entry[1]
+        # by construction, so it only ever ages a field toward staleness — it
+        # cannot make a field look fresher than the topic's last message.
+        clock = (
+            field_last_present_ts
+            if field_last_present_ts is not None
+            else value_entry[1]
+        )
+        age = now - clock
         if age > unavail:
             return ("unavailable", None, None)
         if age > fresh:
@@ -333,6 +343,16 @@ class MQTTDriver:
         # Instance-scoped (per MQTTDriver); naturally isolated per test.
         self._outdoor_last_valid: Optional[float] = None
         self._outdoor_last_valid_ts: Optional[float] = None
+
+        # INSTRUCTION-359 — clock b: per-field "last present" timestamp for shared
+        # on-change topics. Keyed by (topic, json_path) — NOT sq_key — so a fresh
+        # source never masks a stale sibling on a multi-source field. Maps to the
+        # arrival ts of the most recent payload in which the field's key was present
+        # (incl. present-but-non-numeric; "present" means key-exists). Drives the
+        # GENERAL signal_quality (Task 3). The outdoor reason gate does NOT use it
+        # (Task 5 runs on clocks a + c). Cycle-sampled; <= one-cycle lag, immaterial
+        # vs minute-scale thresholds. Instance-scoped; naturally isolated per test.
+        self._field_last_present_ts: Dict[Tuple[str, Optional[str]], float] = {}
 
         # INSTRUCTION-329 D1 — last-published value for the retained
         # status/active_source annunciation topic. None → first cycle always
@@ -703,6 +723,34 @@ class MQTTDriver:
         if tm:
             staleness_defaults = tm.staleness_defaults
 
+            # INSTRUCTION-359 — clock b pre-pass. A field is "present" this cycle
+            # iff its json_path resolves to a non-null leaf in the latest cached
+            # payload (or, for a plain/single-value topic, the payload exists).
+            # Record the field's last-present timestamp as the CURRENT topic
+            # arrival ts on presence, and leave it untouched on absence — so an
+            # absent field retains its prior (older) ts and ages by its own
+            # clock. This realises the load-bearing invariant the Step-3 consumer
+            # relies on: clock b <= value_entry[1] (clock a) for every mapping,
+            # i.e. clock b can only ever move a field TOWARD staleness, never
+            # toward freshness. (Topic arrivals are monotonic per topic in
+            # production, so "record the current arrival on presence" equals a
+            # monotonic-forward update; it only differs from an unconditional
+            # max() when a reused-driver test injects a backwards-going arrival
+            # ts to simulate staleness — where this form correctly ages the
+            # field rather than masking the injected staleness with a stale-
+            # but-fresher ledger entry.) Keyed per (topic, json_path).
+            for _m in tm.input_mappings:
+                _entry = cache.get(_m.topic)
+                if _entry is None:
+                    continue
+                _payload, _ts = _entry
+                if _m.payload_format == "json" and _m.json_path:
+                    _present = extract_json_value(_payload, _m.json_path) is not None
+                else:
+                    _present = _payload is not None
+                if _present:
+                    self._field_last_present_ts[(_m.topic, _m.json_path)] = _ts
+
             # Pass 1 — accumulate candidates per sq_key / per destination.
             # Multiple topics may map to the same sq_key (e.g. a primary and
             # backup room sensor). We gather every contributing topic here
@@ -726,11 +774,19 @@ class MQTTDriver:
                 str, List[Tuple[float, str, TopicMapping]]
             ] = {}
 
+            # INSTRUCTION-359 — set True when the outdoor key is present in the
+            # latest topic payload but does not parse to a number (genuine parse
+            # failure, distinct from the key being absent). Consumed by Task 5.
+            _outdoor_present_malformed = False
+
             for mapping in tm.input_mappings:
                 sq_key = _sq_key_for(mapping)
 
                 quality, payload_str, ts = _resolve_signal_quality(
-                    mapping, cache, staleness_defaults, now
+                    mapping, cache, staleness_defaults, now,
+                    field_last_present_ts=self._field_last_present_ts.get(
+                        (mapping.topic, mapping.json_path)
+                    ),
                 )
 
                 # Only accumulate sq for fields tracked before (room or system).
@@ -751,6 +807,22 @@ class MQTTDriver:
 
                 # Parse value
                 value = parse_payload(payload_str, mapping.payload_format, mapping.json_path)
+
+                # INSTRUCTION-359 — latest-payload property (NOT a clock):
+                # outdoor key present but non-numeric => genuine parse failure
+                # (stays loud). Absent key is handled by Task 5's c-banding.
+                if (
+                    mapping.field == "outdoor_temp"
+                    and quality != "unavailable"
+                    and payload_str is not None
+                    and value is None
+                ):
+                    if mapping.payload_format == "json" and mapping.json_path:
+                        _present = extract_json_value(payload_str, mapping.json_path) is not None
+                    else:
+                        _present = True  # plain payload exists but did not parse → malformed
+                    if _present:
+                        _outdoor_present_malformed = True
 
                 if mapping.room:
                     if mapping.field == "room_temp" and value is not None:
@@ -1329,30 +1401,99 @@ class MQTTDriver:
                 temp=round(outdoor_temp, 1),
             )
         elif outdoor_declared:
-            # No parsed candidate this cycle. q is never None when declared
-            # (never-received resolves "unavailable"); a parse failure can
-            # occur in either the good or stale band, hence two-valued reason.
             has_outdoor = False
-            _oat_reason = "unavailable" if _oat_q == "unavailable" else "parse_failed"
-            if self._outdoor_last_valid is not None:
-                outdoor_temp = self._outdoor_last_valid
-                _oat_age = (
-                    now - self._outdoor_last_valid_ts
-                    if self._outdoor_last_valid_ts is not None else 0.0
-                )
-                _oat_ann.entered(
-                    "MQTT.outdoor_stale_lastvalid",
-                    temp=round(outdoor_temp, 1),
-                    age_s=int(_oat_age),
-                    reason=_oat_reason,
-                )
-                _oat_ann.exited("MQTT.outdoor_stale_passthrough")
-                _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
-            else:
+            # INSTRUCTION-359 — the absent-key case. No parsed outdoor value this
+            # cycle, but a mapping IS declared. Judge by clock a (topic liveness)
+            # + clock c (held-value age), NOT clock b / _oat_q.
+            #
+            # Invariant: this branch's guard `outdoor_declared` is exactly
+            # `any(m.field == "outdoor_temp" for m in tm.input_mappings)` (set at
+            # :1364-1367, same read-only tm), so >= 1 outdoor mapping exists here
+            # and tm is truthy. Compute the set ONCE and assert it: _om[0] is
+            # safe (no `else "default"` category guard needed) AND the
+            # _topic_alive any() below is over a non-empty set, so it can never
+            # be a vacuous False mis-read as comms-loss.
+            _outdoor_mappings = [m for m in tm.input_mappings if m.field == "outdoor_temp"]
+            assert _outdoor_mappings, "outdoor_declared ⇒ ≥1 outdoor mapping"
+            _om = _outdoor_mappings[0]
+            _thr = staleness_defaults.get(_om.category, staleness_defaults["default"])
+            _fresh, _unavail = _thr["fresh"], _thr["unavailable"]
+
+            # Clock a — topic liveness, independent of clock b. Default-clock
+            # resolve inherits Step-1 LWT availability + Step-3 arrival age, so
+            # an empty cache, an aged topic, or an offline LWT all read as down.
+            # Over the non-empty _outdoor_mappings per the invariant above.
+            _topic_alive = any(
+                _resolve_signal_quality(m, cache, staleness_defaults, now)[0] != "unavailable"
+                for m in _outdoor_mappings
+            )
+
+            if self._outdoor_last_valid is None:
+                # No history to hold — synthetic 5.0, loud (unchanged semantics).
                 outdoor_temp = 5.0
                 _oat_ann.entered("MQTT.outdoor_stale_no_history", fallback=5.0)
                 _oat_ann.exited("MQTT.outdoor_stale_passthrough")
                 _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
+            else:
+                outdoor_temp = self._outdoor_last_valid
+                _value_age = (
+                    now - self._outdoor_last_valid_ts
+                    if self._outdoor_last_valid_ts is not None else 0.0
+                )
+                if not _topic_alive:
+                    # Clock a says the source is down — genuine comms loss.
+                    _oat_ann.entered(
+                        "MQTT.outdoor_stale_lastvalid",
+                        temp=round(outdoor_temp, 1), age_s=int(_value_age),
+                        reason="unavailable",
+                    )
+                    _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                    _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                    _oat_ann.exited("MQTT.outdoor_stale_no_history")
+                elif _outdoor_present_malformed:
+                    # Topic alive, key present but non-numeric.
+                    _oat_ann.entered(
+                        "MQTT.outdoor_stale_lastvalid",
+                        temp=round(outdoor_temp, 1), age_s=int(_value_age),
+                        reason="parse_failed",
+                    )
+                    _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                    _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                    _oat_ann.exited("MQTT.outdoor_stale_no_history")
+                elif _value_age <= _fresh:
+                    # Topic alive, key absent this publish, held value still
+                    # fresh. On-change semantics: an unchanged field is simply
+                    # not re-sent, so the held value IS current. Silent,
+                    # measurement-grade.
+                    has_outdoor = True
+                    _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
+                    _oat_ann.exited("MQTT.outdoor_stale_no_history")
+                    _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                    _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                elif _value_age <= _unavail:
+                    # Held value aging (fresh..unavailable band). It is still
+                    # emitted as outdoor_temp and continues to drive control;
+                    # has_outdoor=False marks it as not a fresh measurement —
+                    # exactly the value-present stale passthrough (branch 2).
+                    _oat_ann.entered(
+                        "MQTT.outdoor_stale_passthrough", temp=round(outdoor_temp, 1)
+                    )
+                    _oat_ann.exited("MQTT.outdoor_stale_lastvalid")
+                    _oat_ann.exited("MQTT.outdoor_stale_no_history")
+                    _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                else:
+                    # Held value older than the unavailable threshold while the
+                    # topic is still alive. Per owner taxonomy disposition this
+                    # collapses to "unavailable" (no separate field_stale reason).
+                    _oat_ann.entered(
+                        "MQTT.outdoor_stale_lastvalid",
+                        temp=round(outdoor_temp, 1), age_s=int(_value_age),
+                        reason="unavailable",
+                    )
+                    _oat_ann.exited("MQTT.outdoor_stale_passthrough")
+                    _oat_ann.exited("MQTT.outdoor_no_mapping_fallback")
+                    _oat_ann.exited("MQTT.outdoor_stale_no_history")
         else:
             # No outdoor mapping configured — hold-or-5.0 arm, mirroring the HA
             # no-entity branch (sensor_fetcher.py:1184-1186). INSTRUCTION-337 —

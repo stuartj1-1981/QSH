@@ -1425,9 +1425,21 @@ def resolve_external_setpoints(config: Dict) -> None:
     # external value that was written into config on a previous cycle.
     # API endpoints call update_setpoint_original() to keep the snapshot
     # in sync when users change internal values.
+    #
+    # INSTRUCTION-356 — driver parity: control.pid_target_entity
+    # (entities.pid_target_temperature) is the HA counterpart to the MQTT
+    # pid_target_topic. Prefer it when configured; fall back to the legacy
+    # external_setpoints.comfort_temp entity (entities.comfort_temp) so installs
+    # predating the PID-target field keep working byte-for-byte. The comfort
+    # SCHEDULE still overrides this in sensor_controller when a period is active
+    # (INSTRUCTION-257) — unchanged, and symmetric with MQTT.
+    _pid_target_entity = (config.get("entities", {}) or {}).get("pid_target_temperature", "")
+    _comfort_entity_key = (
+        "entities.pid_target_temperature" if _pid_target_entity else "entities.comfort_temp"
+    )
     comfort_rv = resolve_value(
         config,
-        entity_key="entities.comfort_temp",
+        entity_key=_comfort_entity_key,
         internal_key=None,
         default=_setpoint_originals["comfort_temp"],
         read_fn=_ha_get_state,
