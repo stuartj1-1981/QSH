@@ -897,37 +897,38 @@ class SharedState:
             active_name = ctx.active_source
             source_states = ctx.inputs.source_states if ctx.inputs else {}
 
-            from qsh.tariff import fuel_for_source as _fuel_for_source
-
             sources_list = []
             for src in heat_sources:
                 name = src.get("name", "")
                 score = source_scores.get(name, 0.0)
                 eff = src.get("efficiency", 1.0)
 
-                # INSTRUCTION-260: prefer the live per-fuel rate from
-                # ctx.fuel_rates, populated by EnergyController. Fall back to the
-                # static config field for installs that don't have a TariffProvider
-                # configured for this source's fuel (rare; legacy or test fixtures).
-                # Defence-in-depth isinstance check — test contexts may use
-                # MagicMock where ctx.fuel_rates returns a non-dict; treat as empty.
                 src_type = src.get("type", "")
-                try:
-                    _src_fuel = _fuel_for_source(src_type)
-                except KeyError:
-                    _src_fuel = None
-                _ctx_fuel_rates = getattr(ctx, "fuel_rates", None)
-                if not isinstance(_ctx_fuel_rates, dict):
-                    _ctx_fuel_rates = {}
-                _live_rate = (
-                    _ctx_fuel_rates.get(_src_fuel, 0.0) if _src_fuel is not None else 0.0
-                )
-                if not isinstance(_live_rate, (int, float)):
-                    _live_rate = 0.0
-                fuel_cost = (
-                    _live_rate if _live_rate > 0.0
-                    else src.get("fuel_cost_per_kwh", 0.0)
-                )
+
+                # INSTRUCTION-355 — primary path: read the per-source cost
+                # SourceSelectionController published this cycle (pure ctx read;
+                # incl. the fuel_cost_entity/topic slot). Replaces the prior
+                # fuel_rates-only resolution that ignored per-source topics.
+                # Cold-start fallback (V2 — closes reviewer V1 LOW): on the first
+                # cycle, before SSC has published this name, resolve directly
+                # through the single authority so a topic-priced source is never
+                # shown as 0 for one cycle. The lazy import keeps api/state.py off
+                # a top-level pipeline.controllers dependency (same local-import
+                # idiom as the fuel_for_source import this block replaces).
+                # Defence-in-depth isinstance check — test contexts may use
+                # MagicMock where ctx.source_fuel_costs returns a non-dict; treat
+                # as empty so the direct-resolution fallback runs.
+                _published_map = getattr(ctx, "source_fuel_costs", None)
+                if not isinstance(_published_map, dict):
+                    _published_map = {}
+                _published = _published_map.get(name)
+                if _published is not None:
+                    fuel_cost = _published
+                else:
+                    from qsh.pipeline.controllers.source_selection import (
+                        resolve_source_input_cost,
+                    )
+                    fuel_cost = resolve_source_input_cost(src, ctx)[0]
 
                 carbon = src.get("carbon_factor", 0.0)
 

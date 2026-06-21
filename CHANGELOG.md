@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [1.5.12] — 2026-06-21
+
+### Added
+- Faster thermal-mass learning. The system now identifies each room's thermal
+  mass from away-mode deep setbacks, recovery heat-up ramps, and active setback
+  periods, in addition to passive cooling. On installs where passive cooling
+  alone was slow to converge, this sharpens control accuracy sooner.
+- Home Assistant installs can now drive live comfort setpoints from a
+  PID-target entity, matching the parity MQTT installs already had.
+
+### Changed
+- MQTT shared-topic sensors now track freshness per field, distinguishing an
+  absent value from a parse failure — a stale or missing key no longer masks a
+  good reading on the same topic.
+- Per-source fuel-cost resolution now behaves consistently across source types.
+
+### Security
+- Updated frontend dependencies to clear security advisories.
+
 ## [1.5.11] — 2026-06-20
 
 ### Added
