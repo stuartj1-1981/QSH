@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.14] — 2026-06-24
+
+### Changed
+- More accurate thermal-mass (C) confidence. Passive-cooling thermal-mass
+  estimates are now judged against their own natural measurement scatter
+  rather than the tighter heat-loss (U) reference, so a room's thermal-mass
+  confidence is no longer under-reported.
+
 ## [1.5.13] — 2026-06-24
 
 ### Added
