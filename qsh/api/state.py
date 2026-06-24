@@ -147,6 +147,9 @@ class CycleSnapshot:
     rl_loss: float = 0.0
     shoulder_monitoring: bool = False
     summer_monitoring: bool = False
+    # INSTRUCTION-364 — live active-cooling flag (363's observed_mode == "cool").
+    # Sourced from ctx.inputs.cooling_active; drives the Home cooling banner.
+    cooling_active: bool = False
     cascade_active: bool = False
     frost_cap_active: bool = False
 
@@ -733,6 +736,7 @@ class SharedState:
             rl_loss=ctx.loss_value,
             shoulder_monitoring=ctx.shoulder_monitoring,
             summer_monitoring=ctx.summer_monitoring,
+            cooling_active=getattr(ctx.inputs, "cooling_active", False),
             cascade_active=ctx.cascade_active if hasattr(ctx, 'cascade_active') else False,
             frost_cap_active=ctx.frost_cap_active if hasattr(ctx, 'frost_cap_active') else False,
             antifrost_override_active=ctx.antifrost_override_active,

@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Zap, Wind, AlertTriangle, Flame, EyeOff } from 'lucide-react'
+import { Zap, Wind, AlertTriangle, Flame, EyeOff, Snowflake } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { sourceShortName } from '../lib/sourceLabels'
 import { DEFAULT_TARIFF_AGGRESSION_MODE, TARIFF_LABELS } from '../lib/tariff'
@@ -103,6 +103,9 @@ interface StatusBannerProps {
   // aggression takes effect in summer monitoring).
   tariffMode?: TariffAggressionMode
   summerMonitoring?: boolean
+  // INSTRUCTION-364: active-cooling indicator. When true the HP is running as
+  // cooling (A/C) and SysID learning is paused (363). Informational only.
+  coolingActive?: boolean
   // INSTRUCTION-186: active control routing path — read-only diagnostic
   // chip. Loose `string` type tolerates unknown future backend values
   // (forward-compat — see the unmapped-value test).
@@ -147,6 +150,7 @@ export const StatusBanner = memo(function StatusBanner({
   onNavigate,
   tariffMode,
   summerMonitoring,
+  coolingActive,
   controlMethod,
   sourceSelection,
   heatSourceCount,
@@ -379,6 +383,20 @@ export const StatusBanner = memo(function StatusBanner({
         <div className="rounded-xl border p-3 mb-2 bg-amber-500/15 border-amber-500/30 text-amber-700 flex items-center gap-2 text-sm font-medium">
           <AlertTriangle size={16} />
           Pipeline Paused: {operatingState}
+        </div>
+      )}
+
+      {/* INSTRUCTION-364 active-cooling banner — informational. The HP is
+          running as cooling (A/C), so SysID learning is paused (363). Renders
+          only when the live flag is true; below the safety/quarantine banners. */}
+      {coolingActive && (
+        <div
+          role="status"
+          data-testid="cooling-banner"
+          className="rounded-xl border p-3 mb-2 bg-cyan-500/15 border-cyan-500/30 text-cyan-700 dark:text-cyan-300 flex items-center gap-2 text-sm font-medium"
+        >
+          <Snowflake size={16} className="shrink-0" />
+          Active cooling — SysID learning paused while the heat pump runs as cooling.
         </div>
       )}
 

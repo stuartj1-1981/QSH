@@ -11,7 +11,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from ...signal_bus import InputBlock, OutputBlock
+from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
 from ...occupancy.comfort_schedule import get_comfort_schedule_store
@@ -719,6 +719,8 @@ class MQTTDriver:
         hw_active_live: bool = False
         hw_boolean_value: Optional[bool] = None
         hw_boolean_live: bool = False
+        # INSTRUCTION-364 — optional cooling-status topic, classified on/off.
+        cooling_active_value: Optional[bool] = None
 
         if tm:
             staleness_defaults = tm.staleness_defaults
@@ -899,6 +901,16 @@ class MQTTDriver:
                             hw_boolean_value = val
                         if live:
                             hw_boolean_live = True
+                    elif mapping.field == "cooling_active":
+                        # INSTRUCTION-364 — on/off classification (same payload
+                        # vocabulary as the other boolean topics). Unrecognised
+                        # payloads leave the prior value untouched.
+                        if extracted is not None:
+                            norm = extracted.strip().lower()
+                            if norm in _ON_PAYLOADS:
+                                cooling_active_value = True
+                            elif norm in _OFF_PAYLOADS:
+                                cooling_active_value = False
                 elif value is not None:
                     _system_value_candidates.setdefault(mapping.field, []).append(
                         (value, quality, mapping)
@@ -1527,6 +1539,19 @@ class MQTTDriver:
             hp_return_temp=system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
             hp_power=system_values.get("hp_power", 0.0),
             hp_cop=system_values.get("hp_cop", 3.5),
+            # INSTRUCTION-363/364 — operator-mapped cooling topic (truthy) OR
+            # 363's hydraulic detector. MQTT carries no defrost signal
+            # (:1515-1546), so pass False for defrost; an MQTT HP in defrost may
+            # briefly read flow-below-return and be classed cool, harmlessly
+            # skipping a few learning cycles (conservative, §5). bool(None) is
+            # False, so an unmapped topic → exactly 363.
+            cooling_active=bool(cooling_active_value) or derive_cooling_active(
+                system_values.get("hp_power", 0.0),
+                system_values.get("hp_flow_temp", 35.0),
+                system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
+                False,
+                has_live_return,
+            ),
             delta_t=computed_delta_t,
             flow_rate=system_values.get("flow_rate", 0.0),
             solar_production=system_values.get("solar_production", 0.0),

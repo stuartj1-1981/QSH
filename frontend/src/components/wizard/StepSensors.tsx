@@ -30,6 +30,9 @@ const MQTT_CORE_SENSOR_FIELDS = [
 // moved to PER_SOURCE_MQTT_SENSOR_FIELDS.
 const MQTT_ADDITIONAL_SENSOR_FIELDS = [
   { key: 'hp_mode_state', label: 'HP Mode State', hint: 'optional', helper: '' },
+  // INSTRUCTION-364 — optional cooling-status topic. Truthy ⇒ pauses SysID
+  // learning while the HP runs as cooling (OR-composed with hydraulic detection).
+  { key: 'cooling_active', label: 'Cooling Status', hint: 'optional', helper: '' },
 ] as const
 
 // Per-source sensor topics — rendered under the tab strip in MqttSensors.
@@ -321,6 +324,18 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
               onChange={(v) => updateSensor('water_heater', v)}
               candidates={candidates.hp_water_heater || []}
             />
+            <div>
+              <EntityPicker
+                slot="hp_cooling_active"
+                label="Cooling Status"
+                value={sensorAsString(sensors.cooling_active)}
+                onChange={(v) => updateSensor('cooling_active', v)}
+                candidates={[]}
+              />
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Optional binary/mode entity that reads true when the HP is cooling — pauses SysID learning while active.
+              </p>
+            </div>
           </div>
         )}
       </div>

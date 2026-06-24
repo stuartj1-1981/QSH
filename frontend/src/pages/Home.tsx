@@ -340,6 +340,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         onNavigate={onNavigate}
         tariffMode={configData?.energy?.tariff_aggression_mode}
         summerMonitoring={Boolean(eng?.summer_monitoring)}
+        coolingActive={Boolean(eng?.cooling_active)}
         controlMethod={initial?.control_method}
         sourceSelection={sourceSelection ?? undefined}
         heatSourceCount={configData?.heat_sources?.length}

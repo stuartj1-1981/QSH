@@ -159,6 +159,7 @@ def _format_snapshot(snap) -> dict:
             "rl_loss": round(snap.rl_loss, 4),
             "shoulder_monitoring": snap.shoulder_monitoring,
             "summer_monitoring": snap.summer_monitoring,
+            "cooling_active": snap.cooling_active,
             "cascade_active": snap.cascade_active,
             "frost_cap_active": snap.frost_cap_active,
             "antifrost_override_active": snap.antifrost_override_active,

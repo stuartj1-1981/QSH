@@ -219,6 +219,9 @@ export interface HeatSourceYaml {
     water_heater?: string | MqttTopicInput
     hot_water_boolean?: string | MqttTopicInput
     pump_power?: string | MqttTopicInput
+    // INSTRUCTION-364 — optional cooling-status sensor (HA: heat_sources[i].
+    // sensors.cooling_active). MQTT maps it system-level via mqtt.inputs.
+    cooling_active?: string | MqttTopicInput
   }
 }
 

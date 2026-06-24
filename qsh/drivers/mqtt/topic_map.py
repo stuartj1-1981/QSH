@@ -514,6 +514,10 @@ SYSTEM_INPUT_FIELDS = {
 SYSTEM_STRING_INPUT_FIELDS = {
     "hot_water_active": "hot_water_active",
     "hot_water_boolean": "hot_water_boolean",
+    # INSTRUCTION-364 — optional cooling-status topic (boolean/enum payload).
+    # Classified on/off in driver.read_inputs and OR-composed with 363's
+    # hydraulic derive_cooling_active. Requires the matching elif handler there.
+    "cooling_active": "cooling_active",
 }
 
 # Fields that indicate capabilities when received.

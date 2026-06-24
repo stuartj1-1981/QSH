@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from ...signal_bus import InputBlock, OutputBlock
+from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 
 
 def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
@@ -34,6 +34,31 @@ def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
     if raw is None or raw in ("unavailable", "unknown"):
         return None
     return raw == "on"
+
+
+def _resolve_cooling_sensor_entity(config: Dict) -> Optional[str]:
+    """Entity id mapped to the active heat source's optional cooling-status
+    sensor (heat_sources[i].sensors.cooling_active), absent-tolerant.
+
+    INSTRUCTION-364 — prefers the entry whose name matches active_source_name;
+    falls back to the first source, then the singular legacy heat_source block.
+    Returns None when nothing is mapped (⇒ pure 363 hydraulic detection).
+    """
+    active = config.get("active_source_name")
+    chosen: Optional[Dict] = None
+    for src in config.get("heat_sources", []) or []:
+        if not isinstance(src, dict):
+            continue
+        if active is not None and src.get("name") == active:
+            chosen = src
+            break
+        if chosen is None:
+            chosen = src
+    if chosen is not None:
+        ent = (chosen.get("sensors") or {}).get("cooling_active")
+        if ent:
+            return ent
+    return (config.get("heat_source", {}).get("sensors", {}) or {}).get("cooling_active")
 
 
 class HADriver:
@@ -389,6 +414,17 @@ class HADriver:
         _compressor_freq = _read_modbus_entity("compressor_freq_hz")
         _defrost_valve = _read_modbus_entity("defrost_valve_pct")
 
+        # INSTRUCTION-364 — optional operator-mapped cooling-status sensor.
+        # Read the mapped entity to a tri-state bool (on→True / off→False /
+        # missing→None); OR-composed with 363's hydraulic detector below so a
+        # mapped sensor only ever ADDS detection, and an unmapped install is
+        # byte-identical to 363.
+        _cooling_entity = _resolve_cooling_sensor_entity(config)
+        _cooling_sensor = (
+            _read_dfan_control_state(config, _cooling_entity)
+            if _cooling_entity else None
+        )
+
         return InputBlock(
             # Temperatures
             room_temps=dict(sensor_data.room_temps),
@@ -416,6 +452,18 @@ class HADriver:
             compressor_freq_hz=_compressor_freq,
             defrost_active=(_defrost_valve or 0) > 0,
             defrost_valve_pct=_defrost_valve,
+            # INSTRUCTION-363/364 — operator-mapped cooling sensor (truthy) OR
+            # 363's hydraulic detector from values already resolved for the
+            # sibling heat-source fields (same defrost predicate as
+            # defrost_active, same has_live_return_temp as below). bool(None) is
+            # False, so an unmapped sensor → exactly 363.
+            cooling_active=bool(_cooling_sensor) or derive_cooling_active(
+                sensor_data.hp_power,
+                sensor_data.hp_flow_temp,
+                sensor_data.hp_return_temp,
+                (_defrost_valve or 0) > 0,
+                sensor_data.has_live_return_temp,
+            ),
             # Valve positions
             valve_positions=dict(sensor_data.heating_percs),
             valve_positions_per_emitter={
