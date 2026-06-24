@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.13] — 2026-06-24
+
+### Added
+- Cooling awareness. An optional cooling-status sensor lets the system detect
+  when air conditioning is active, suppressing thermal-model learning during
+  cooling so summer A/C no longer corrupts the heating model, and surfacing an
+  active-cooling banner on the Home screen.
+
 ## [1.5.12] — 2026-06-21
 
 ### Added

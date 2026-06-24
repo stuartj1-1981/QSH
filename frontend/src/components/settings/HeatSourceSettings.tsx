@@ -567,6 +567,7 @@ function SourceCard({
       hs.sensors?.flow_rate,
       hs.sensors?.delta_t,
       hs.sensors?.pump_power,
+      hs.sensors?.cooling_active,
       extractTopic(hs.fuel_cost_entity),
       extractTopic(hs.carbon_factor_entity),
     ].filter(Boolean) as string[]
@@ -1606,6 +1607,15 @@ function SourceCard({
                       unit={resolved[sensorEntity(hs.sensors?.delta_t)]?.unit}
                       onChange={(v) => onSensorChange('delta_t', v)}
                       placeholder="sensor.hp_delta_t"
+                    />
+                    <EntityField
+                      label="Cooling Status"
+                      value={sensorEntity(hs.sensors?.cooling_active)}
+                      friendlyName={resolved[sensorEntity(hs.sensors?.cooling_active)]?.friendly_name}
+                      state={resolved[sensorEntity(hs.sensors?.cooling_active)]?.state}
+                      unit={resolved[sensorEntity(hs.sensors?.cooling_active)]?.unit}
+                      onChange={(v) => onSensorChange('cooling_active', v)}
+                      placeholder="binary_sensor.my_hp_cooling"
                     />
                     {isNonHp && (
                       <EntityField

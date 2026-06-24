@@ -132,6 +132,7 @@ export interface EngineeringState {
   rl_loss?: number
   shoulder_monitoring: boolean
   summer_monitoring: boolean
+  cooling_active?: boolean  // INSTRUCTION-364 — drives the Home cooling banner
   antifrost_override_active?: boolean
   winter_equilibrium?: boolean
   antifrost_threshold?: number
@@ -372,6 +373,7 @@ export interface CycleMessage {
     rl_loss: number
     shoulder_monitoring: boolean
     summer_monitoring: boolean
+    cooling_active?: boolean  // INSTRUCTION-364
     antifrost_override_active?: boolean
     winter_equilibrium?: boolean
     antifrost_threshold?: number
