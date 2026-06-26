@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.15] — 2026-06-26
+
+### Added
+- The system now reads and displays its swarm admission status — whether it is
+  registered, assigned to a coordinator, and which cohorts it belongs to — for
+  operator and UI visibility. This is display-only and does not change how the
+  unit publishes telemetry or joins the swarm.
+
 ## [1.5.14] — 2026-06-24
 
 ### Changed
