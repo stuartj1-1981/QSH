@@ -331,6 +331,23 @@ def get_channels():
     return {"channels": channels}
 
 
+def _own_registry_unknown():
+    """The degraded own-registry posture block (runtime absent / not yet wired).
+    Mirrors the shape of ``OwnRegistryCache.snapshot()`` in its never-stamped
+    state — UNKNOWN lifecycle, no coordinator, no cohorts, not fresh."""
+    return {
+        "unit_id": None,
+        "lifecycle_state": "UNKNOWN",
+        "served_by_coordinator": None,
+        "archetype_attr": None,
+        "feeder_attr": None,
+        "gsp_attr": None,
+        "cohorts": [],
+        "fresh": False,
+        "age_seconds": None,
+    }
+
+
 class _LiveEnableBody(BaseModel):
     """POST /api/swarm/live body — operator toggle of the master live-enable."""
 
@@ -345,7 +362,15 @@ def get_global():
     so the UI Watchdog caption fires correctly). ``live_active`` is the actual
     consumption signal (master intent ∧ fresh GLOBAL Open); ``can_enable`` mirrors
     the set-time interlock (the master can only be enabled while GLOBAL is a fresh
-    Open). Disabled/not-yet-wired → all-UNKNOWN/false, HTTP 200 (graceful idiom)."""
+    Open). Disabled/not-yet-wired → all-UNKNOWN/false, HTTP 200 (graceful idiom).
+
+    INSTRUCTION-366 — also surfaces the unit's own marshal registry-row admission
+    posture under ``own_registry`` (``OwnRegistryCache.snapshot(now)``): the
+    derived ``lifecycle_state`` (REGISTERED / ASSIGNED / ACTIVE, or UNKNOWN when
+    never read / stale / no-row), ``served_by_coordinator``, ``cohorts``, plus
+    freshness. The unit does NOT gate on lifecycle — this is read-and-surface
+    only. Not-yet-wired → an UNKNOWN/false posture block (mirrors the global_gate
+    degraded path)."""
     runtime = shared_state.get_swarm()
     if runtime is None:
         return {
@@ -353,6 +378,7 @@ def get_global():
             "live_enabled": False,
             "live_active": False,
             "can_enable": False,
+            "own_registry": _own_registry_unknown(),
         }
     now = time.monotonic()
     cache = runtime.global_gate_cache
@@ -362,6 +388,7 @@ def get_global():
         "live_enabled": cache.live_enabled,
         "live_active": cache.live_active(now),
         "can_enable": fresh is GateState.OPEN,
+        "own_registry": runtime.own_registry_cache.snapshot(now),
     }
 
 
