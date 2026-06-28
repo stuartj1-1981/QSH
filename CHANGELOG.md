@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.5.16] — 2026-06-28
+
+### Added
+- Swarm units now report a baseline learning-coverage status — whether the
+  thermal model is qualified, still qualifying, has a measurement gap, or is in
+  fault — to the coordinator, derived from how mature the heat-loss and
+  passive-cooling learning is. This is the unit-side signal the coordinator's
+  maturity gate consumes.
+- Units now report building metadata — construction year, fabric class, and
+  storey count — to the swarm, so the platform can derive the building's
+  archetype from its configuration. A new wizard step captures construction
+  year and fabric class.
+
 ## [1.5.15] — 2026-06-26
 
 ### Added

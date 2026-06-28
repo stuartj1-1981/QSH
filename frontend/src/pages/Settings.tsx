@@ -90,7 +90,16 @@ export function Settings({ onRunWizard }: SettingsProps) {
 
     switch (section) {
       case 'rooms':
-        return <RoomSettings rooms={data.rooms || {}} property={data.property || {}} driver={driver} onRefetch={refetch} />
+        return (
+          <RoomSettings
+            rooms={data.rooms || {}}
+            property={data.property || {}}
+            construction_year={data.construction_year}
+            fabric_class={data.fabric_class}
+            driver={driver}
+            onRefetch={refetch}
+          />
+        )
       case 'building-layout':
         return <BuildingLayout onRefetch={refetch} />
       case 'heat_source':

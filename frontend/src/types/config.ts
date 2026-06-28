@@ -447,6 +447,16 @@ export interface PropertyYaml {
   bedrooms?: number
 }
 
+/** INSTRUCTION-368 — Taxonomy-V1 §3.5 fabric-class enum (D5 dimension). */
+export type FabricClass =
+  | 'solid_wall'
+  | 'cavity_unfilled'
+  | 'cavity_filled'
+  | 'timber_frame'
+  | 'sip'
+  | 'mixed'
+  | 'unknown'
+
 export interface QshConfigYaml {
   driver?: 'ha' | 'mqtt'
   rooms?: Record<string, RoomConfigYaml>
@@ -482,6 +492,12 @@ export interface QshConfigYaml {
    *  automatic (Supervisor → TZ env → UTC). Validated authoritatively at
    *  backend config load; written via PATCH /api/config/root. */
   schedule_timezone?: string
+
+  // INSTRUCTION-368 — building-class metadata (D2 era / D5 fabric). Optional
+  // top-level scalars captured by the wizard building step; emitted in the
+  // parameter-packet building block for archetype derivation. Absent = unset.
+  construction_year?: number
+  fabric_class?: FabricClass
 
   // INSTRUCTION-324 — wizard config-truth gate.
   property?: PropertyYaml

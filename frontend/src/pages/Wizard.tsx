@@ -11,6 +11,7 @@ import { StepAuxOutputs } from '../components/wizard/StepAuxOutputs'
 import { StepTariff } from '../components/wizard/StepTariff'
 import { StepSchedules } from '../components/wizard/StepSchedules'
 import { StepThermal } from '../components/wizard/StepThermal'
+import { StepBuilding } from '../components/wizard/StepBuilding'
 import { StepHotWater } from '../components/wizard/StepHotWater'
 import { StepReview } from '../components/wizard/StepReview'
 import { StepTelemetryAgreement } from '../components/wizard/StepTelemetryAgreement'
@@ -126,6 +127,13 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
       case 'thermal':
         return (
           <StepThermal
+            config={wizard.config}
+            onUpdate={wizard.updateConfig}
+          />
+        )
+      case 'building':
+        return (
+          <StepBuilding
             config={wizard.config}
             onUpdate={wizard.updateConfig}
           />

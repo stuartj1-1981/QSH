@@ -7,22 +7,24 @@ describe('useWizard', () => {
     vi.restoreAllMocks()
   })
 
-  it('defaults to HA branch with 14 steps', () => {
+  it('defaults to HA branch with 15 steps', () => {
     // INSTRUCTION-162B: HA gained an `aux_outputs` step between `rooms` and
-    // `tariff` (13 → 14).
+    // `tariff` (13 → 14). INSTRUCTION-368: HA gained a `building` step after
+    // `thermal` (14 → 15).
     const { result } = renderHook(() => useWizard())
-    expect(result.current.totalSteps).toBe(14)
+    expect(result.current.totalSteps).toBe(15)
     expect(result.current.stepName).toBe('restore_backup')
   })
 
   it('HA branch step sequence skips MQTT Broker', () => {
     const { result } = renderHook(() => useWizard())
     expect(result.current.steps).not.toContain('mqtt_broker')
-    expect(result.current.totalSteps).toBe(14)
+    expect(result.current.totalSteps).toBe(15)
   })
 
-  it('MQTT branch includes MQTT Broker step with 15 steps', () => {
+  it('MQTT branch includes MQTT Broker step with 16 steps', () => {
     // INSTRUCTION-162B: MQTT path gained `aux_outputs` (14 → 15).
+    // INSTRUCTION-368: MQTT gained `building` after `thermal` (15 → 16).
     // Mock validation endpoint
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -36,8 +38,33 @@ describe('useWizard', () => {
       result.current.updateConfig('driver', 'mqtt')
     })
 
-    expect(result.current.totalSteps).toBe(15)
+    expect(result.current.totalSteps).toBe(16)
     expect(result.current.steps).toContain('mqtt_broker')
+  })
+
+  it('building step sits after thermal, before review, in both branches', () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ valid: true, errors: [], warnings: [] }),
+    } as Response)
+
+    const { result } = renderHook(() => useWizard())
+    const haSteps = [...result.current.steps]
+    const haThermalIdx = haSteps.indexOf('thermal')
+    const haBuildingIdx = haSteps.indexOf('building')
+    const haReviewIdx = haSteps.indexOf('review')
+    expect(haBuildingIdx).toBe(haThermalIdx + 1)
+    expect(haBuildingIdx).toBeLessThan(haReviewIdx)
+
+    act(() => {
+      result.current.updateConfig('driver', 'mqtt')
+    })
+    const mqttSteps = [...result.current.steps]
+    const mqttThermalIdx = mqttSteps.indexOf('thermal')
+    const mqttBuildingIdx = mqttSteps.indexOf('building')
+    const mqttReviewIdx = mqttSteps.indexOf('review')
+    expect(mqttBuildingIdx).toBe(mqttThermalIdx + 1)
+    expect(mqttBuildingIdx).toBeLessThan(mqttReviewIdx)
   })
 
   it('aux_outputs step sits between rooms and tariff in both branches', () => {
@@ -112,7 +139,7 @@ describe('useWizard', () => {
 
     expect(result.current.stepLabels).toContain('MQTT Broker')
     expect(result.current.stepLabels).toContain('Auxiliary outputs')
-    expect(result.current.stepLabels).toHaveLength(15)
+    expect(result.current.stepLabels).toHaveLength(16)
   })
 })
 
