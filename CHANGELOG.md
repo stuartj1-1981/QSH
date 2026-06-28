@@ -13,7 +13,7 @@
 - Units now report building metadata — construction year, fabric class, and
   storey count — to the swarm, so the platform can derive the building's
   archetype from its configuration. A new wizard step captures construction
-  year and fabric class.
+  year and fabric class.  Please update in settings under rooms or run the wizard.
 
 ## [1.5.15] — 2026-06-26
 
