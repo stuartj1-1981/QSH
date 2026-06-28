@@ -525,6 +525,15 @@ def patch_config_section(section: str, body=Body(...)):
             "mode_writes_per_hour",
             # INSTRUCTION-327 — Settings → System schedule-timezone field.
             "schedule_timezone",
+            # INSTRUCTION-369 — building-class metadata, surfaced for
+            # post-setup edit in the Rooms-settings Property box. Captured
+            # at first-run by 368's wizard StepBuilding; this is the ongoing
+            # edit path. Top-level scalars, recognised + soft-validated by the
+            # 368 config loader (_resolve_building_class). Soft on both layers:
+            # no range/enum 4xx here — an out-of-band year is warn-and-unset at
+            # load, and the material select only emits valid §3.5 values.
+            "construction_year",
+            "fabric_class",
         }
 
         def _apply_root(raw: dict) -> dict:
@@ -574,6 +583,23 @@ def patch_config_section(section: str, body=Body(...)):
                                         f"IANA zone name (example: Europe/London)"
                                     ),
                                 )
+                        # INSTRUCTION-369 — building-class clear path. A
+                        # blank/null construction_year or fabric_class pops the
+                        # key (mirrors schedule_timezone above). Required because
+                        # the root merge otherwise preserves the prior value when
+                        # a field is cleared — emptying the year / picking
+                        # "Not set" would not unset without this. No 4xx: the
+                        # year stays soft (368 loader warn-and-unset), the
+                        # material select only emits valid §3.5 values.
+                        if key in ("construction_year", "fabric_class"):
+                            if value is None or (
+                                isinstance(value, str) and not value.strip()
+                            ):
+                                raw.pop(key, None)
+                                config = shared_state.get_config()
+                                if config is not None:
+                                    config.pop(key, None)
+                                continue
                         raw[key] = value
                         # Also update in-memory config
                         config = shared_state.get_config()

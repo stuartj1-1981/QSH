@@ -72,6 +72,7 @@ const HA_STEPS = [
   'tariff',
   'schedules',
   'thermal',
+  'building',
   'hot_water',
   'disclaimer',
   'review',
@@ -90,6 +91,7 @@ const MQTT_STEPS = [
   'tariff',
   'schedules',
   'thermal',
+  'building',
   'hot_water',
   'disclaimer',
   'review',
@@ -183,7 +185,7 @@ export function useWizard() {
     const currentStepName = steps[state.currentStep] as WizardStepName
 
     // Steps that skip server validation
-    const skipValidation: WizardStepName[] = ['restore_backup', 'welcome', 'connection_method', 'schedules', 'hot_water']
+    const skipValidation: WizardStepName[] = ['restore_backup', 'welcome', 'connection_method', 'schedules', 'building', 'hot_water']
     if (skipValidation.includes(currentStepName)) {
       setState((prev) => ({
         ...prev,
@@ -308,6 +310,7 @@ export function useWizard() {
       tariff: 'Tariff',
       schedules: 'Schedules',
       thermal: 'Thermal',
+      building: 'Building',
       hot_water: 'Hot Water',
       disclaimer: 'Disclaimer',
       review: 'Review',

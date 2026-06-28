@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { Plus, Trash2, Save, Loader2, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass } from '../../types/config'
 import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
@@ -17,12 +17,47 @@ const BEDROOMS_MIN = 0
 const BEDROOMS_MAX = 12
 const AREA_RECONCILIATION_TOLERANCE = 0.25
 
+// INSTRUCTION-369 — build-year soft band (mirrors the backend 368 loader
+// _resolve_building_class [1700, current_year]). Soft on both layers: the
+// frontend shows a non-blocking warning, the root PATCH accepts (no 4xx), and
+// the 368 loader warn-and-unsets an out-of-band value on adoption.
+const CONSTRUCTION_YEAR_MIN = 1700
+
+// INSTRUCTION-369 — Taxonomy-V1 §3.5 fabric-class enum MINUS the literal
+// `unknown`. Absent already derives uk_unclassified downstream (QS-085 §4.1 /
+// 085B §3); offering both an empty "Not set" default AND a literal `unknown`
+// option would be two labels for indistinguishable states. The empty option is
+// the single absent-path.
+const FABRIC_CLASS_OPTIONS: { value: Exclude<FabricClass, 'unknown'>; label: string }[] = [
+  { value: 'solid_wall', label: 'Solid wall' },
+  { value: 'cavity_unfilled', label: 'Cavity — unfilled' },
+  { value: 'cavity_filled', label: 'Cavity — filled' },
+  { value: 'timber_frame', label: 'Timber frame' },
+  { value: 'sip', label: 'SIP (structural insulated panel)' },
+  { value: 'mixed', label: 'Mixed' },
+]
+
+/** Building-class edit state (INSTRUCTION-369). null = cleared/absent — sent as
+ *  null in the root PATCH so the backend pops the key (a cleared field unsets
+ *  rather than merge-preserving the prior value). A stored literal `unknown`
+ *  fabric_class is seeded verbatim and rides through the payload unchanged
+ *  (benign: `unknown` ≡ absent downstream). */
+interface BuildingState {
+  construction_year: number | null
+  fabric_class: string | null
+}
+
 interface RoomSettingsProps {
   rooms: Record<string, RoomConfigYaml>
   // INSTRUCTION-335 (P-5): the owner-declared building ground truth, surfaced
   // for edit-after-setup. Optional so existing callers/tests that pre-date
   // this change still type-check; absent ⇒ {} (a pre-324 install).
   property?: PropertyYaml
+  // INSTRUCTION-369 — top-level building-class scalars (368), surfaced for
+  // post-setup edit in the Property box. Optional; absent ⇒ unset. Edited as
+  // root keys via PATCH /api/config/root, NOT as `property` members.
+  construction_year?: number
+  fabric_class?: FabricClass
   driver: Driver
   onRefetch: () => void
 }
@@ -93,9 +128,15 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   return { ...room, mqtt_topics: cleaned as RoomConfigYaml['mqtt_topics'] }
 }
 
-export function RoomSettings({ rooms, property, driver, onRefetch }: RoomSettingsProps) {
+export function RoomSettings({ rooms, property, construction_year, fabric_class, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
   const [propertyState, setPropertyState] = useState<PropertyYaml>(property ?? {})
+  // INSTRUCTION-369 — building-class edit state, seeded verbatim from the
+  // top-level root keys (a stored `unknown` is held as-is, not normalised).
+  const [buildingState, setBuildingState] = useState<BuildingState>({
+    construction_year: construction_year ?? null,
+    fabric_class: fabric_class ?? null,
+  })
   const [saveError, setSaveError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const { patch, saving } = usePatchConfig()
@@ -430,6 +471,30 @@ export function RoomSettings({ rooms, property, driver, onRefetch }: RoomSetting
     area > 0 &&
     Math.abs(sumRoomArea - area) / area > AREA_RECONCILIATION_TOLERANCE
 
+  // ── Building-class dirty-gate + soft year warning (INSTRUCTION-369) ──
+  const initialBuilding: BuildingState = {
+    construction_year: construction_year ?? null,
+    fabric_class: fabric_class ?? null,
+  }
+  const buildingDirty =
+    JSON.stringify(buildingState) !== JSON.stringify(initialBuilding)
+  const currentYear = new Date().getFullYear()
+  const buildYear = buildingState.construction_year
+  const buildYearWarn =
+    typeof buildYear === 'number' &&
+    Number.isFinite(buildYear) &&
+    (buildYear < CONSTRUCTION_YEAR_MIN || buildYear > currentYear)
+  // Controlled-select fidelity: render "Not set" for a stored value not in the
+  // offered set (e.g. a literal `unknown`) WITHOUT writing the empty value back
+  // into buildingState — only an active operator change mutates state. The
+  // computed value always matches an existing <option> (a real fabric or the
+  // empty "Not set"), so the controlled select never has an unmatched value.
+  const fabricSelectValue =
+    buildingState.fabric_class &&
+    FABRIC_CLASS_OPTIONS.some((o) => o.value === buildingState.fabric_class)
+      ? buildingState.fabric_class
+      : ''
+
   // Rooms dirty-gate — clean BOTH sides (handoff-1).
   const cleanedRooms = cleanRoomsMap(editedRooms)
   const roomsDirty =
@@ -460,6 +525,22 @@ export function RoomSettings({ rooms, property, driver, onRefetch }: RoomSetting
       }
       if (!ok) {
         setSaveError('Failed to save property declaration. Your changes have not been applied.')
+        return
+      }
+    }
+    // INSTRUCTION-369 — third step: top-level building-class keys via the
+    // `root` PATCH (merge — siblings survive). Same abort-on-first-failure
+    // contract; fires only when dirty. Sends both keys (null = clear/pop); a
+    // seeded `unknown` rides through unchanged (benign, `unknown` ≡ absent).
+    if (buildingDirty) {
+      let ok = false
+      try {
+        ok = Boolean(await patch('root', buildingState))
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        setSaveError('Failed to save building details. Your changes have not been applied.')
         return
       }
     }
@@ -571,6 +652,69 @@ export function RoomSettings({ rooms, property, driver, onRefetch }: RoomSetting
                 Outside the typical range {BEDROOMS_MIN}–{BEDROOMS_MAX} — saved anyway.
               </p>
             )}
+          </div>
+        </div>
+        {/* INSTRUCTION-369 — top-level building-class scalars (368), editable
+            post-setup. Build year is a soft band (non-blocking warning, mirrors
+            the bedrooms soft-band — NOT the area hard-gate); material is the
+            §3.5 enum minus the literal `unknown`, with an empty "Not set". */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label
+              htmlFor="building-construction-year"
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Build Year — optional
+            </label>
+            <input
+              id="building-construction-year"
+              type="number"
+              step="1"
+              min={CONSTRUCTION_YEAR_MIN}
+              max={currentYear}
+              value={buildingState.construction_year ?? ''}
+              onChange={(e) =>
+                setBuildingState((prev) => ({
+                  ...prev,
+                  construction_year: e.target.value
+                    ? parseInt(e.target.value, 10)
+                    : null,
+                }))
+              }
+              placeholder="e.g. 2016"
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+            />
+            {buildYearWarn && (
+              <p className="mt-1 text-xs text-[var(--amber)]">
+                Outside the typical range {CONSTRUCTION_YEAR_MIN}–{currentYear} — saved anyway.
+              </p>
+            )}
+          </div>
+          <div>
+            <label
+              htmlFor="building-fabric-class"
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Material — optional
+            </label>
+            <select
+              id="building-fabric-class"
+              value={fabricSelectValue}
+              onChange={(e) =>
+                setBuildingState((prev) => ({
+                  ...prev,
+                  fabric_class: e.target.value || null,
+                }))
+              }
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+            >
+              <option value="">Not set</option>
+              {FABRIC_CLASS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         {reconcileWarn && (

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RoomSettings } from '../RoomSettings'
 import { stripFixedSetpointForControlMode } from '../../../lib/roomConfig'
@@ -973,6 +973,180 @@ describe('RoomSettings property declaration (INSTRUCTION-335)', () => {
     fireEvent.click(saveBtn())
     expect(await screen.findByText(/Failed to save rooms/i)).toBeInTheDocument()
     expect(patchMock.mock.calls.find((c) => c[0] === 'property')).toBeUndefined()
+    expect(onRefetch).not.toHaveBeenCalled()
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-369 — building-class edit path (construction_year, fabric_class)
+// =============================================================================
+
+describe('RoomSettings building-class edit path (INSTRUCTION-369)', () => {
+  beforeEach(() => {
+    patchMock.mockClear()
+  })
+
+  const baseRooms = { lounge: { area_m2: 20, facing: 'S', ceiling_m: 2.4 } }
+  const yearInput = () => screen.getByLabelText('Build Year — optional')
+  const materialSelect = () =>
+    screen.getByLabelText('Material — optional') as HTMLSelectElement
+  const saveBtn = () => screen.getByRole('button', { name: /save changes/i })
+
+  it('renders both inputs pre-filled from the top-level root props', () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        fabric_class="cavity_filled"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    expect(yearInput()).toHaveValue(2016)
+    expect(materialSelect().value).toBe('cavity_filled')
+  })
+
+  it('material select offers the §3.5 enum minus literal unknown, with an empty "Not set"', () => {
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
+    const select = materialSelect()
+    // Empty "Not set" present; no literal `unknown` option.
+    expect(within(select).getByRole('option', { name: 'Not set' })).toBeInTheDocument()
+    expect(within(select).queryByRole('option', { name: /unknown/i })).toBeNull()
+    // The six offered values (seven minus unknown).
+    const values = Array.from(select.options).map((o) => o.value)
+    expect(values).toEqual([
+      '',
+      'solid_wall',
+      'cavity_unfilled',
+      'cavity_filled',
+      'timber_frame',
+      'sip',
+      'mixed',
+    ])
+  })
+
+  it('editing the year dirties and Save issues patch("root", …) — only when dirty', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        fabric_class="cavity_filled"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    fireEvent.change(yearInput(), { target: { value: '1998' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith(
+        'root',
+        expect.objectContaining({ construction_year: 1998, fabric_class: 'cavity_filled' }),
+      ),
+    )
+    // Building-only edit ⇒ rooms/property untouched.
+    expect(patchMock.mock.calls.find((c) => c[0] === 'rooms')).toBeUndefined()
+    expect(patchMock.mock.calls.find((c) => c[0] === 'property')).toBeUndefined()
+  })
+
+  it('no building edit ⇒ no root PATCH (clean-save gating)', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        fabric_class="cavity_filled"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    // Dirty rooms only; building untouched.
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '21' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('rooms', expect.anything()),
+    )
+    expect(patchMock.mock.calls.find((c) => c[0] === 'root')).toBeUndefined()
+  })
+
+  it('changing the material to "Not set" clears the key (null in the root payload)', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        fabric_class="cavity_filled"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    fireEvent.change(materialSelect(), { target: { value: '' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith(
+        'root',
+        expect.objectContaining({ fabric_class: null }),
+      ),
+    )
+  })
+
+  it('an out-of-band year shows the soft warning and never disables Save', () => {
+    render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
+    fireEvent.change(yearInput(), { target: { value: '1600' } })
+    expect(screen.getByText(/Outside the typical range/i)).toBeInTheDocument()
+    expect(saveBtn()).not.toBeDisabled()
+  })
+
+  it('a stored unknown seeds the select as "Not set" and rides through a dirtying Save unchanged', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        fabric_class="unknown"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    // Controlled-select fidelity: stored `unknown` renders "Not set" (value '').
+    expect(materialSelect().value).toBe('')
+    // Dirty via a year edit; fabric_class rides through verbatim (not collapsed).
+    fireEvent.change(yearInput(), { target: { value: '1998' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith(
+        'root',
+        expect.objectContaining({ construction_year: 1998, fabric_class: 'unknown' }),
+      ),
+    )
+  })
+
+  it('opening the box on a stored unknown without editing fires no root PATCH (verbatim hold)', async () => {
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        fabric_class="unknown"
+        driver="ha"
+        onRefetch={() => {}}
+      />,
+    )
+    // No edit at all — render-time controlled-select must not dirty buildingState.
+    fireEvent.click(saveBtn())
+    // Nothing dirty ⇒ no PATCH of any section.
+    expect(patchMock).not.toHaveBeenCalled()
+  })
+
+  it('aborts on first failure: root PATCH fails ⇒ no onRefetch, error surfaced', async () => {
+    const onRefetch = vi.fn()
+    patchMock.mockResolvedValueOnce(null)
+    render(
+      <RoomSettings
+        rooms={baseRooms}
+        construction_year={2016}
+        driver="ha"
+        onRefetch={onRefetch}
+      />,
+    )
+    fireEvent.change(yearInput(), { target: { value: '1998' } })
+    fireEvent.click(saveBtn())
+    expect(await screen.findByText(/Failed to save building details/i)).toBeInTheDocument()
     expect(onRefetch).not.toHaveBeenCalled()
   })
 })
