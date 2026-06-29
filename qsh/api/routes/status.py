@@ -167,6 +167,20 @@ def get_status():
             "cooling_active": snap.cooling_active,
             "cascade_active": snap.cascade_active,
             "frost_cap_active": snap.frost_cap_active,
+            # INSTRUCTION-372C — the ENFORCED flow envelope (arbiter's
+            # effective_min / flow_max), not raw caps. None-guarded. Mirrors
+            # the same fields in the /ws/live serialiser (api/ws.py) so REST
+            # and WebSocket expose an identical engineering block.
+            "flow_floor_c": (
+                round(snap.applied_flow_floor_c, 1)
+                if snap.applied_flow_floor_c is not None
+                else None
+            ),
+            "flow_ceiling_c": (
+                round(snap.applied_flow_ceiling_c, 1)
+                if snap.applied_flow_ceiling_c is not None
+                else None
+            ),
             "signal_quality": snap.signal_quality,
         },
         "source_selection": snap.source_selection,
@@ -196,3 +210,37 @@ def get_rooms_status():
         "timestamp": snap.timestamp,
         "rooms": snap.rooms,
     }
+
+
+# ---------------------------------------------------------------------------
+# INSTRUCTION-371A — per-device battery state-of-charge (FI-11).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/devices/health")
+def get_devices_health():
+    """Per-device battery health for the engineering Device Health page.
+
+    Iterates ``device_battery_soc.keys()`` as the authoritative device set
+    (NOT the status dict, which holds only `"low"` markers). Every returned
+    device is total via SITED defaults: a never-latched / recovered device
+    resolves to ``status:"ok"``, a just-seen device to ``weeks_remaining:">12w"``.
+    The endpoint does NOT re-threshold — ``status`` is pinned to the latched
+    ``SENSOR.battery_low`` state. Gracefully empty when unconfigured.
+    """
+    db = shared_state.get_device_battery()
+    soc = db.get("soc", {})
+    room = db.get("room", {})
+    band = db.get("band", {})
+    status = db.get("status", {})
+
+    devices = {}
+    for device in soc:
+        devices[device] = {
+            "room": room.get(device, ""),
+            "soc": soc[device],
+            "status": status.get(device, "ok"),
+            "weeks_remaining": band.get(device, ">12w"),
+        }
+    low_count = sum(1 for d in devices.values() if d["status"] == "low")
+    return {"devices": devices, "low_count": low_count}

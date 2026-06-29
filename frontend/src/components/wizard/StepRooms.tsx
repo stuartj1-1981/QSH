@@ -4,11 +4,58 @@ import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
-import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml } from '../../types/config'
+import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml, type BatteryDeviceYaml } from '../../types/config'
 
 /** Mirrors AREA_RECONCILIATION_TOLERANCE in qsh/api/routes/wizard.py — used
  *  only to colour the live readout; the backend rule is authoritative. */
 const AREA_TOLERANCE = 0.25
+
+// INSTRUCTION-373B — battery-eligible device entities of a rooms map as
+// (device, room) pairs: each TRV-per-emitter, the temperature sensor, and the
+// occupancy sensor. heating_entity is excluded (wired/mains). De-duped by
+// device so the rebuild visits each device once (uniqueness guarantee).
+function batteryDeviceRoomPairs(
+  rooms: Record<string, RoomConfigYaml>,
+): { device: string; room: string }[] {
+  const out: { device: string; room: string }[] = []
+  const seen = new Set<string>()
+  const push = (device: string | undefined, room: string) => {
+    if (!device || seen.has(device)) return
+    seen.add(device)
+    out.push({ device, room })
+  }
+  for (const [name, room] of Object.entries(rooms)) {
+    const trvs = Array.isArray(room.trv_entity)
+      ? room.trv_entity
+      : room.trv_entity
+        ? [room.trv_entity]
+        : []
+    for (const t of trvs) push(t, name)
+    push(room.independent_sensor, name)
+    push(room.occupancy_sensor, name)
+  }
+  return out
+}
+
+// INSTRUCTION-373B — the single normative write-discipline algorithm (see
+// §"Declared structure"): rebuild battery_devices as the union, over all rooms,
+// of {device, battery_entity, room} for every CURRENT device entity that has a
+// non-empty battery assigned. Unique by device; orphaned entries (from device
+// renames/removals) excluded — the prune is this rebuild's effect.
+function rebuildBatteryDevices(
+  rooms: Record<string, RoomConfigYaml>,
+  working: BatteryDeviceYaml[],
+): BatteryDeviceYaml[] {
+  const byDevice = new Map(working.map((b) => [b.device, b]))
+  const out: BatteryDeviceYaml[] = []
+  for (const { device, room } of batteryDeviceRoomPairs(rooms)) {
+    const entry = byDevice.get(device)
+    if (entry && entry.battery_entity && entry.battery_entity.trim()) {
+      out.push({ device, battery_entity: entry.battery_entity, room })
+    }
+  }
+  return out
+}
 
 interface StepRoomsProps {
   config: Partial<QshConfigYaml>
@@ -45,6 +92,25 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
 
   const updateProperty = (changes: Partial<PropertyYaml>) => {
     onUpdate('property', { ...property, ...changes })
+  }
+
+  // INSTRUCTION-373B — per-device battery SoC entry (top-level flat list).
+  const batteryDevices = config.battery_devices ?? []
+
+  /** Display projection: the battery entity for a device in a room, or ''. */
+  const batteryFor = (device: string, room: string): string =>
+    batteryDevices.find((b) => b.device === device && b.room === room)
+      ?.battery_entity ?? ''
+
+  /** Upsert-by-device, then rebuild over the current rooms so the stored list
+   *  is unique and orphan-free at write time (§"Declared structure"). Clearing
+   *  the battery removes the entry. */
+  const setBatteryFor = (device: string, room: string, value: string) => {
+    const working = batteryDevices.filter((b) => b.device !== device)
+    if (value && value.trim()) {
+      working.push({ device, battery_entity: value, room })
+    }
+    onUpdate('battery_devices', rebuildBatteryDevices(rooms, working))
   }
 
   const addRoom = () => {
@@ -707,40 +773,55 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                               i === 0
                                 ? 'Heating Feedback Entity'
                                 : `Heating Feedback Entity ${i + 1}`
+                            const trvBatteryLabel =
+                              i === 0 ? 'TRV Battery' : `TRV Battery ${i + 1}`
                             return (
-                              <div
-                                key={`emitter-row-${i}`}
-                                className="flex items-end gap-2"
-                              >
-                                <div className="flex-1 grid grid-cols-2 gap-3">
-                                  <EntityPicker
-                                    slot="trv_entity"
-                                    room={name}
-                                    label={trvLabel}
-                                    value={trvValue}
-                                    onChange={(v) => updateTrvAt(name, i, v)}
-                                    candidates={candidates.trv_entity || []}
-                                    required={i === 0}
-                                  />
-                                  <EntityPicker
-                                    slot="heating_entity"
-                                    room={name}
-                                    label={heLabel}
-                                    value={heValue}
-                                    onChange={(v) => updateHeatingAt(name, i, v)}
-                                    candidates={candidates.heating_entity || []}
-                                    required={i === 0}
-                                  />
+                              <div key={`emitter-row-${i}`} className="space-y-2">
+                                <div className="flex items-end gap-2">
+                                  <div className="flex-1 grid grid-cols-2 gap-3">
+                                    <EntityPicker
+                                      slot="trv_entity"
+                                      room={name}
+                                      label={trvLabel}
+                                      value={trvValue}
+                                      onChange={(v) => updateTrvAt(name, i, v)}
+                                      candidates={candidates.trv_entity || []}
+                                      required={i === 0}
+                                    />
+                                    <EntityPicker
+                                      slot="heating_entity"
+                                      room={name}
+                                      label={heLabel}
+                                      value={heValue}
+                                      onChange={(v) => updateHeatingAt(name, i, v)}
+                                      candidates={candidates.heating_entity || []}
+                                      required={i === 0}
+                                    />
+                                  </div>
+                                  {rowCount > 1 && (
+                                    <button
+                                      onClick={() => removeEmitterSlot(name, i)}
+                                      className="mt-5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                                      title={`Remove emitter ${i + 1}`}
+                                      aria-label={`Remove emitter ${i + 1}`}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  )}
                                 </div>
-                                {rowCount > 1 && (
-                                  <button
-                                    onClick={() => removeEmitterSlot(name, i)}
-                                    className="mt-5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
-                                    title={`Remove emitter ${i + 1}`}
-                                    aria-label={`Remove emitter ${i + 1}`}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
+                                {/* INSTRUCTION-373B — per-TRV battery; keyed to
+                                    this row's TRV. heating_entity gets none. */}
+                                {trvValue && (
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <EntityPicker
+                                      slot="battery_entity"
+                                      room={name}
+                                      label={trvBatteryLabel}
+                                      value={batteryFor(trvValue, name)}
+                                      onChange={(v) => setBatteryFor(trvValue, name, v)}
+                                      candidates={candidates.battery_entity || []}
+                                    />
+                                  </div>
                                 )}
                               </div>
                             )
@@ -767,6 +848,20 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         candidates={candidates.independent_sensor || []}
                         required
                       />
+                      {/* INSTRUCTION-373B — temp-sensor battery; device =
+                          independent_sensor, only when that sensor is set. */}
+                      {room.independent_sensor && (
+                        <EntityPicker
+                          slot="battery_entity"
+                          room={name}
+                          label="Temperature Sensor Battery"
+                          value={batteryFor(room.independent_sensor, name)}
+                          onChange={(v) =>
+                            setBatteryFor(room.independent_sensor!, name, v)
+                          }
+                          candidates={candidates.battery_entity || []}
+                        />
+                      )}
                       <EntityPicker
                         slot="occupancy_sensor"
                         room={name}
@@ -777,6 +872,20 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         }
                         candidates={candidates.occupancy_sensor || []}
                       />
+                      {/* INSTRUCTION-373B — occupancy-sensor battery; device =
+                          occupancy_sensor, only when that sensor is set. */}
+                      {room.occupancy_sensor && (
+                        <EntityPicker
+                          slot="battery_entity"
+                          room={name}
+                          label="Occupancy Sensor Battery"
+                          value={batteryFor(room.occupancy_sensor, name)}
+                          onChange={(v) =>
+                            setBatteryFor(room.occupancy_sensor!, name, v)
+                          }
+                          candidates={candidates.battery_entity || []}
+                        />
+                      )}
                     </>
                   )}
                 </div>

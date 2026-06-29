@@ -424,6 +424,17 @@ class MQTTDriver:
                 full_forecast_topic,
             )
 
+        # INSTRUCTION-374A — register mapped (topic, json_path) for message-time
+        # presence/value tracking. Must precede subscribe so the ledger is armed
+        # before the first message arrives. json_path None for plain mappings.
+        _field_paths: Dict[str, List[Optional[str]]] = {}
+        for _m in self._topic_map.input_mappings:
+            _jp = _m.json_path if _m.payload_format == "json" else None
+            _field_paths.setdefault(_m.topic, [])
+            if _jp not in _field_paths[_m.topic]:
+                _field_paths[_m.topic].append(_jp)
+        self._mqtt.register_field_paths(_field_paths)
+
         self._mqtt.subscribe(all_topics)
 
         logger.info(
@@ -668,8 +679,17 @@ class MQTTDriver:
         thresholds = staleness_defaults.get(
             mapping.category, staleness_defaults["default"]
         )
+        # INSTRUCTION-374A (closes 360 symptom 2) — report the clock-b age the
+        # decision actually used, not the clock-a topic-arrival age. Falls back
+        # to clock a, then "never", when clock b is unavailable.
+        _cb = self._field_last_present_ts.get((mapping.topic, mapping.json_path))
         value_entry = cache.get(mapping.topic)
-        age_s: Optional[float] = (now - value_entry[1]) if value_entry else None
+        if _cb is not None:
+            age_s: Optional[float] = now - _cb
+        elif value_entry is not None:
+            age_s = now - value_entry[1]
+        else:
+            age_s = None
         age_str = f"{age_s:.0f}s" if age_s is not None else "never"
 
         level = logging.INFO if new_quality == "good" else logging.WARNING
@@ -725,33 +745,26 @@ class MQTTDriver:
         if tm:
             staleness_defaults = tm.staleness_defaults
 
-            # INSTRUCTION-359 — clock b pre-pass. A field is "present" this cycle
-            # iff its json_path resolves to a non-null leaf in the latest cached
-            # payload (or, for a plain/single-value topic, the payload exists).
-            # Record the field's last-present timestamp as the CURRENT topic
-            # arrival ts on presence, and leave it untouched on absence — so an
-            # absent field retains its prior (older) ts and ages by its own
-            # clock. This realises the load-bearing invariant the Step-3 consumer
-            # relies on: clock b <= value_entry[1] (clock a) for every mapping,
-            # i.e. clock b can only ever move a field TOWARD staleness, never
-            # toward freshness. (Topic arrivals are monotonic per topic in
-            # production, so "record the current arrival on presence" equals a
-            # monotonic-forward update; it only differs from an unconditional
-            # max() when a reused-driver test injects a backwards-going arrival
-            # ts to simulate staleness — where this form correctly ages the
-            # field rather than masking the injected staleness with a stale-
-            # but-fresher ledger entry.) Keyed per (topic, json_path).
-            for _m in tm.input_mappings:
-                _entry = cache.get(_m.topic)
-                if _entry is None:
-                    continue
-                _payload, _ts = _entry
-                if _m.payload_format == "json" and _m.json_path:
-                    _present = extract_json_value(_payload, _m.json_path) is not None
-                else:
-                    _present = _payload is not None
-                if _present:
-                    self._field_last_present_ts[(_m.topic, _m.json_path)] = _ts
+            # INSTRUCTION-374A — clock b from the message-time ledger (replaces
+            # the 359 cycle-sampled pre-pass, which lost fields overwritten by a
+            # partial before the cycle sampled them). Projected wholesale into
+            # _field_last_present_ts (consumed unchanged at Step 3 / the logger).
+            # The ledger is monotonic (entries are never deleted; ts only moves
+            # forward), so a wholesale rebuild each cycle is correct. A non-dict
+            # snapshot — driver without a live client, or a test double that does
+            # not stub get_field_ledger_snapshot — normalises to {}, leaving each
+            # field's clock b absent so Step 3 falls back per-field to clock a
+            # (value_entry[1]); for any field present in the cached payload that
+            # equals clock b, so cache-only unit mocks are unaffected. Mirrors the
+            # isinstance(dict) guard 374B uses (A-D1b: single, aligned treatment).
+            _ledger_snap = (
+                self._mqtt.get_field_ledger_snapshot() if self._mqtt else {}
+            )
+            if not isinstance(_ledger_snap, dict):
+                _ledger_snap = {}
+            self._field_last_present_ts = {
+                k: ts for k, (_leaf, ts) in _ledger_snap.items()
+            }
 
             # Pass 1 — accumulate candidates per sq_key / per destination.
             # Multiple topics may map to the same sq_key (e.g. a primary and
@@ -902,9 +915,12 @@ class MQTTDriver:
                         if live:
                             hw_boolean_live = True
                     elif mapping.field == "cooling_active":
-                        # INSTRUCTION-364 — on/off classification (same payload
-                        # vocabulary as the other boolean topics). Unrecognised
-                        # payloads leave the prior value untouched.
+                        # INSTRUCTION-364/374B — on/off classification (same
+                        # payload vocabulary as the other boolean topics) from
+                        # THIS cycle's latest cached payload. Absent / unrecognised
+                        # here leaves cooling_active_value None; the 374B post-loop
+                        # ON-only hold then recovers the last explicit ON reading
+                        # from the message-time ledger within its fresh window.
                         if extracted is not None:
                             norm = extracted.strip().lower()
                             if norm in _ON_PAYLOADS:
@@ -972,6 +988,35 @@ class MQTTDriver:
                     candidates, key=lambda c: _SQ_RANK.get(c[1], 99)
                 )
                 system_values[field_name] = best_value
+
+            # INSTRUCTION-374B — cooling_active ON-only hold. When air_con_on was
+            # absent from THIS cycle's latest cached payload (cooling_active_value
+            # is still None), recover the last explicit ON reading from the
+            # message-time ledger (374A) and trust it within its fresh window.
+            # On-change semantics: an unchanged "true" is not re-sent, so the held
+            # ON is current. ONLY ON is held: under the unchanged :1548 build
+            # `bool(value) or derive(...)`, a held False is indistinguishable from
+            # None (both → derive), so an OFF arm would be inert (B-D1). Leaving
+            # OFF / absent / stale as None defers to derive_cooling_active —
+            # preserving 364's OR (B-D1 owner disposition: preserve 364 OR).
+            # Gate-on-None means an explicit reading parsed this cycle still wins.
+            if cooling_active_value is None:
+                _cooling_m = next(
+                    (m for m in tm.input_mappings if m.field == "cooling_active"),
+                    None,
+                )
+                if _cooling_m is not None and self._mqtt is not None:
+                    _led = self._mqtt.get_field_ledger_snapshot()
+                    if isinstance(_led, dict):
+                        _entry = _led.get((_cooling_m.topic, _cooling_m.json_path))
+                        if _entry is not None and _entry[0] is not None:
+                            _leaf, _ts = _entry
+                            _thr = staleness_defaults.get(
+                                _cooling_m.category, staleness_defaults["default"]
+                            )
+                            if (now - _ts) <= _thr["fresh"] and \
+                                    _leaf.strip().lower() in _ON_PAYLOADS:
+                                cooling_active_value = True
 
         else:
             pass  # away/control resolved below via _resolve_mqtt_control

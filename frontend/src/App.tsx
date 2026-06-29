@@ -10,6 +10,7 @@ import { Away } from './pages/Away'
 import { Engineering } from './pages/Engineering'
 import { Historian } from './pages/Historian'
 import { Balancing } from './pages/Balancing'
+import { DeviceHealth } from './pages/DeviceHealth'
 import { Statistics } from './pages/Statistics'
 import { LiveView } from './pages/LiveView'
 import { Scop } from './pages/Scop'
@@ -20,7 +21,7 @@ import { useLiveConnection } from './hooks/useLive'
 import { apiUrl } from './lib/api'
 import { ENGINEERING_PAGES } from './lib/constants'
 
-export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm'
+export type Page = 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'device-health' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm'
 
 export default function App() {
   const [page, setPage] = useState<Page>('home')
@@ -127,6 +128,7 @@ export default function App() {
         {activePage === 'engineering' && <Engineering />}
         {activePage === 'historian' && <Historian />}
         {activePage === 'balancing' && <Balancing />}
+        {activePage === 'device-health' && <DeviceHealth />}
         {activePage === 'statistics' && <Statistics />}
         {activePage === 'scop' && <Scop />}
         {activePage === 'forecast' && <Forecast />}

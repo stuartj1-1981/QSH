@@ -1111,6 +1111,33 @@ def fetch_energy_data(config: Dict) -> Dict[str, float]:
     return result
 
 
+def fetch_device_battery_soc(config: Dict) -> Tuple[Dict[str, float], Dict[str, str]]:
+    """INSTRUCTION-371A — read per-device battery state-of-charge.
+
+    Iterates the per-device map (``config["battery_devices"]`` — device →
+    {battery_entity, room}) and returns ``(device_battery_soc, device_room)``,
+    populated TOGETHER so a device present in the SoC dict always has a room.
+    A missing / ``unavailable`` reading is treated as ABSENT for both (not
+    coerced to 0). Absent config ⇒ empty dicts (feature dormant).
+    """
+    device_map = config.get("battery_devices", {}) or {}
+    soc: Dict[str, float] = {}
+    room: Dict[str, str] = {}
+    for device, meta in device_map.items():
+        entity = meta.get("battery_entity")
+        if not entity:
+            continue
+        raw, is_fresh = _fetch_with_staleness(entity, "energy", default=None)
+        if not is_fresh or raw is None:
+            continue
+        val = safe_float(raw, None)
+        if val is None:
+            continue
+        soc[device] = float(val)
+        room[device] = meta.get("room", "")
+    return soc, room
+
+
 def fetch_source_raw_values(config: Dict) -> Dict[str, Any]:
     """Fetch raw source-power sensor values for the SourceResolver.
 
@@ -1292,6 +1319,10 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.grid_power = energy_data["grid_power"]
     data.has_solar = energy_data["has_solar"]
     data.has_battery = energy_data["has_battery"]
+
+    # INSTRUCTION-371A — per-device battery SoC (additive alongside the
+    # system-level battery_soc above; does not alter it).
+    data.device_battery_soc, data.device_room = fetch_device_battery_soc(config)
 
     _hw_ids = resolve_hw_entity_ids(config)
     water_heater_entity = _hw_ids["water_heater"]

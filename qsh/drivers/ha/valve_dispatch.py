@@ -473,13 +473,26 @@ def apply_direct_valve_control(
     control_state: Optional[RoomControlState] = None,
     balancing_detector=None,
     heating_frac: float = 0.75,
+    degraded_zones: Optional[Dict] = None,
 ) -> bool:
     """
     Apply direct valve position control based on temperature deficit.
 
     Uses deficit (target - actual) as primary control input.
     Dispatches to hardware-specific functions.
+
+    INSTRUCTION-370 Task 6: a zone present in ``degraded_zones`` has lost
+    actuation authority and is now a passive runtime-`none` emitter — skip the
+    balance offset and the active command entirely. Defence-in-depth alongside
+    the primary exclusion in ``apply_hybrid_room_control`` (which short-circuits
+    the room before it reaches this function): direct callers are still gated
+    here. The park-once open-bias write is owned by the DegradationController via
+    ``park_degraded_zone`` — never re-driven from the active-control path.
     """
+    if degraded_zones and room in degraded_zones:
+        logging.debug(f"{room} degraded (loss of TRV authority) — skipping direct control")
+        return False
+
     available, hardware_type = check_direct_valve_available(room, config)
 
     if not available:
@@ -574,6 +587,36 @@ def apply_valve_position(
         return apply_direct_valve_control_generic(room, target_position, config, dfan_control, control_state)
     else:
         return False
+
+
+def park_degraded_zone(
+    room: str,
+    park_target: int,
+    config: Dict,
+    dfan_control: bool,
+    control_state: Optional[RoomControlState] = None,
+) -> bool:
+    """Drive a degraded DIRECT zone once to its open-biased fail-to position
+    (INSTRUCTION-370 Task 5).
+
+    Dispatch EXECUTES the controller-computed ``park_target`` unchanged — no
+    bias arithmetic here (the DegradationController owns ``OPEN_BIAS_PCT`` and
+    the clamp). Routes through the existing ``apply_valve_position`` path so the
+    225A MANUAL carve-out (operator-explicit position still wins) and the
+    shadow-mode gate (``dfan_control`` False ⇒ model-only demote, no physical
+    write) are honoured identically to every other valve write.
+
+    The hardware type is resolved directly from config rather than gated on
+    ``check_direct_valve_available``: the zone is degraded precisely because its
+    entity is unreachable, so the availability gate would always reject the
+    write. The park is a best-effort, single open-bias command at the demote
+    edge — if comms momentarily return, it lands; otherwise the HA call is a
+    harmless no-op.
+    """
+    hardware_type = config.get("room_valve_hardware", {}).get(room, VALVE_HARDWARE_GENERIC)
+    return apply_valve_position(
+        room, int(park_target), hardware_type, config, dfan_control, control_state
+    )
 
 
 # =============================================================================

@@ -4,7 +4,7 @@ import { Menu } from 'lucide-react'
 
 interface LayoutProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'device-health' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean

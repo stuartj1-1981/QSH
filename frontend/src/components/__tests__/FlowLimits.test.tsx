@@ -80,6 +80,28 @@ describe('FlowLimits', () => {
     expect(buttons[1]).toBeDisabled()
   })
 
+  // INSTRUCTION-372C — read-only mode
+  describe('readOnly mode', () => {
+    it('renders values with no stepper buttons', () => {
+      render(<FlowLimits flowMin={30} flowMax={55} readOnly />)
+      expect(screen.getByText('Flow Limits')).toBeDefined()
+      expect(screen.getByText('30.0°')).toBeDefined()
+      expect(screen.getByText('55.0°')).toBeDefined()
+      expect(screen.queryAllByRole('button').length).toBe(0)
+    })
+
+    it('shows "--" for null enforced values', () => {
+      render(<FlowLimits flowMin={null} flowMax={null} readOnly />)
+      expect(screen.getAllByText('--').length).toBe(2)
+      expect(screen.queryAllByRole('button').length).toBe(0)
+    })
+
+    it('does not require change callbacks', () => {
+      // No onFlowMinChange/onFlowMaxChange passed — must not throw.
+      expect(() => render(<FlowLimits flowMin={35} flowMax={50} readOnly />)).not.toThrow()
+    })
+  })
+
   it('max cannot go below min', () => {
     render(
       <FlowLimits

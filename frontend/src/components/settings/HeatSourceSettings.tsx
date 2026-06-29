@@ -855,47 +855,52 @@ function SourceCard({
             )}
           </div>
 
-          {/* Flow temp range */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label
-                htmlFor={`source-${index}-flow-min`}
-                className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1"
-              >
-                Flow Min (°C) <HelpTip text={HEAT_SOURCE.minFlowTemp} size={12} />
-              </label>
-              <input
-                id={`source-${index}-flow-min`}
-                type="number"
-                value={hs.flow_min ?? ''}
-                onChange={(e) =>
-                  onChange({
-                    flow_min: parseFloat(e.target.value) || undefined,
-                  })
-                }
-                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-              />
+          {/* Flow temp range — INSTRUCTION-377B (D-377-3): the per-source
+              "capability" Min/Max pair renders ONLY for multi-source installs.
+              A single-source install shows exactly the index-0 operating-
+              setpoint pair below (Flow Min/Max Temperature). */}
+          {sources.length > 1 && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor={`source-${index}-flow-min`}
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1"
+                >
+                  Flow Min (°C) <HelpTip text={HEAT_SOURCE.minFlowTemp} size={12} />
+                </label>
+                <input
+                  id={`source-${index}-flow-min`}
+                  type="number"
+                  value={hs.flow_min ?? ''}
+                  onChange={(e) =>
+                    onChange({
+                      flow_min: parseFloat(e.target.value) || undefined,
+                    })
+                  }
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor={`source-${index}-flow-max`}
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1"
+                >
+                  Flow Max (°C) <HelpTip text={HEAT_SOURCE.maxFlowTemp} size={12} />
+                </label>
+                <input
+                  id={`source-${index}-flow-max`}
+                  type="number"
+                  value={hs.flow_max ?? ''}
+                  onChange={(e) =>
+                    onChange({
+                      flow_max: parseFloat(e.target.value) || undefined,
+                    })
+                  }
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                />
+              </div>
             </div>
-            <div>
-              <label
-                htmlFor={`source-${index}-flow-max`}
-                className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1"
-              >
-                Flow Max (°C) <HelpTip text={HEAT_SOURCE.maxFlowTemp} size={12} />
-              </label>
-              <input
-                id={`source-${index}-flow-max`}
-                type="number"
-                value={hs.flow_max ?? ''}
-                onChange={(e) =>
-                  onChange({
-                    flow_max: parseFloat(e.target.value) || undefined,
-                  })
-                }
-                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-              />
-            </div>
-          </div>
+          )}
 
           {/* Flow min/max entity override or internal value editor — only for
               the first source where the system-wide setpoint lives in

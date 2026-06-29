@@ -3,6 +3,20 @@
 Thread model: paho loop_start() runs its own network thread.
 The on_message callback writes to a thread-safe cache dict.
 The pipeline thread reads from the cache via lock in read_inputs().
+
+Message-time per-field ledger (INSTRUCTION-374A)
+------------------------------------------------
+Alongside the per-topic raw cache, on_message maintains a per-(topic,
+json_path) ledger of each mapped field's last-present leaf value and arrival
+timestamp (register_field_paths / get_field_ledger_snapshot). This is the
+message-accurate substrate for both per-field freshness (clock b) and value
+retention on shared on-change topics, where a field-bearing payload is often
+overwritten by a higher-frequency partial before the 30 s read samples the
+cache. New shared-topic fields should read freshness/value from the ledger;
+they do NOT need a bespoke last-valid hold. The four pre-374 bespoke holds
+(outdoor unbounded, hot_water bounded, cost-slot, flow_rate backfill) are
+retained by design because each carries a distinct semantic the uniform
+fresh-window ledger does not replicate (see INSTRUCTION-374C).
 """
 
 from __future__ import annotations
@@ -15,6 +29,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as paho
+
+from .topic_map import extract_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +65,13 @@ class MQTTClient:
         self._config = config
         self._lock = threading.Lock()
         self._cache: Dict[str, Tuple[str, float]] = {}  # {topic: (payload_str, timestamp)}
+        # INSTRUCTION-374A — message-time per-field ledger. Keyed (topic, json_path);
+        # json_path None = plain topic. Value: (last-present leaf as str | None, ts).
+        # Updated in _on_message (sees every message, not the cycle-sampled latest),
+        # so a field present in a payload later overwritten by a partial is still
+        # observed. Guarded by the same self._lock as _cache.
+        self._field_paths: Dict[str, List[Optional[str]]] = {}
+        self._field_ledger: Dict[Tuple[str, Optional[str]], Tuple[Optional[str], float]] = {}
         self._subscriptions: List[str] = []
         self._connected = threading.Event()
         self._client: Optional[paho.Client] = None
@@ -104,6 +127,19 @@ class MQTTClient:
 
         raise ConnectionError(f"MQTT connect failed after {retries} attempts: {last_err}")
 
+    def register_field_paths(self, paths: Dict[str, List[Optional[str]]]) -> None:
+        """Register the json_paths to track per topic (None = plain topic).
+
+        Idempotent merge; safe to call before connect/subscribe. Tracking only
+        these declared paths keeps the ledger bounded to mapped fields.
+        """
+        with self._lock:
+            for topic, jps in paths.items():
+                existing = self._field_paths.setdefault(topic, [])
+                for jp in jps:
+                    if jp not in existing:
+                        existing.append(jp)
+
     def subscribe(self, topics: List[str]) -> None:
         """Subscribe to topic list at QoS 0 (sensor reads tolerate occasional loss)."""
         self._subscriptions = list(topics)
@@ -121,6 +157,11 @@ class MQTTClient:
         """Thread-safe snapshot of the topic cache."""
         with self._lock:
             return dict(self._cache)
+
+    def get_field_ledger_snapshot(self) -> Dict[Tuple[str, Optional[str]], Tuple[Optional[str], float]]:
+        """Thread-safe snapshot of the message-time per-field ledger."""
+        with self._lock:
+            return dict(self._field_ledger)
 
     def get_cached(self, topic: str) -> Optional[str]:
         """Thread-safe lookup of cached payload for a single topic.
@@ -212,7 +253,18 @@ class MQTTClient:
         """Message callback — thread-safe write to cache."""
         try:
             payload_str = msg.payload.decode("utf-8", errors="replace")
+            now_ts = time.time()
             with self._lock:
-                self._cache[msg.topic] = (payload_str, time.time())
+                self._cache[msg.topic] = (payload_str, now_ts)
+                # INSTRUCTION-374A — update the message-time per-field ledger for
+                # each registered path on this topic, reusing the single cache ts.
+                for jp in self._field_paths.get(msg.topic, ()):
+                    if jp is None:
+                        self._field_ledger[(msg.topic, None)] = (payload_str, now_ts)
+                    else:
+                        leaf = extract_json_value(payload_str, jp)
+                        if leaf is not None:
+                            self._field_ledger[(msg.topic, jp)] = (str(leaf), now_ts)
+                        # absent leaf → entry untouched (ages by its own clock)
         except Exception as exc:
             logger.debug("MQTT message decode error on %s: %s", msg.topic, exc)

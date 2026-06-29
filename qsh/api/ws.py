@@ -162,6 +162,18 @@ def _format_snapshot(snap) -> dict:
             "cooling_active": snap.cooling_active,
             "cascade_active": snap.cascade_active,
             "frost_cap_active": snap.frost_cap_active,
+            # INSTRUCTION-372C — the ENFORCED flow envelope (arbiter's
+            # effective_min / flow_max), not raw caps. None-guarded.
+            "flow_floor_c": (
+                round(snap.applied_flow_floor_c, 1)
+                if snap.applied_flow_floor_c is not None
+                else None
+            ),
+            "flow_ceiling_c": (
+                round(snap.applied_flow_ceiling_c, 1)
+                if snap.applied_flow_ceiling_c is not None
+                else None
+            ),
             "antifrost_override_active": snap.antifrost_override_active,
             "winter_equilibrium": snap.winter_equilibrium,
             "antifrost_threshold": snap.antifrost_threshold,

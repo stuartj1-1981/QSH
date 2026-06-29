@@ -658,6 +658,19 @@ def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
         if "hot_water" in eid_lower or "schedule" in eid_lower:
             score += 10
 
+    # INSTRUCTION-373A Task 2: per-device battery candidate slot. Mirrors the
+    # battery_soc heuristic but room-agnostic — a battery entity is identified by
+    # device-class/name, not by a room token. Placed at the end of the elif chain
+    # (outside the battery_soc :592-602 range) so the per-device slot is distinct
+    # from the system/home battery slot.
+    elif slot == "battery_entity":
+        if not eid.startswith("sensor."):
+            return 0
+        if device_class == "battery":
+            score += 20
+        elif "battery" in eid_lower:
+            score += 10
+
     return score
 
 
@@ -776,6 +789,8 @@ def scan_entities_for_room(room: str):
             "independent_sensor": _scan_for_slot(all_entities, "independent_sensor", room),
             "heating_entity": _scan_for_slot(all_entities, "heating_entity", room),
             "occupancy_sensor": _scan_for_slot(all_entities, "occupancy_sensor", room),
+            # INSTRUCTION-373A Task 2: per-device battery candidate slot.
+            "battery_entity": _scan_for_slot(all_entities, "battery_entity", room),
         },
     }
 
