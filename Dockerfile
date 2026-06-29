@@ -42,16 +42,23 @@ ENV TZ=UTC
 # Supported values: amd64, arm64.
 ARG TARGETARCH
 
-# Runtime Python dependencies.
-# Installed inline (no requirements.txt in the public sync). torch 2.11.0
-# defaults to CUDA wheels on PyPI; --index-url pins the CPU-only wheel
-# index for both architectures.
-RUN pip install --no-cache-dir \
-        torch==2.11.0+cpu --index-url https://download.pytorch.org/whl/cpu \
+# Runtime Python dependencies (INSTRUCTION-375 — NumPy-1.x ABI coherence).
+# NumPy is the C-ABI anchor: torch and scipy must be built against the SAME
+# NumPy major as the installed numpy==1.26.4 (NumPy 1.x). torch==2.2.0 and
+# scipy==1.13.1 are NumPy-1.x-ABI builds — the dev Dockerfile runs this exact
+# pair with a passing suite. (torch 2.11 / scipy>=1.14 are NumPy-2.x-ABI and
+# would print "_ARRAY_API not found" / break torch.Tensor.numpy() at runtime.)
+# Arch split mirrors the dev Dockerfile: the +cpu wheels on the CPU index are
+# amd64-only, so x86_64 pins the CPU index and other arches resolve from PyPI.
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+        pip install --no-cache-dir torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu; \
+    else \
+        pip install --no-cache-dir torch==2.2.0; \
+    fi \
     && pip install --no-cache-dir \
         numpy==1.26.4 networkx requests pyyaml influxdb websocket-client \
         paho-mqtt aiomqtt fastapi==0.115.0 uvicorn[standard]==0.30.0 \
-        python-multipart scipy
+        python-multipart scipy==1.13.1
 
 WORKDIR /app
 
@@ -137,6 +144,18 @@ import qsh.forecast.providers; \
 import qsh.swarm; \
 from qsh.swarm.shadow_sysid import ShadowSysidTrack; \
 print('T-23 / T-24 Check A deep import smoke PASS')"
+
+# Check C — NumPy ABI bridge smoke (INSTRUCTION-375). A torch built against a
+# different NumPy major than the one installed yields a dead bridge:
+# torch.Tensor.numpy() raises "Numpy is not available" and import prints
+# "Failed to initialize NumPy: _ARRAY_API not found". Assert BOTH bridge
+# directions so an incoherent torch/numpy/scipy pin can never ship again.
+RUN python -c "\
+import numpy, scipy, torch; \
+print('numpy', numpy.__version__, '| scipy', scipy.__version__, '| torch', torch.__version__); \
+assert torch.zeros(3, dtype=torch.float32).numpy().tolist() == [0.0, 0.0, 0.0], 'numpy() egress bridge dead'; \
+assert float(torch.from_numpy(numpy.ones(3, dtype='float32')).sum()) == 3.0, 'from_numpy() ingress bridge dead'; \
+print('INSTRUCTION-375 NumPy ABI bridge smoke PASS')"
 
 # Check B — boot-and-probe. Boots `python -m qsh` (which takes the template-mode
 # branch in main.py line 206 because no /config/qsh.yaml exists in the build

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RoomSettings } from '../RoomSettings'
 import { stripFixedSetpointForControlMode } from '../../../lib/roomConfig'
@@ -1148,5 +1148,142 @@ describe('RoomSettings building-class edit path (INSTRUCTION-369)', () => {
     fireEvent.click(saveBtn())
     expect(await screen.findByText(/Failed to save building details/i)).toBeInTheDocument()
     expect(onRefetch).not.toHaveBeenCalled()
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-373B — per-device battery SoC entry (Settings)
+// =============================================================================
+
+describe('RoomSettings battery devices', () => {
+  beforeEach(() => patchMock.mockClear())
+
+  const trvRoom = {
+    lounge: {
+      area_m2: 20,
+      facing: 'S' as const,
+      ceiling_m: 2.4,
+      trv_entity: 'climate.lounge_trv',
+      independent_sensor: 'sensor.lounge_temp',
+      occupancy_sensor: 'binary_sensor.lounge_presence',
+      heating_entity: 'sensor.lounge_heating',
+    },
+  }
+
+  it('renders a battery field for TRV, temp sensor, and occupancy sensor', () => {
+    render(<RoomSettings rooms={trvRoom} driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByPlaceholderText('sensor.room_trv_battery')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('sensor.room_temp_battery')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('sensor.room_occupancy_battery')).toBeInTheDocument()
+  })
+
+  it('renders no battery field for heating_entity', () => {
+    render(<RoomSettings rooms={trvRoom} driver="ha" onRefetch={() => {}} />)
+    // Heating Entity field exists, but no battery field is paired with it.
+    expect(screen.getByText('Heating Entity')).toBeInTheDocument()
+    expect(screen.queryByText(/Heating.*Battery/i)).toBeNull()
+  })
+
+  it('does not render the TRV battery field when no TRV is set', () => {
+    const noTrv = { spare: { area_m2: 10, facing: 'N' as const } }
+    render(<RoomSettings rooms={noTrv} driver="ha" onRefetch={() => {}} />)
+    expect(screen.queryByPlaceholderText('sensor.room_trv_battery')).toBeNull()
+  })
+
+  it('seeds the battery field from the batteryDevices prop', () => {
+    render(
+      <RoomSettings
+        rooms={trvRoom}
+        driver="ha"
+        batteryDevices={[
+          {
+            device: 'climate.lounge_trv',
+            battery_entity: 'sensor.lounge_trv_battery',
+            room: 'lounge',
+          },
+        ]}
+        onRefetch={() => {}}
+      />,
+    )
+    const input = screen.getByPlaceholderText('sensor.room_trv_battery') as HTMLInputElement
+    expect(input.value).toBe('sensor.lounge_trv_battery')
+  })
+
+  it('save PATCHes battery_devices with the rebuilt list', () => {
+    render(<RoomSettings rooms={trvRoom} driver="ha" onRefetch={() => {}} />)
+    const input = screen.getByPlaceholderText('sensor.room_trv_battery')
+    fireEvent.change(input, { target: { value: 'sensor.lounge_trv_battery' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    const call = patchMock.mock.calls.find((c) => c[0] === 'battery_devices')
+    expect(call).toBeTruthy()
+    expect(call![1]).toEqual([
+      {
+        device: 'climate.lounge_trv',
+        battery_entity: 'sensor.lounge_trv_battery',
+        room: 'lounge',
+      },
+    ])
+  })
+
+  it('clearing a battery removes the entry on save', () => {
+    render(
+      <RoomSettings
+        rooms={trvRoom}
+        driver="ha"
+        batteryDevices={[
+          {
+            device: 'climate.lounge_trv',
+            battery_entity: 'sensor.lounge_trv_battery',
+            room: 'lounge',
+          },
+        ]}
+        onRefetch={() => {}}
+      />,
+    )
+    const input = screen.getByPlaceholderText('sensor.room_trv_battery')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    const call = patchMock.mock.calls.find((c) => c[0] === 'battery_devices')
+    expect(call).toBeTruthy()
+    expect(call![1]).toEqual([])
+  })
+
+  it('renaming the TRV drops the stale battery entry on save', async () => {
+    render(
+      <RoomSettings
+        rooms={trvRoom}
+        driver="ha"
+        batteryDevices={[
+          {
+            device: 'climate.lounge_trv',
+            battery_entity: 'sensor.lounge_trv_battery',
+            room: 'lounge',
+          },
+        ]}
+        onRefetch={() => {}}
+      />,
+    )
+    // Rename the TRV entity — the old device is no longer current.
+    const trvInput = screen.getByDisplayValue('climate.lounge_trv')
+    fireEvent.change(trvInput, { target: { value: 'climate.lounge_trv_new' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    // rooms is dirty too, so save awaits the rooms PATCH before the
+    // battery_devices PATCH — wait for the latter to land.
+    let call: unknown[] | undefined
+    await waitFor(() => {
+      call = patchMock.mock.calls.find((c) => c[0] === 'battery_devices')
+      expect(call).toBeTruthy()
+    })
+    // Stale entry for climate.lounge_trv is excluded; the new device has no
+    // battery assigned yet, so the rebuilt list is empty.
+    expect(call![1]).toEqual([])
+  })
+
+  it('does not PATCH battery_devices when nothing changed', () => {
+    render(<RoomSettings rooms={trvRoom} driver="ha" onRefetch={() => {}} />)
+    fireEvent.click(screen.getByText('Save Changes'))
+    const call = patchMock.mock.calls.find((c) => c[0] === 'battery_devices')
+    expect(call).toBeFalsy()
   })
 })

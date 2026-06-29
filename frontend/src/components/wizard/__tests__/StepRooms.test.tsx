@@ -3,7 +3,7 @@
  * exposed through StepRooms (HA path).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { StepRooms } from '../StepRooms'
 import type { EntityCandidate, RoomConfigYaml } from '../../../types/config'
 
@@ -411,5 +411,174 @@ describe('StepRooms — emitter_type none (INSTRUCTION-333)', () => {
     // so area×0.1 re-applies at load rather than persisting a 0-output radiator.
     const wire = JSON.parse(JSON.stringify(updated))
     expect(wire).not.toHaveProperty('emitter_kw')
+  })
+})
+
+
+// =============================================================================
+// INSTRUCTION-373B — per-device battery SoC entry (Wizard)
+// =============================================================================
+
+describe('StepRooms — per-device battery entry (INSTRUCTION-373B)', () => {
+  const roomWithDevices = (extra: Partial<RoomConfigYaml> = {}) =>
+    haConfig({
+      area_m2: 20,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+      trv_entity: 'climate.lounge_trv',
+      independent_sensor: 'sensor.lounge_temp',
+      occupancy_sensor: 'binary_sensor.lounge_presence',
+      heating_entity: 'sensor.lounge_heating',
+      ...extra,
+    })
+
+  it('renders a battery picker for TRV, temp sensor, and occupancy sensor', () => {
+    render(<StepRooms config={roomWithDevices()} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(screen.getByText('TRV Battery')).toBeInTheDocument()
+    expect(screen.getByText('Temperature Sensor Battery')).toBeInTheDocument()
+    expect(screen.getByText('Occupancy Sensor Battery')).toBeInTheDocument()
+  })
+
+  it('renders no battery picker for heating_entity', () => {
+    render(<StepRooms config={roomWithDevices()} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(screen.queryByText(/Heating.*Battery/i)).toBeNull()
+  })
+
+  it('does not render the TRV battery picker when no TRV is set', () => {
+    const config = haConfig({
+      area_m2: 15,
+      facing: 'S',
+      ceiling_m: 2.4,
+      control_mode: 'indirect',
+    })
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    expect(screen.queryByText('TRV Battery')).toBeNull()
+  })
+
+  it('seeds the battery picker value from config.battery_devices', () => {
+    const config = {
+      ...roomWithDevices(),
+      battery_devices: [
+        {
+          device: 'climate.lounge_trv',
+          battery_entity: 'sensor.lounge_trv_battery',
+          room: 'lounge',
+        },
+      ],
+    }
+    render(<StepRooms config={config} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    // The picker button shows the selected entity id.
+    const label = screen.getByText('TRV Battery')
+    const picker = label.closest('div')!
+    expect(within(picker).getByText('sensor.lounge_trv_battery')).toBeInTheDocument()
+  })
+
+  it('selecting a battery candidate calls onUpdate("battery_devices") with the upsert', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        room: 'lounge',
+        candidates: {
+          battery_entity: [mkCandidate('sensor.lounge_trv_battery')],
+        },
+      }),
+    } as Response)
+
+    const onUpdate = vi.fn()
+    render(<StepRooms config={roomWithDevices()} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    fireEvent.click(screen.getByText('Scan for this room'))
+    await waitFor(() => {
+      expect(screen.getByText(/Scanned —/)).toBeInTheDocument()
+    })
+
+    const label = screen.getByText('TRV Battery')
+    const picker = label.closest('div')!
+    fireEvent.click(within(picker).getByRole('button'))
+    fireEvent.click(
+      within(picker).getAllByText('sensor.lounge_trv_battery')[0].closest('button')!,
+    )
+
+    const call = onUpdate.mock.calls.find((c) => c[0] === 'battery_devices')
+    expect(call).toBeTruthy()
+    expect(call![1]).toEqual([
+      {
+        device: 'climate.lounge_trv',
+        battery_entity: 'sensor.lounge_trv_battery',
+        room: 'lounge',
+      },
+    ])
+  })
+
+  it('preserves other rooms battery entries on a new selection', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        room: 'lounge',
+        candidates: {
+          battery_entity: [mkCandidate('sensor.lounge_trv_battery')],
+        },
+      }),
+    } as Response)
+
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'ha' as const,
+      rooms: {
+        lounge: {
+          area_m2: 20,
+          control_mode: 'indirect' as const,
+          trv_entity: 'climate.lounge_trv',
+        },
+        kitchen: {
+          area_m2: 15,
+          control_mode: 'indirect' as const,
+          trv_entity: 'climate.kitchen_trv',
+        },
+      },
+      battery_devices: [
+        {
+          device: 'climate.kitchen_trv',
+          battery_entity: 'sensor.kitchen_trv_battery',
+          room: 'kitchen',
+        },
+      ],
+    }
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+    fireEvent.click(screen.getByText('Scan for this room'))
+    await waitFor(() => {
+      expect(screen.getByText(/Scanned —/)).toBeInTheDocument()
+    })
+
+    const label = screen.getByText('TRV Battery')
+    const picker = label.closest('div')!
+    fireEvent.click(within(picker).getByRole('button'))
+    fireEvent.click(
+      within(picker).getAllByText('sensor.lounge_trv_battery')[0].closest('button')!,
+    )
+
+    const call = onUpdate.mock.calls.find((c) => c[0] === 'battery_devices')
+    expect(call).toBeTruthy()
+    expect(call![1]).toEqual(
+      expect.arrayContaining([
+        {
+          device: 'climate.kitchen_trv',
+          battery_entity: 'sensor.kitchen_trv_battery',
+          room: 'kitchen',
+        },
+        {
+          device: 'climate.lounge_trv',
+          battery_entity: 'sensor.lounge_trv_battery',
+          room: 'lounge',
+        },
+      ]),
+    )
+    expect((call![1] as unknown[]).length).toBe(2)
   })
 })

@@ -475,6 +475,9 @@ class HADriver:
             solar_production=sensor_data.solar_production,
             grid_power=sensor_data.grid_power,
             battery_soc=sensor_data.battery_soc,
+            # INSTRUCTION-371A — per-device battery SoC + room attribution.
+            device_battery_soc=dict(getattr(sensor_data, "device_battery_soc", {})),
+            device_room=dict(getattr(sensor_data, "device_room", {})),
             # Energy (expanded)
             current_rate=current_rate,
             export_rate=export_rate,

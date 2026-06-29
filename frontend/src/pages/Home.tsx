@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react'
 import { useLive } from '../hooks/useLive'
 import { useStatus } from '../hooks/useStatus'
 import { useHistory } from '../hooks/useHistory'
-import { useRawConfig } from '../hooks/useConfig'
+import { useRawConfig, useConfig } from '../hooks/useConfig'
 import { useVersion } from '../hooks/useVersion'
 import type { RoomState } from '../types/api'
 import { StatusBanner } from '../components/StatusBanner'
@@ -253,29 +253,29 @@ export function Home({ engineering, onNavigate }: HomeProps) {
     }
   }, [])
 
-  // Flow limits — sourced from config, not WebSocket
-  const { data: configData, refetch: refreshConfig } = useRawConfig()
-  const flowMin = configData?.flow_min_internal ?? configData?.heat_source?.flow_min ?? null
-  const flowMax = configData?.flow_max_internal ?? configData?.heat_source?.flow_max ?? null
+  // Flow limits — INSTRUCTION-377B (D-377-2, D-377-4): Home edits the operating
+  // setpoint ONLY on single-source internal installs (writes api/control/
+  // flow-min|max). It is read-only (enforced envelope, 372C) when an external
+  // flow-limit entity is selected OR the install is multi-source (per-source
+  // caps are authoritative there and edited in Settings).
+  // "External selected" reuses the Settings signal (HeatSourceSettings.tsx:951).
+  const { data: configData } = useRawConfig()
+  // The editable setpoint binds to the PROCESSED config (defaults merged), not
+  // the raw YAML: flow_*_internal are runtime-default keys the wizard does not
+  // write, so the raw config omits them on most installs and the steppers would
+  // render "--". useConfig() carries the value the backend operates on.
+  const { data: procConfig, refetch: refetchConfig } = useConfig()
+  const flowExternal = !!(
+    configData?.heat_sources?.[0]?.flow_min_entity ||
+    configData?.heat_sources?.[0]?.flow_max_entity
+  )
+  const singleSource = (configData?.heat_sources?.length ?? 1) <= 1
+  const flowEditable = singleSource && !flowExternal
+  const enforcedFlowMin = live?.engineering?.flow_floor_c ?? null
+  const enforcedFlowMax = live?.engineering?.flow_ceiling_c ?? null
+  const setpointFlowMin = procConfig?.flow_min_internal ?? null
+  const setpointFlowMax = procConfig?.flow_max_internal ?? null
   const entityMap = useMemo(() => buildEntityMap(configData), [configData])
-
-  const handleFlowMinChange = useCallback(async (value: number) => {
-    await fetch(apiUrl('api/control/flow-min'), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
-    })
-    refreshConfig()
-  }, [refreshConfig])
-
-  const handleFlowMaxChange = useCallback(async (value: number) => {
-    await fetch(apiUrl('api/control/flow-max'), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
-    })
-    refreshConfig()
-  }, [refreshConfig])
 
   return (
     <div className="max-w-4xl">
@@ -376,15 +376,37 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         {comfortStatusLabel}
       </div>
 
-      {/* Flow limits — min/max flow temperature steppers */}
-      <FlowLimits
-        flowMin={flowMin}
-        flowMax={flowMax}
-        onFlowMinChange={handleFlowMinChange}
-        onFlowMaxChange={handleFlowMaxChange}
-        entityIds={entityMap ? { flow_min: entityMap.flow_min, flow_max: entityMap.flow_max } : undefined}
-        engineering={engineering}
-      />
+      {/* Flow limits — INSTRUCTION-377B: editable operating setpoint on single-
+          source internal installs (writes api/control/flow-min|max); read-only
+          enforced envelope when external OR multi-source (D-377-4). */}
+      {!flowEditable ? (
+        <FlowLimits
+          flowMin={enforcedFlowMin}
+          flowMax={enforcedFlowMax}
+          readOnly
+          engineering={engineering}
+        />
+      ) : (
+        <FlowLimits
+          flowMin={setpointFlowMin}
+          flowMax={setpointFlowMax}
+          engineering={engineering}
+          onFlowMinChange={(v) => {
+            fetch(apiUrl('api/control/flow-min'), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ value: v }),
+            }).then(() => refetchConfig())
+          }}
+          onFlowMaxChange={(v) => {
+            fetch(apiUrl('api/control/flow-max'), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ value: v }),
+            }).then(() => refetchConfig())
+          }}
+        />
+      )}
 
       {/* System health — recovery time + capacity bar */}
       <SystemHealth

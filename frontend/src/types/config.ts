@@ -457,9 +457,18 @@ export type FabricClass =
   | 'mixed'
   | 'unknown'
 
+// INSTRUCTION-373B — per-device battery SoC entry. Top-level flat list
+// (device-keyed, room recorded), parsed by 371A at qsh/config.py:1823-1838.
+export interface BatteryDeviceYaml {
+  device: string
+  battery_entity: string
+  room: string
+}
+
 export interface QshConfigYaml {
   driver?: 'ha' | 'mqtt'
   rooms?: Record<string, RoomConfigYaml>
+  battery_devices?: BatteryDeviceYaml[]
   mqtt?: MqttConfig
   heat_source?: HeatSourceYaml
   heat_sources?: HeatSourceYaml[]

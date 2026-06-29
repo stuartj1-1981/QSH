@@ -369,6 +369,7 @@ def patch_config_section(section: str, body=Body(...)):
         "summer",
         "solar",
         "battery",
+        "battery_devices",
         "grid",
         "cascade",
         "occupancy",
@@ -453,6 +454,50 @@ def patch_config_section(section: str, body=Body(...)):
                         "safe range [30, 900]"
                     ),
                 )
+
+    # INSTRUCTION-373A Task 1: battery_devices element-level guard. Mirrors the
+    # heat_sources element-shape checks above. The list serialises the per-device
+    # SoC map ({device, battery_entity, room}); each element must carry a
+    # non-empty str device and battery_entity (room optional str), and device
+    # must be unique across the list — the config.py parse last-wins on a
+    # duplicate device key (qsh/config.py:1835), so reject it hard here.
+    if section == "battery_devices":
+        guard_incoming = body.get("data", body) if isinstance(body, dict) else body
+        if not isinstance(guard_incoming, list):
+            raise HTTPException(
+                status_code=400,
+                detail="battery_devices PATCH body must be a list of device objects",
+            )
+        if not all(isinstance(x, dict) for x in guard_incoming):
+            raise HTTPException(
+                status_code=400,
+                detail="battery_devices entries must all be objects (dicts)",
+            )
+        for _idx, _bd in enumerate(guard_incoming):
+            _dev = _bd.get("device")
+            if not isinstance(_dev, str) or not _dev.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"battery_devices[{_idx}].device is required and must be a non-empty string",
+                )
+            _bat = _bd.get("battery_entity")
+            if not isinstance(_bat, str) or not _bat.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"battery_devices[{_idx}].battery_entity is required and must be a non-empty string",
+                )
+            _room = _bd.get("room")
+            if _room is not None and not isinstance(_room, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"battery_devices[{_idx}].room must be a string when present",
+                )
+        _seen_devices = [str(x.get("device")) for x in guard_incoming]
+        if len(_seen_devices) != len(set(_seen_devices)):
+            raise HTTPException(
+                status_code=400,
+                detail="battery_devices entries must have a unique device per entry",
+            )
 
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml

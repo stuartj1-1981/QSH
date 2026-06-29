@@ -1,9 +1,9 @@
-import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal, Network } from 'lucide-react'
+import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal, Network, BatteryCharging } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface SidebarProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'device-health' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean
@@ -89,6 +89,12 @@ export function Sidebar({
               label="Balancing"
               active={page === 'balancing'}
               onClick={() => onNavigate('balancing')}
+            />
+            <NavItem
+              icon={<BatteryCharging size={18} />}
+              label="Device Health"
+              active={page === 'device-health'}
+              onClick={() => onNavigate('device-health')}
             />
             <NavItem
               icon={<SlidersHorizontal size={18} />}

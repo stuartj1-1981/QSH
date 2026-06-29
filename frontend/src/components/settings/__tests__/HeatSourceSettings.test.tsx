@@ -1361,3 +1361,38 @@ describe('HeatSourceSettings — HP fuel-cost / carbon topics (INSTRUCTION-354B)
     expect(screen.queryByText(/divides by live COP/i)).toBeNull()
   })
 })
+
+describe('HeatSourceSettings — per-source caps pair gated on multi-source (INSTRUCTION-377B)', () => {
+  it('single source: per-source "Flow Min (°C)" pair absent; setpoint pair present', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'heat_pump', name: 'HP' }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // D-377-3: the per-source caps pair is hidden for single-source installs.
+    expect(screen.queryByText(/Flow Min \(°C\)/)).toBeNull()
+    expect(screen.queryByText(/Flow Max \(°C\)/)).toBeNull()
+    // The index-0 operating-setpoint pair is still present.
+    expect(screen.getByText('Flow Min Temperature')).toBeInTheDocument()
+    expect(screen.getByText('Flow Max Temperature')).toBeInTheDocument()
+  })
+
+  it('two sources: per-source "Flow Min (°C)" pair present on the expanded card', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'heat_pump', name: 'HP' }}
+        heatSources={[
+          { type: 'heat_pump', name: 'HP' },
+          { type: 'gas_boiler', name: 'Boiler' },
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // Multi-source ⇒ the per-source caps pair renders.
+    expect(screen.getByText(/Flow Min \(°C\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Flow Max \(°C\)/)).toBeInTheDocument()
+  })
+})

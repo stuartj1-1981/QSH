@@ -6,13 +6,17 @@ import { EntityValue } from './EntityValue'
 interface FlowLimitsProps {
   flowMin: number | null
   flowMax: number | null
-  onFlowMinChange: (value: number) => void
-  onFlowMaxChange: (value: number) => void
+  // Optional in readOnly mode — the editable steppers are not wired then.
+  onFlowMinChange?: (value: number) => void
+  onFlowMaxChange?: (value: number) => void
   entityIds?: {
     flow_min?: string
     flow_max?: string
   }
   engineering?: boolean
+  // INSTRUCTION-372C — read-only display of the ENFORCED envelope. Renders the
+  // Min/Max values without +/- steppers and without wiring the change callbacks.
+  readOnly?: boolean
 }
 
 export const FlowLimits = memo(function FlowLimits({
@@ -22,6 +26,7 @@ export const FlowLimits = memo(function FlowLimits({
   onFlowMaxChange,
   entityIds,
   engineering,
+  readOnly = false,
 }: FlowLimitsProps) {
   const [localMin, setLocalMin] = useState<number | null>(flowMin)
   const [localMax, setLocalMax] = useState<number | null>(flowMax)
@@ -63,7 +68,7 @@ export const FlowLimits = memo(function FlowLimits({
     if (debounceMinRef.current) clearTimeout(debounceMinRef.current)
     debounceMinRef.current = setTimeout(() => {
       try {
-        onFlowMinChange(clamped)
+        onFlowMinChange?.(clamped)
       } catch {
         flashError('min', prev)
       }
@@ -82,7 +87,7 @@ export const FlowLimits = memo(function FlowLimits({
     if (debounceMaxRef.current) clearTimeout(debounceMaxRef.current)
     debounceMaxRef.current = setTimeout(() => {
       try {
-        onFlowMaxChange(clamped)
+        onFlowMaxChange?.(clamped)
       } catch {
         flashError('max', prev)
       }
@@ -90,6 +95,35 @@ export const FlowLimits = memo(function FlowLimits({
   }
 
   const nullState = flowMin === null && flowMax === null
+
+  if (readOnly) {
+    // INSTRUCTION-372C — display the enforced envelope; no steppers, no writes.
+    return (
+      <div className={cn(
+        'rounded-xl border p-4 mb-4',
+        'bg-[var(--bg-card)] border-[var(--border)]'
+      )}>
+        <div className="flex items-center gap-1.5 text-sm text-[var(--text-muted)] mb-3">
+          <Droplets size={16} className="text-[var(--accent)]" />
+          <span>Flow Limits</span>
+        </div>
+        <div className="flex items-center gap-6 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--text-muted)] w-8">Min</span>
+            <span className="text-xl font-bold w-16 text-center">
+              {flowMin !== null ? `${flowMin.toFixed(1)}°` : '--'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--text-muted)] w-8">Max</span>
+            <span className="text-xl font-bold w-16 text-center">
+              {flowMax !== null ? `${flowMax.toFixed(1)}°` : '--'}
+            </span>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={cn(

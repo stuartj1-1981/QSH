@@ -30,6 +30,41 @@ export function useRawConfig() {
   return { data, error, loading, refetch }
 }
 
+/**
+ * Fetch the processed HOUSE_CONFIG (DEFAULT_CONFIG merged) for read-only
+ * display. Unlike useRawConfig (which serves the on-disk YAML and therefore
+ * omits any key the operator never wrote), this carries runtime-default keys
+ * such as flow_min_internal / flow_max_internal (config.py:734-735). Use it
+ * when the UI must show the value the backend is actually operating on, not
+ * the sparse YAML. Settings/Wizard keep using useRawConfig for editing.
+ */
+export function useConfig() {
+  const [data, setData] = useState<QshConfigYaml | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const refetch = useCallback(async () => {
+    setLoading(true)
+    try {
+      const resp = await fetch(apiUrl('api/config'))
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const json = await resp.json()
+      setData(json)
+      setError(null)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refetch()
+  }, [refetch])
+
+  return { data, error, loading, refetch }
+}
+
 /** Patch a single config section. */
 export function usePatchConfig() {
   const [saving, setSaving] = useState(false)

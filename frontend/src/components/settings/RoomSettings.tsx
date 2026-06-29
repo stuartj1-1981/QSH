@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { Plus, Trash2, Save, Loader2, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass, type BatteryDeviceYaml } from '../../types/config'
 import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
@@ -58,8 +58,60 @@ interface RoomSettingsProps {
   // root keys via PATCH /api/config/root, NOT as `property` members.
   construction_year?: number
   fabric_class?: FabricClass
+  // INSTRUCTION-373B — existing per-device battery SoC assignments (top-level
+  // flat list, device-keyed). Optional so the ~60 existing RoomSettings.test.tsx
+  // render sites still compile; absent ⇒ [] (no batteries configured yet).
+  batteryDevices?: BatteryDeviceYaml[]
   driver: Driver
   onRefetch: () => void
+}
+
+// INSTRUCTION-373B — enumerate the battery-eligible device entities of a rooms
+// map as (device, room) pairs: each TRV-per-emitter, the temperature sensor,
+// and the occupancy sensor. heating_entity is excluded (wired/mains). De-dupes
+// by device so the rebuild visits each device once (uniqueness guarantee).
+function batteryDeviceRoomPairs(
+  rooms: Record<string, RoomConfigYaml>,
+): { device: string; room: string }[] {
+  const out: { device: string; room: string }[] = []
+  const seen = new Set<string>()
+  const push = (device: string | undefined, room: string) => {
+    if (!device || seen.has(device)) return
+    seen.add(device)
+    out.push({ device, room })
+  }
+  for (const [name, room] of Object.entries(rooms)) {
+    const trvs = Array.isArray(room.trv_entity)
+      ? room.trv_entity
+      : room.trv_entity
+        ? [room.trv_entity]
+        : []
+    for (const t of trvs) push(t, name)
+    push(room.independent_sensor, name)
+    push(room.occupancy_sensor, name)
+  }
+  return out
+}
+
+// INSTRUCTION-373B — the single normative write-discipline algorithm. Rebuild
+// the persisted battery_devices list as the union, over all rooms, of
+// {device, battery_entity, room} for every CURRENT device entity that has a
+// non-empty battery assigned. Each device is visited once (uniqueness), and
+// entries orphaned by device renames/removals are excluded (member-set
+// correctness) — the "prune" is this rebuild's effect, not a separate step.
+function rebuildBatteryDevices(
+  rooms: Record<string, RoomConfigYaml>,
+  working: BatteryDeviceYaml[],
+): BatteryDeviceYaml[] {
+  const byDevice = new Map(working.map((b) => [b.device, b]))
+  const out: BatteryDeviceYaml[] = []
+  for (const { device, room } of batteryDeviceRoomPairs(rooms)) {
+    const entry = byDevice.get(device)
+    if (entry && entry.battery_entity && entry.battery_entity.trim()) {
+      out.push({ device, battery_entity: entry.battery_entity, room })
+    }
+  }
+  return out
 }
 
 /** Apply the on-save room transforms to a whole rooms map. Used both for the
@@ -128,8 +180,12 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   return { ...room, mqtt_topics: cleaned as RoomConfigYaml['mqtt_topics'] }
 }
 
-export function RoomSettings({ rooms, property, construction_year, fabric_class, driver, onRefetch }: RoomSettingsProps) {
+export function RoomSettings({ rooms, property, construction_year, fabric_class, batteryDevices = [], driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
+  // INSTRUCTION-373B — working battery list, seeded from the prop. Maintained
+  // upsert-by-device (clearing a battery removes the entry); the persisted list
+  // is rebuilt from this + the current rooms map on save.
+  const [batteryWorking, setBatteryWorking] = useState<BatteryDeviceYaml[]>(batteryDevices)
   const [propertyState, setPropertyState] = useState<PropertyYaml>(property ?? {})
   // INSTRUCTION-369 — building-class edit state, seeded verbatim from the
   // top-level root keys (a stored `unknown` is held as-is, not normalised).
@@ -150,7 +206,7 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
   const allEntityIds = useMemo(
     () => {
       if (driver === 'mqtt') return []
-      return Object.values(editedRooms).flatMap((room) => {
+      const roomEntities = Object.values(editedRooms).flatMap((room) => {
         const trvs = Array.isArray(room.trv_entity) ? room.trv_entity : room.trv_entity ? [room.trv_entity] : []
         return [
           ...trvs,
@@ -158,9 +214,13 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
           room.heating_entity,
           room.occupancy_sensor,
         ]
-      }).filter(Boolean) as string[]
+      })
+      // INSTRUCTION-373B — resolve the per-device battery entities too so their
+      // friendly name / state render in the battery fields.
+      const batteryEntities = batteryWorking.map((b) => b.battery_entity)
+      return [...roomEntities, ...batteryEntities].filter(Boolean) as string[]
     },
-    [editedRooms, driver]
+    [editedRooms, batteryWorking, driver]
   )
   const { resolved } = useEntityResolve(allEntityIds, driver)
 
@@ -170,6 +230,32 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
       [name]: { ...prev[name], ...changes },
     }))
   }, [])
+
+  // INSTRUCTION-373B — display projection: the battery entity for a given device
+  // in a given room, or '' if none assigned. Matched on device AND room.
+  const batteryFor = useCallback(
+    (device: string, room: string): string => {
+      const entry = batteryWorking.find((b) => b.device === device && b.room === room)
+      return entry?.battery_entity ?? ''
+    },
+    [batteryWorking],
+  )
+
+  // INSTRUCTION-373B — upsert-by-device write-discipline: remove any entry with
+  // this device, then re-add iff a non-empty battery is chosen (clearing the
+  // field removes the entry). Keeps the working list unique by device.
+  const setBatteryFor = useCallback(
+    (device: string, room: string, value: string) => {
+      setBatteryWorking((prev) => {
+        const next = prev.filter((b) => b.device !== device)
+        if (value && value.trim()) {
+          next.push({ device, battery_entity: value, room })
+        }
+        return next
+      })
+    },
+    [],
+  )
 
   /** Get the primary TRV entity (first element if array). */
   const getPrimaryTrv = useCallback((room: RoomConfigYaml): string => {
@@ -500,6 +586,15 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
   const roomsDirty =
     JSON.stringify(cleanedRooms) !== JSON.stringify(cleanRoomsMap(rooms))
 
+  // INSTRUCTION-373B — battery dirty-gate. Compare the rebuilt list (current
+  // rooms + working batteries) against the rebuilt baseline (original rooms +
+  // seeded batteries). Both sides go through the same rebuild so the gate is
+  // like-with-like; a TRV rename that orphans an entry shows as dirty too.
+  const rebuiltBatteryDevices = rebuildBatteryDevices(editedRooms, batteryWorking)
+  const batteryDirty =
+    JSON.stringify(rebuiltBatteryDevices) !==
+    JSON.stringify(rebuildBatteryDevices(rooms, batteryDevices))
+
   const save = async () => {
     setSaveError(null)
     // §1.1: dirty-gated, whole-section, serialized awaits, order rooms →
@@ -541,6 +636,25 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
       }
       if (!ok) {
         setSaveError('Failed to save building details. Your changes have not been applied.')
+        return
+      }
+    }
+    // INSTRUCTION-373B — fourth step: per-device battery SoC list. Rebuild the
+    // persisted list (union over all rooms of current device→battery
+    // assignments; orphan-free, unique by device) and PATCH it. Same
+    // abort-on-first-failure contract as the sibling sections; fires only when
+    // dirty. Because the component holds ALL rooms (rooms prop) and is seeded
+    // with ALL existing assignments (batteryDevices prop), the rebuild
+    // reconstructs the full list — no cross-room clobber.
+    if (batteryDirty) {
+      let ok = false
+      try {
+        ok = Boolean(await patch('battery_devices', rebuiltBatteryDevices))
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        setSaveError('Failed to save battery devices. Your changes have not been applied.')
         return
       }
     }
@@ -1164,40 +1278,57 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     const trvLabel = i === 0 ? 'TRV Entity' : `TRV Entity ${i + 1}`
                     const heLabel =
                       i === 0 ? 'Heating Entity' : `Heating Entity ${i + 1}`
+                    const trvBatteryLabel =
+                      i === 0 ? 'TRV Battery' : `TRV Battery ${i + 1}`
                     return (
-                      <div
-                        key={`emitter-row-${i}`}
-                        className="flex items-end gap-2"
-                      >
-                        <div className="flex-1 grid grid-cols-2 gap-3">
-                          <EntityField
-                            label={trvLabel}
-                            value={trvValue}
-                            friendlyName={resolved[trvValue]?.friendly_name}
-                            state={resolved[trvValue]?.state}
-                            unit={resolved[trvValue]?.unit}
-                            placeholder="climate.room_trv"
-                            onChange={(v) => updateTrvAt(name, i, v)}
-                          />
-                          <EntityField
-                            label={heLabel}
-                            value={heValue}
-                            friendlyName={resolved[heValue]?.friendly_name}
-                            state={resolved[heValue]?.state}
-                            unit={resolved[heValue]?.unit}
-                            placeholder="sensor.<room>_heating or number.<room>_valve_position"
-                            onChange={(v) => updateHeatingAt(name, i, v)}
-                          />
+                      <div key={`emitter-row-${i}`} className="space-y-2">
+                        <div className="flex items-end gap-2">
+                          <div className="flex-1 grid grid-cols-2 gap-3">
+                            <EntityField
+                              label={trvLabel}
+                              value={trvValue}
+                              friendlyName={resolved[trvValue]?.friendly_name}
+                              state={resolved[trvValue]?.state}
+                              unit={resolved[trvValue]?.unit}
+                              placeholder="climate.room_trv"
+                              onChange={(v) => updateTrvAt(name, i, v)}
+                            />
+                            <EntityField
+                              label={heLabel}
+                              value={heValue}
+                              friendlyName={resolved[heValue]?.friendly_name}
+                              state={resolved[heValue]?.state}
+                              unit={resolved[heValue]?.unit}
+                              placeholder="sensor.<room>_heating or number.<room>_valve_position"
+                              onChange={(v) => updateHeatingAt(name, i, v)}
+                            />
+                          </div>
+                          {rowCount > 1 && (
+                            <button
+                              onClick={() => removeEmitterSlot(name, i)}
+                              className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
+                              title={`Remove emitter ${i + 1}`}
+                              aria-label={`Remove emitter ${i + 1}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
-                        {rowCount > 1 && (
-                          <button
-                            onClick={() => removeEmitterSlot(name, i)}
-                            className="mb-0.5 px-2 py-1.5 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red)]"
-                            title={`Remove emitter ${i + 1}`}
-                            aria-label={`Remove emitter ${i + 1}`}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                        {/* INSTRUCTION-373B — per-TRV battery entity. Keyed to
+                            this row's TRV (the device); only rendered when the
+                            TRV is set. heating_entity gets no battery field. */}
+                        {trvValue && (
+                          <div className="grid grid-cols-2 gap-3">
+                            <EntityField
+                              label={trvBatteryLabel}
+                              value={batteryFor(trvValue, name)}
+                              friendlyName={resolved[batteryFor(trvValue, name)]?.friendly_name}
+                              state={resolved[batteryFor(trvValue, name)]?.state}
+                              unit={resolved[batteryFor(trvValue, name)]?.unit}
+                              placeholder="sensor.room_trv_battery"
+                              onChange={(v) => setBatteryFor(trvValue, name, v)}
+                            />
+                          </div>
                         )}
                       </div>
                     )
@@ -1224,6 +1355,19 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     placeholder="sensor.room_temp"
                     onChange={(v) => updateRoom(name, { independent_sensor: v || undefined })}
                   />
+                  {/* INSTRUCTION-373B — temp-sensor battery; device =
+                      independent_sensor, only when that sensor is set. */}
+                  {room.independent_sensor && (
+                    <EntityField
+                      label="Temp Sensor Battery"
+                      value={batteryFor(room.independent_sensor, name)}
+                      friendlyName={resolved[batteryFor(room.independent_sensor, name)]?.friendly_name}
+                      state={resolved[batteryFor(room.independent_sensor, name)]?.state}
+                      unit={resolved[batteryFor(room.independent_sensor, name)]?.unit}
+                      placeholder="sensor.room_temp_battery"
+                      onChange={(v) => setBatteryFor(room.independent_sensor!, name, v)}
+                    />
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <EntityField
@@ -1255,6 +1399,21 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     />
                   </div>
                 </div>
+                {/* INSTRUCTION-373B — occupancy-sensor battery; device =
+                    occupancy_sensor, only when that sensor is set. */}
+                {room.occupancy_sensor && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <EntityField
+                      label="Occupancy Battery"
+                      value={batteryFor(room.occupancy_sensor, name)}
+                      friendlyName={resolved[batteryFor(room.occupancy_sensor, name)]?.friendly_name}
+                      state={resolved[batteryFor(room.occupancy_sensor, name)]?.state}
+                      unit={resolved[batteryFor(room.occupancy_sensor, name)]?.unit}
+                      placeholder="sensor.room_occupancy_battery"
+                      onChange={(v) => setBatteryFor(room.occupancy_sensor!, name, v)}
+                    />
+                  </div>
+                )}
                 {room.occupancy_sensor && (
                   <div className="grid grid-cols-2 gap-3">
                     <div>

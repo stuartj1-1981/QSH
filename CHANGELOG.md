@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.5.17] — 2026-06-29
+
+### Added
+- New Device Health page showing live data freshness per field, so you can see
+  at a glance whether each sensor and source is reporting up-to-date values.
+- Per-device battery state-of-charge entity setup in the wizard, so each battery
+  can be assigned its own state-of-charge sensor.
+
+### Changed
+- Per-source flow temperature limits. On multi-source systems the heat pump and
+  boiler flow-temperature caps are now enforced independently, and the operating
+  flow setpoint is editable directly from the Home and Settings screens.
+
+### Fixed
+- Public image NumPy ABI coherence.
+- Boot-crash fixes: battery-devices configuration and an optional-torch import
+  path no longer prevent startup.
+
 ## [1.5.16] — 2026-06-28
 
 ### Added

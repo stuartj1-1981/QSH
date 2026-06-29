@@ -24,6 +24,7 @@ from .orchestrator import run_cycle, save_pipeline_state, restore_pipeline_state
 
 from .controllers import (
     BoostController,
+    DegradationController,
     HeatSourceSensorSelector,
     SensorController,
     ThermalController,
@@ -61,6 +62,7 @@ __all__ = [
     "restore_pipeline_state",
     "build_pipeline",
     "BoostController",
+    "DegradationController",
     "HeatSourceSensorSelector",
     "SensorController",
     "ThermalController",
@@ -133,6 +135,20 @@ def _resolve_ha_defaults(kwargs):
 
         resolved["get_reliable_cop_fn"] = get_reliable_cop
 
+    # INSTRUCTION-370 — DegradationController dispatch callables. Reachability is
+    # the existing direct-valve availability probe; the park-once write is the
+    # new open-bias dispatch. Bound here (the composition root) so the controller
+    # never imports from drivers.ha directly.
+    if resolved.get("degradation_check_fn") is None:
+        from ..drivers.ha.valve_dispatch import check_direct_valve_available
+
+        resolved["degradation_check_fn"] = check_direct_valve_available
+
+    if resolved.get("degradation_park_fn") is None:
+        from ..drivers.ha.valve_dispatch import park_degraded_zone
+
+        resolved["degradation_park_fn"] = park_degraded_zone
+
     # Valve functions: bind HA dispatch callables into the pure logic functions
     # so ValveController can call them with the original positional signature.
     if resolved.get("apply_dissipation_fn") is None:
@@ -186,6 +202,7 @@ def _resolve_ha_defaults(kwargs):
             dfan_control,
             balancing_detector=None,
             sensor_temps=None,
+            degraded_zones=None,
         ):
             return _pure_hybrid(
                 config,
@@ -199,6 +216,7 @@ def _resolve_ha_defaults(kwargs):
                 get_valve_fraction_fn=get_room_valve_fraction,
                 check_valve_available_fn=check_direct_valve_available,
                 apply_direct_control_fn=apply_direct_valve_control,
+                degraded_zones=degraded_zones,
             )
 
         resolved["apply_hybrid_fn"] = _bound_hybrid
@@ -317,6 +335,24 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
 
         resolved["get_reliable_cop_fn"] = _noop_cop
 
+    # INSTRUCTION-370 — non-HA drivers have no HA valve-entity reachability path.
+    # Report every zone as reachable (never demote) and make the park a no-op:
+    # degradation detection is an HA-entity concern, and MQTT/mock dispatch
+    # leaves via OutputBlock, not these callables.
+    if resolved.get("degradation_check_fn") is None:
+
+        def _noop_degradation_check(room, config):
+            return True, ""
+
+        resolved["degradation_check_fn"] = _noop_degradation_check
+
+    if resolved.get("degradation_park_fn") is None:
+
+        def _noop_degradation_park(*args, **kw):
+            return False
+
+        resolved["degradation_park_fn"] = _noop_degradation_park
+
     # Valve functions: OutputBlock captures setpoints, driver dispatches
     if resolved.get("apply_dissipation_fn") is None:
 
@@ -373,8 +409,15 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
     # INSTRUCTION-117D Task 3b: validate installer flow_limits override against
     # the active source's capability envelope at startup. Out-of-envelope
     # values raise ConfigValidationError (fail-hard, process exits non-zero).
-    from .controllers.flow_controller import validate_flow_limits
+    from .controllers.flow_controller import (
+        validate_flow_limits,
+        warn_source_flow_limits,
+    )
     validate_flow_limits(config)
+    # INSTRUCTION-372A — warn-once (no raise) for out-of-envelope per-source
+    # heat_sources[].flow_min/flow_max; the value is clamped per-cycle by
+    # build_caps_from_config using the same shared predicate.
+    warn_source_flow_limits(config)
 
     # INSTRUCTION-261 Task 5 — orchestrator-owned allostatic-load registry.
     # Constructed once per pipeline; injected into AllostaticLoadController
@@ -432,6 +475,18 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         # transparently every cycle. Per parent §D-3 V2 the cascade output
         # holds (bumpless-hold idiom) on heat_source_selector_bad_status.
         HeatSourceSensorSelector(config=config),
+        # INSTRUCTION-370 — DegradationController runs after SensorController /
+        # HeatSourceSensorSelector and BEFORE the valve/flow/dispatch stage, so
+        # ctx.degraded_zones is populated before ValveController consumes it.
+        # Detects loss of DIRECT-TRV actuation authority (HA valve entity
+        # unreachable), parks the zone open-biased once, and demotes it to a
+        # runtime `none` emitter.
+        DegradationController(
+            config=config,
+            room_control_state=kw.get("room_control_state"),
+            check_valve_available_fn=kw.get("degradation_check_fn"),
+            park_fn=kw.get("degradation_park_fn"),
+        ),
         boost,
         ThermalController(
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),

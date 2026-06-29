@@ -138,6 +138,10 @@ export interface EngineeringState {
   antifrost_threshold?: number
   cascade_active?: boolean
   frost_cap_active?: boolean
+  // INSTRUCTION-372C — the ENFORCED flow envelope (arbiter's effective_min /
+  // flow_max), the read-only authority for the Home flow-limit display.
+  flow_floor_c?: number | null
+  flow_ceiling_c?: number | null
   signal_quality?: Record<string, string>
 }
 
@@ -379,6 +383,10 @@ export interface CycleMessage {
     antifrost_threshold?: number
     cascade_active: boolean
     frost_cap_active: boolean
+    // INSTRUCTION-372C — the ENFORCED flow envelope (arbiter's effective_min /
+    // flow_max), the read-only authority for the Home flow-limit display.
+    flow_floor_c?: number | null
+    flow_ceiling_c?: number | null
     signal_quality: Record<string, string>
   }
   boost?: {
@@ -554,6 +562,22 @@ export interface BalancingResponse {
   imbalanced_count: number
   total_observations: number
   error?: string
+}
+
+// INSTRUCTION-371B — per-device battery health (FI-11). The `status` literal
+// union is mirrored from INSTRUCTION-371A Task 7's pinned domain (its
+// authoritative source: pinned to the latched SENSOR.battery_low state), not
+// declared independently here.
+export interface DeviceHealth {
+  room: string
+  soc: number
+  status: 'ok' | 'low'
+  weeks_remaining: string
+}
+
+export interface DeviceHealthResponse {
+  devices: Record<string, DeviceHealth>
+  low_count: number
 }
 
 // INSTRUCTION-288B: quarantine read surface over the swarm publisher's

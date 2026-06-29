@@ -96,6 +96,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
             property={data.property || {}}
             construction_year={data.construction_year}
             fabric_class={data.fabric_class}
+            batteryDevices={data.battery_devices ?? []}
             driver={driver}
             onRefetch={refetch}
           />

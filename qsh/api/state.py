@@ -152,6 +152,13 @@ class CycleSnapshot:
     cooling_active: bool = False
     cascade_active: bool = False
     frost_cap_active: bool = False
+    # INSTRUCTION-372C — the ACTUAL enforced flow envelope FlowController hands
+    # the arbiter (372A Task 6): applied_flow_floor_c = effective_min,
+    # applied_flow_ceiling_c = flow_max. Surfaced in the snapshot engineering
+    # block so the Home display states the true enforced floor (e.g. 30 on a
+    # default install, not the raw caps floor 25). None until written.
+    applied_flow_floor_c: Optional[float] = None
+    applied_flow_ceiling_c: Optional[float] = None
 
     # Winter mode (antifrost override)
     antifrost_override_active: bool = False
@@ -507,6 +514,12 @@ class SharedState:
         # the new aux-room set.
         self._aux_dispatched: Dict[str, bool] = {}
         self._was_in_shadow_last_cycle: bool = False
+        # INSTRUCTION-371A — latest per-device battery snapshot (soc/room/band/
+        # status dicts), captured each cycle from ctx.sensor_data for the
+        # read-only /api/devices/health endpoint.
+        self._device_battery: Dict[str, Dict] = {
+            "soc": {}, "room": {}, "band": {}, "status": {},
+        }
 
     def update(self, ctx, config: dict, sysid=None):
         """Called by pipeline thread after each run_cycle().
@@ -739,6 +752,8 @@ class SharedState:
             cooling_active=getattr(ctx.inputs, "cooling_active", False),
             cascade_active=ctx.cascade_active if hasattr(ctx, 'cascade_active') else False,
             frost_cap_active=ctx.frost_cap_active if hasattr(ctx, 'frost_cap_active') else False,
+            applied_flow_floor_c=getattr(ctx, "applied_flow_floor_c", None),
+            applied_flow_ceiling_c=getattr(ctx, "applied_flow_ceiling_c", None),
             antifrost_override_active=ctx.antifrost_override_active,
             winter_equilibrium=(
                 ctx.antifrost_override_active
@@ -1055,8 +1070,20 @@ class SharedState:
             for ev in active_alarms_list
         ]
 
+        # INSTRUCTION-371A — capture the per-device battery snapshot for the
+        # /api/devices/health endpoint. Copied so the route never reads a
+        # mutating sensor_data instance.
+        _sd = getattr(ctx, "sensor_data", None)
+        _device_battery = {
+            "soc": dict(getattr(_sd, "device_battery_soc", {}) or {}),
+            "room": dict(getattr(_sd, "device_room", {}) or {}),
+            "band": dict(getattr(_sd, "device_soc_band", {}) or {}),
+            "status": dict(getattr(_sd, "device_battery_status", {}) or {}),
+        }
+
         with self._lock:
             self._snapshot = snap
+            self._device_battery = _device_battery
             if sysid is not None:
                 self._sysid_ref = sysid
             if config is not None:
@@ -1087,6 +1114,13 @@ class SharedState:
             if self._config_ref is None:
                 return True  # Default assumption before config is loaded
             return self._config_ref.get("driver", "ha") == "ha"
+
+    def get_device_battery(self) -> Dict[str, Dict]:
+        """INSTRUCTION-371A — latest per-device battery snapshot
+        ({soc, room, band, status} dicts), copied for the read-only
+        /api/devices/health endpoint."""
+        with self._lock:
+            return {k: dict(v) for k, v in self._device_battery.items()}
 
     def get_balancing(self):
         with self._lock:

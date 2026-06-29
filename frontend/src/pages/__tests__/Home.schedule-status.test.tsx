@@ -54,6 +54,7 @@ vi.mock('../../hooks/useSourceSelection', () => ({
 let mockRawConfigData: QshConfigYaml | null = null
 vi.mock('../../hooks/useConfig', () => ({
   useRawConfig: () => ({ data: mockRawConfigData, refetch: vi.fn() }),
+  useConfig: () => ({ data: null, refetch: vi.fn() }),
 }))
 
 vi.mock('recharts', () => ({
