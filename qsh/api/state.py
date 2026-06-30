@@ -949,7 +949,15 @@ class SharedState:
                     )
                     fuel_cost = resolve_source_input_cost(src, ctx)[0]
 
-                carbon = src.get("carbon_factor", 0.0)
+                # INSTRUCTION-380 — resolve carbon through the SAME authority
+                # the eco-scorer uses (entity slot → static) so a wired grid-CI
+                # entity on a source shows on the panel, not the stale static.
+                # Lazy import mirrors the cost cold-start above. A static-only
+                # source is byte-identical to the prior src["carbon_factor"] read.
+                from qsh.pipeline.controllers.source_selection import (
+                    resolve_source_input_carbon,
+                )
+                carbon = resolve_source_input_carbon(src, ctx)
 
                 # Determine status
                 if name == active_name:

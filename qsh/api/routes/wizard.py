@@ -2049,7 +2049,7 @@ def deploy_config(req: WizardDeployRequest):
     # Hydrate redacted secrets and run the section-preservation guard against
     # the on-disk YAML BEFORE any write. The 409 path must short-circuit before
     # yaml.dump, the file write, and the restart-flag write.
-    from .config import _load_raw_yaml, restore_redacted
+    from .config import _load_raw_yaml, restore_redacted, preserve_singular_dhw_sensors
     existing = _load_raw_yaml() or {}
 
     # Sentinel restore — secrets that the wizard read via /api/config/raw
@@ -2074,7 +2074,17 @@ def deploy_config(req: WizardDeployRequest):
     heat_sources = req.config.get("heat_sources")
     if isinstance(heat_sources, list) and len(heat_sources) >= 1:
         if len(heat_sources) == 1:
-            req.config["heat_source"] = heat_sources[0]
+            # INSTRUCTION-378: re-merge the DHW signal-source keys the plural
+            # payload strips (236). Two-call precedence: the wizard-submitted
+            # singular (StepHotWater authors heat_source.sensors.hot_water_boolean
+            # into req.config — a legitimate full-config author, distinct from the
+            # 236 Settings-surface contract) wins; the on-disk singular gap-fills.
+            # setdefault ordering: first call seeds from submitted, second seeds
+            # only the keys still absent. deepcopy keeps heat_sources[0] stripped.
+            mirrored = copy.deepcopy(heat_sources[0])
+            preserve_singular_dhw_sensors(req.config.get("heat_source") or {}, mirrored)
+            preserve_singular_dhw_sensors(existing.get("heat_source") or {}, mirrored)
+            req.config["heat_source"] = mirrored
             # V2 G-N5: N→1 transition. If the prior on-disk config had
             # source_selection (multi-source install reducing to single),
             # drop it from the outgoing config so it doesn't survive.
