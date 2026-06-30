@@ -229,6 +229,45 @@ def restore_redacted(existing: dict, incoming: dict) -> dict:
     return result
 
 
+# INSTRUCTION-378: the two DHW signal-source keys that live ONLY in the singular
+# heat_source.sensors block. The frontend strips them from the plural heat_sources
+# payload (INSTRUCTION-236), and the singular block is both the sole HA-path read
+# site (config.py:1726-1741) and write site. The length-1 plural→singular mirror
+# (INSTRUCTION-237A) is a blind full-block assignment of the DHW-stripped primary,
+# so without re-merging these keys it silently deletes the operator's hot-water
+# entities on every Heat-Source save / wizard re-deploy.
+DHW_SINGULAR_SENSOR_KEYS = ("water_heater", "hot_water_boolean")
+
+
+def preserve_singular_dhw_sensors(prev_singular: dict, mirrored: dict) -> dict:
+    """Re-merge the DHW signal-source keys from a prior singular heat_source
+    into the mirrored (DHW-stripped) primary, gap-fill semantics.
+
+    `mirrored` values win where present; `prev_singular["sensors"]` fills gaps
+    via setdefault. Mutates and returns `mirrored`.
+
+    The no-op is keyed on `prev_singular`, NOT on `mirrored`: if `prev_singular`
+    has no `sensors` dict, or carries none of `DHW_SINGULAR_SENSOR_KEYS`, the
+    function returns `mirrored` untouched (preserving the
+    `persisted["heat_source"] == payload[0]` contract for no-DHW installs). But
+    when `prev_singular` DOES carry DHW keys, they are injected even if `mirrored`
+    has no `sensors` dict at all — the function creates `mirrored["sensors"]`.
+    """
+    prev_sensors = prev_singular.get("sensors") if isinstance(prev_singular, dict) else None
+    if not isinstance(prev_sensors, dict):
+        return mirrored
+    dhw = {k: prev_sensors[k] for k in DHW_SINGULAR_SENSOR_KEYS if k in prev_sensors}
+    if not dhw:
+        return mirrored
+    mirrored_sensors = mirrored.get("sensors")
+    if not isinstance(mirrored_sensors, dict):
+        mirrored_sensors = {}
+        mirrored["sensors"] = mirrored_sensors
+    for key, value in dhw.items():
+        mirrored_sensors.setdefault(key, value)
+    return mirrored
+
+
 # 158A Task 3: legacy fallback paths for first-save sentinel restoration.
 # Maps (parent_key, child_key) in the new shape to (legacy_parent, legacy_child)
 # in the persisted YAML. When the new path's value is REDACTED_SENTINEL and
@@ -709,7 +748,14 @@ def patch_config_section(section: str, body=Body(...)):
                 # Singular mirror — preserves back-compat for any code path that
                 # still reads raw["heat_source"] (validation at config.py:2053,
                 # legacy callers).
-                raw["heat_source"] = local_incoming[0]
+                # INSTRUCTION-378: re-merge the DHW signal-source keys the plural
+                # payload intentionally strips (236). raw.get("heat_source") here
+                # is the pre-overwrite on-disk singular — the sole DHW store. The
+                # deepcopy prevents aliasing local_incoming[0] (keeps the plural
+                # primary DHW-stripped).
+                mirrored = copy.deepcopy(local_incoming[0])
+                preserve_singular_dhw_sensors(raw.get("heat_source") or {}, mirrored)
+                raw["heat_source"] = mirrored
                 # V2 G-N5: N→1 transition cleanup. Symmetric with the 1→N
                 # singular strip below — source_selection becomes inert when
                 # only one source remains; leaving it on disk is the same class

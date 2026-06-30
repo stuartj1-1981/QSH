@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.18] — 2026-06-30
+
+### Changed
+- On multi-source systems, the heat pump now uses your electricity tariff as the
+  authoritative source for its running cost and carbon intensity, and the
+  source-selection panel shows matching cost and carbon figures.
+
+### Fixed
+- Hot-water (DHW) sensor assignments are no longer lost when a heat source is
+  saved.
+
 ## [1.5.17] — 2026-06-29
 
 ### Added
