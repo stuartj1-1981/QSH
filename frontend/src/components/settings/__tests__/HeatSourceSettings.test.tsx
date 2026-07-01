@@ -1396,3 +1396,71 @@ describe('HeatSourceSettings — per-source caps pair gated on multi-source (INS
     expect(screen.getByText(/Flow Max \(°C\)/)).toBeInTheDocument()
   })
 })
+
+/**
+ * INSTRUCTION-385B — advisory implausible-efficiency hint at the correction
+ * point. Mirrors the backend efficiency_plausible (385A): HP-family COP must
+ * exceed 1.0; a known combustion boiler is 0 < eff < 1.0; an unknown type is
+ * not judged. Advisory only — never blocks saving.
+ */
+describe('HeatSourceSettings — implausible-efficiency hint (INSTRUCTION-385B)', () => {
+  it('boiler with efficiency 1.0 shows the implausible hint', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'gas_boiler', name: 'B', efficiency: 1 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByText(/Implausible for/)).toBeInTheDocument()
+  })
+
+  it('boiler with a plausible efficiency 0.9 shows no hint', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'gas_boiler', name: 'B', efficiency: 0.9 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.queryByText(/Implausible for/)).toBeNull()
+  })
+
+  it('heat pump with efficiency 1.0 (COP must exceed 1) shows the hint', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'heat_pump', name: 'HP', efficiency: 1 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByText(/Implausible for/)).toBeInTheDocument()
+  })
+
+  it('gshp with efficiency 4.0 shows NO hint (handoff-1: gshp is HP-family, not a boiler)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={{ type: 'gshp', name: 'GSHP', efficiency: 4.0 }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // If gshp were routed through the boiler >=1.0 rule it would wrongly flag
+    // a COP of 4.0. It is treated as HP-family (COP > 1 ⇒ plausible).
+    expect(screen.queryByText(/Implausible for/)).toBeNull()
+  })
+
+  it('unknown source type is not judged (no hint)', () => {
+    render(
+      <HeatSourceSettings
+        // The type union is closed (5 members); an unknown type is structurally
+        // unreachable from the UI, so the defensive not-judged branch is
+        // exercised via a deliberately out-of-domain fixture.
+        heatSource={{ type: 'biomass_boiler', name: 'X', efficiency: 1 } as unknown as HeatSourceYamlT}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.queryByText(/Implausible for/)).toBeNull()
+  })
+})

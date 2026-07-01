@@ -123,11 +123,53 @@ describe('SourceSelector', () => {
     expect(screen.getByText('Offline')).toBeDefined()
   })
 
-  it('formats thermal cost to 3 decimal places', () => {
+  it('formats thermal (heat) cost to 3 decimal places', () => {
     const state = makeState()
     render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
-    expect(screen.getByText('£0.064/kWh')).toBeDefined()
-    expect(screen.getByText('£0.073/kWh')).toBeDefined()
+    expect(screen.getByText('£0.064/kWh heat')).toBeDefined()
+    expect(screen.getByText('£0.073/kWh heat')).toBeDefined()
+  })
+
+  it('surfaces the input £/kWh on each card (both modes)', () => {
+    const state = makeState()
+    render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
+    expect(screen.getByText(/£0\.245\/kWh in/)).toBeDefined()
+    expect(screen.getByText(/£0\.065\/kWh in/)).toBeDefined()
+  })
+
+  it('engineering mode shows per-source score and the "Selected on {reason}" line', () => {
+    const state = makeState({ reason: 'cost', detail: 'HP cheapest at COP 3.8' })
+    render(
+      <SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} engineering />
+    )
+    expect(screen.getByText('score 0.055')).toBeDefined()
+    expect(screen.getByText('score 0.068')).toBeDefined()
+    expect(screen.getByText(/Selected on cost — HP cheapest at COP 3\.8/)).toBeDefined()
+  })
+
+  it('non-engineering render hides score and the "Selected on" line', () => {
+    const state = makeState({ reason: 'cost', detail: 'x' })
+    render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
+    expect(screen.queryByText('score 0.055')).toBeNull()
+    expect(screen.queryByText(/Selected on/)).toBeNull()
+  })
+
+  it('renders the stored-efficiency badge only for a flagged source', () => {
+    const state = makeState({
+      sources: [
+        { ...makeState().sources[0], efficiency_warning: true },
+        { ...makeState().sources[1], efficiency_warning: false },
+      ],
+    })
+    render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
+    // Exactly one badge — the flagged HP; the LPG (false) has none.
+    expect(screen.getAllByText(/stored efficiency/)).toHaveLength(1)
+  })
+
+  it('renders no badge when efficiency_warning is absent on all sources', () => {
+    const state = makeState()  // no efficiency_warning key
+    render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
+    expect(screen.queryByText(/stored efficiency/)).toBeNull()
   })
 })
 

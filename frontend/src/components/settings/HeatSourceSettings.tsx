@@ -21,6 +21,21 @@ import { ControlValueDisplay } from './ControlValueDisplay'
 import { WriteBudgetField } from './WriteBudgetField'
 import { isHeatPumpType } from '../../lib/heat-source-types'
 
+// INSTRUCTION-385B — verbatim mirror of the backend efficiency_plausible
+// (385A, config.py). Keyed on explicit type sets (NOT isHeatPumpType, which is
+// UI-treatment sugar) so the panel badge and this Settings hint never disagree:
+// HP-family COP must exceed 1.0; a known combustion boiler is 0 < eff < 1.0; an
+// unknown type is not judged. If a future type is added it must be added to the
+// backend map AND these two sets.
+const HEAT_PUMP_TYPES = ['heat_pump', 'gshp']
+const BOILER_TYPES = ['gas_boiler', 'oil_boiler', 'lpg_boiler']
+function efficiencyImplausible(type: string, v: number | undefined): boolean {
+  if (v == null || Number.isNaN(v)) return false
+  if (HEAT_PUMP_TYPES.includes(type)) return v <= 1.0            // COP must exceed 1
+  if (BOILER_TYPES.includes(type)) return v <= 0 || v >= 1.0     // GCV combustion boiler
+  return false                                                    // unknown type — not judged
+}
+
 interface HeatSourceSettingsProps {
   heatSource: HeatSourceYaml
   heatSources?: HeatSourceYaml[]
@@ -732,6 +747,14 @@ function SourceCard({
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
+              {/* INSTRUCTION-385B — advisory implausible-value hint at the
+                  correction point (the owner-chosen "you set it" path). Does
+                  not block saving. */}
+              {efficiencyImplausible(hs.type, hs.efficiency) && (
+                <p className="mt-1 text-xs text-[var(--amber)]">
+                  Implausible for a {isHeatPumpType(hs.type) ? 'COP' : 'combustion efficiency'} — set the real value
+                </p>
+              )}
             </div>
             <div>
               <label

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.5.19] — 2026-07-01
+
+### Changed
+- The learning heating controller can now train candidate policies that aim to
+  beat the built-in baseline rather than just reproduce it. A new offline step
+  requires each candidate to outperform the baseline across simulated seasons
+  before it is ever given live control. The policy now also perceives the time
+  of year and penalises summer and shoulder-season overshoot.
+- The heat-source settings panel now shows the basis for each source's
+  efficiency figure and warns when a configured efficiency value looks
+  implausible.
+
 ## [1.5.18] — 2026-06-30
 
 ### Changed
