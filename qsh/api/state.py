@@ -920,7 +920,15 @@ class SharedState:
             for src in heat_sources:
                 name = src.get("name", "")
                 score = source_scores.get(name, 0.0)
-                eff = src.get("efficiency", 1.0)
+                # INSTRUCTION-385A — resolve efficiency through the SAME authority
+                # the scorer uses so an HP's panel thermal cost derives from the
+                # live COP (not the static field). active_name is already defined
+                # above (ctx.active_source). Lazy import mirrors the cost/carbon
+                # resolver imports below.
+                from qsh.pipeline.controllers.source_selection import (
+                    resolve_source_efficiency,
+                )
+                eff = resolve_source_efficiency(src, ctx, active_name)
 
                 src_type = src.get("type", "")
 
@@ -969,6 +977,11 @@ class SharedState:
                 cost_thermal = (fuel_cost / eff) if eff > 0 else 0.0
                 carbon_thermal = (carbon / eff) if eff > 0 else 0.0
 
+                # INSTRUCTION-385A — flag (warn-only) a STORED efficiency
+                # implausible for its type. Computed from the stored value via
+                # the shared predicate; the resolver above still uses the value
+                # (never overwrites it) so panel and scorer stay in parity.
+                from qsh.config import efficiency_plausible
                 sources_list.append({
                     "name": name,
                     "type": src_type,
@@ -978,6 +991,7 @@ class SharedState:
                     "cost_per_kwh_thermal": round(cost_thermal, 4),
                     "carbon_per_kwh_thermal": round(carbon_thermal, 4),
                     "score": round(score, 5),
+                    "efficiency_warning": not efficiency_plausible(src_type, src.get("efficiency")),
                     "signal_quality": source_states.get(name, {}).get("signal_quality", "good"),
                 })
 

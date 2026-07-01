@@ -155,6 +155,10 @@ export interface SourceState {
   carbon_per_kwh_thermal: number
   score: number
   signal_quality: string
+  // INSTRUCTION-385B — backend (385A) flags a STORED efficiency that is
+  // implausible for its source type (warn-only, never overwritten). Additive
+  // optional; undefined is treated as no-warning by consumers.
+  efficiency_warning?: boolean
 }
 
 // 228B Task 1: Literal-constrained reason vocabulary mirroring the

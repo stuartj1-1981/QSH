@@ -7,11 +7,22 @@ interface SourceSelectorProps {
   sourceSelection: SourceSelectionState
   onModeChange: (mode: string) => void
   onPreferenceChange: (preference: number) => void
+  engineering?: boolean
 }
 
 function sourceIcon(type: string) {
   if (type === 'heat_pump') return Zap
   return Flame
+}
+
+function reasonLabel(r: string): string {
+  const m: Record<string, string> = {
+    cost: 'cost', carbon: 'carbon', manual_lock: 'manual lock', failover: 'failover',
+    dwell_hold: 'hysteresis hold', deadband_hold: 'hysteresis hold',
+    daily_cap_hold: 'hysteresis hold', single_source: 'single source',
+    no_eligible_source: 'no eligible source',
+  }
+  return m[r] ?? r
 }
 
 function efficiencyLabel(src: SourceState): string {
@@ -37,7 +48,7 @@ function statusLabel(status: string): string {
   }
 }
 
-export const SourceSelector = memo(function SourceSelector({ sourceSelection, onModeChange, onPreferenceChange }: SourceSelectorProps) {
+export const SourceSelector = memo(function SourceSelector({ sourceSelection, onModeChange, onPreferenceChange, engineering = false }: SourceSelectorProps) {
   const [sliderValue, setSliderValue] = useState(Math.round(sourceSelection.preference * 100))
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -139,9 +150,18 @@ export const SourceSelector = memo(function SourceSelector({ sourceSelection, on
             key={src.name}
             source={src}
             isActive={src.name === sourceSelection.active_source}
+            engineering={engineering}
           />
         ))}
       </div>
+
+      {/* Why-selected line — engineering only */}
+      {engineering && (
+        <div className="mt-2 text-xs text-[var(--text-muted)]">
+          Selected on {reasonLabel(sourceSelection.reason)}
+          {sourceSelection.detail ? ` — ${sourceSelection.detail}` : ''}
+        </div>
+      )}
 
       {/* Footer */}
       <div className="mt-3 text-xs text-[var(--text-muted)]">
@@ -186,7 +206,7 @@ const SOURCE_ICONS: Record<string, React.ComponentType<{ size?: number; classNam
   oil_boiler: Flame,
 }
 
-function SourceCard({ source, isActive }: { source: SourceState; isActive: boolean }) {
+function SourceCard({ source, isActive, engineering }: { source: SourceState; isActive: boolean; engineering: boolean }) {
   const Icon = SOURCE_ICONS[source.type] ?? Flame
   return (
     <div
@@ -203,11 +223,18 @@ function SourceCard({ source, isActive }: { source: SourceState; isActive: boole
           <span className={cn('w-2 h-2 rounded-full', statusDot(source.status))} />
           <span className="font-medium text-[var(--text)] truncate">{source.name}</span>
           <span className="text-xs text-[var(--text-muted)]">{statusLabel(source.status)}</span>
+          {source.efficiency_warning && (
+            <span title="Stored (config) efficiency is implausible for this source type; the live COP is used for control — set the stored value in Settings → Heat Source"
+                  className="flex items-center gap-1 text-[var(--amber)]">
+              <AlertTriangle size={12} /> stored efficiency
+            </span>
+          )}
         </div>
       </div>
       <div className="text-right text-xs text-[var(--text-muted)] whitespace-nowrap">
-        <div>{efficiencyLabel(source)}</div>
-        <div>£{source.cost_per_kwh_thermal.toFixed(3)}/kWh</div>
+        <div>{efficiencyLabel(source)} · £{source.fuel_cost_per_kwh.toFixed(3)}/kWh in</div>
+        <div className="text-[var(--text)]">£{source.cost_per_kwh_thermal.toFixed(3)}/kWh heat</div>
+        {engineering && <div>score {source.score.toFixed(3)}</div>}
       </div>
     </div>
   )

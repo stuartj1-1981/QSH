@@ -422,6 +422,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
           sourceSelection={sourceSelection}
           onModeChange={setSourceMode}
           onPreferenceChange={setSourcePreference}
+          engineering={engineering}
         />
       )}
 
