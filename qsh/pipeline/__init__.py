@@ -560,7 +560,10 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),
             fixed_setpoints=kw.get("fixed_setpoints"),
         ),
-        CostController(),
+        # INSTRUCTION-392 — same tariff_providers registry EnergyController
+        # consumes; CostController uses it only to source per-fuel standing
+        # charges for the reporting-only total-cost view (never selection).
+        CostController(tariff_providers=kw.get("tariff_providers")),
         AllostaticLoadController(
             registry=allostatic_registry,
             config=config,

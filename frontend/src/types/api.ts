@@ -159,6 +159,12 @@ export interface SourceState {
   // implausible for its source type (warn-only, never overwritten). Additive
   // optional; undefined is treated as no-warning by consumers.
   efficiency_warning?: boolean
+  // INSTRUCTION-391 — per-source pricing basis. export_priced: an HP whose
+  // effective (solar-aware) price is below the actual tariff. parasitic_per_kwh:
+  // the boiler's circulator adder in £/kWh-heat (0 for HP / unwired). Additive
+  // optional; undefined (older payloads) renders nothing extra.
+  export_priced?: boolean
+  parasitic_per_kwh?: number
 }
 
 // 228B Task 1: Literal-constrained reason vocabulary mirroring the
@@ -207,6 +213,11 @@ export interface SourceSelectionState extends SourceSelectionPayload {
   switch_count_today: number
   max_switches_per_day: number
   last_switch_reason: string
+  // INSTRUCTION-391 — effective (solar-aware) vs actual electricity price for the
+  // "effective vs actual" contrast on the Heat Source card. Additive optional;
+  // backend always populates them, undefined keeps older payloads compiling.
+  effective_electricity_price?: number
+  tariff_electricity?: number
 }
 
 export interface DriverStatus {

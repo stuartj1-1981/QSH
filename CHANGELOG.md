@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.5.20] — 2026-07-02
+
+### Fixed
+- Automatic heat-source selection no longer stays on the more expensive source
+  when the cheaper source's saving sits just inside the switching dead-band.
+  Sustained small savings now accumulate and trigger a switch, while the
+  compressor minimum-run guard is preserved.
+
+### Changed
+- On multi-source systems, the heat pump's running cost now reflects the solar
+  export you give up by running it, and boiler running costs include a
+  circulator-pump penalty — so source selection reflects true marginal cost.
+- The heat-source panel now shows the effective electricity price behind each
+  decision and why it differs from your tariff (export-adjusted, boiler pump
+  overhead).
+- Total cost per heat source — running cost plus an amortised share of the
+  standing charge — is now recorded to the historian to help answer whether a
+  connection is worth keeping. Standing charges come from the Octopus API, or a
+  configuration field for non-gas boilers (e.g. LPG tank rental).
+
 ## [1.5.19] — 2026-07-01
 
 ### Changed

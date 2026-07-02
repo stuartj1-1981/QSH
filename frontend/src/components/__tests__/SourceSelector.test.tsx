@@ -171,6 +171,62 @@ describe('SourceSelector', () => {
     render(<SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} />)
     expect(screen.queryByText(/stored efficiency/)).toBeNull()
   })
+
+  // INSTRUCTION-391 — effective-price basis + boiler parasitic on the card.
+  it('shows the HP solar-adjusted basis when export_priced and effective < tariff', () => {
+    const state = makeState({
+      effective_electricity_price: 0.09,
+      tariff_electricity: 0.27,
+      sources: [
+        { ...makeState().sources[0], export_priced: true },
+        { ...makeState().sources[1] },
+      ],
+    })
+    render(
+      <SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} engineering />
+    )
+    expect(screen.getByText('(solar-adjusted)')).toBeDefined()
+    expect(screen.getByText(/tariff £0\.27/)).toBeDefined()
+  })
+
+  it('shows the effective price plainly (no "solar-adjusted") when effective >= tariff', () => {
+    const state = makeState({
+      effective_electricity_price: 0.30,
+      tariff_electricity: 0.27,
+      sources: [
+        { ...makeState().sources[0], export_priced: false },
+        { ...makeState().sources[1] },
+      ],
+    })
+    render(
+      <SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} engineering />
+    )
+    expect(screen.getByText(/£0\.30\/kWh effective/)).toBeDefined()
+    expect(screen.queryByText('(solar-adjusted)')).toBeNull()
+  })
+
+  it('renders the boiler pump adder when parasitic_per_kwh > 0', () => {
+    const state = makeState({
+      sources: [
+        { ...makeState().sources[0] },
+        { ...makeState().sources[1], parasitic_per_kwh: 0.01 },
+      ],
+    })
+    render(
+      <SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} engineering />
+    )
+    expect(screen.getByText(/\+£0\.01\/kWh pump/)).toBeDefined()
+  })
+
+  it('renders nothing extra when 391 fields are undefined (back-compat)', () => {
+    const state = makeState()  // no effective/tariff/export_priced/parasitic keys
+    render(
+      <SourceSelector sourceSelection={state} onModeChange={vi.fn()} onPreferenceChange={vi.fn()} engineering />
+    )
+    expect(screen.queryByText('(solar-adjusted)')).toBeNull()
+    expect(screen.queryByText(/\/kWh effective/)).toBeNull()
+    expect(screen.queryByText(/\/kWh pump/)).toBeNull()
+  })
 })
 
 describe('SourceSelector debounce cleanup', () => {

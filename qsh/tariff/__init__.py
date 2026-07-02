@@ -108,6 +108,14 @@ class TariffProvider(Protocol):
     def refresh(self) -> None: ...
     def status(self) -> ProviderStatus: ...
 
+    # INSTRUCTION-392 — OPTIONAL method (NOT a Protocol member, so it does not
+    # widen the @runtime_checkable structural contract that every provider must
+    # satisfy): providers that can source a daily standing charge (Octopus
+    # electricity/gas) expose
+    #     def standing_charge_per_day(self) -> float   # £/day, 0.0 if unknown
+    # Consumers MUST read it via a getattr guard defaulting to 0.0, so a provider
+    # without the method is treated as "no standing charge known".
+
     # INSTRUCTION-136A V7 Task 4b: sibling addition for rate-curve consumers
     # (TariffOptimiserController). Sibling-addition only — no semantic change
     # to current_price() or any other 150-series Protocol method.
