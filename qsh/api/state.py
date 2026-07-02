@@ -916,6 +916,17 @@ class SharedState:
             active_name = ctx.active_source
             source_states = ctx.inputs.source_states if ctx.inputs else {}
 
+            # INSTRUCTION-391 — effective (389) vs actual tariff, read once for
+            # the payload + per-source export_priced flag. isinstance guards keep
+            # MagicMock test contexts from raising in the numeric comparisons.
+            _eff_price = getattr(ctx, "effective_electricity_price", 0.0)
+            if not isinstance(_eff_price, (int, float)):
+                _eff_price = 0.0
+            _tariff_elec = (ctx.fuel_rates.get("electricity", ctx.current_rate)
+                            if isinstance(ctx.fuel_rates, dict) else ctx.current_rate)
+            if not isinstance(_tariff_elec, (int, float)):
+                _tariff_elec = 0.0
+
             sources_list = []
             for src in heat_sources:
                 name = src.get("name", "")
@@ -974,7 +985,16 @@ class SharedState:
                     sq = source_states.get(name, {}).get("signal_quality", "good")
                     status = "offline" if sq == "unavailable" else "standby"
 
-                cost_thermal = (fuel_cost / eff) if eff > 0 else 0.0
+                # INSTRUCTION-390 — add the boiler circulator parasitic to
+                # £/kWh-heat via the SAME shared helper the scorer uses, so the
+                # panel and the scorer stay in parity (355/385 single-authority)
+                # including at eff==0. Lazy import mirrors the resolver imports
+                # above.
+                from qsh.pipeline.controllers.source_selection import (
+                    resolve_source_parasitic_cost,
+                )
+                cost_thermal = ((fuel_cost / eff) if eff > 0 else 0.0) \
+                    + resolve_source_parasitic_cost(src, ctx)
                 carbon_thermal = (carbon / eff) if eff > 0 else 0.0
 
                 # INSTRUCTION-385A — flag (warn-only) a STORED efficiency
@@ -993,6 +1013,14 @@ class SharedState:
                     "score": round(score, 5),
                     "efficiency_warning": not efficiency_plausible(src_type, src.get("efficiency")),
                     "signal_quality": source_states.get(name, {}).get("signal_quality", "good"),
+                    # INSTRUCTION-391 — per-source pricing basis for the card:
+                    # export_priced marks an HP whose effective (solar-aware)
+                    # price sits below the actual tariff; parasitic_per_kwh is
+                    # the boiler's circulator adder (0 for HP / unwired).
+                    "export_priced": bool(
+                        src_type == "heat_pump" and 0 < _eff_price < _tariff_elec
+                    ),
+                    "parasitic_per_kwh": round(resolve_source_parasitic_cost(src, ctx), 4),
                 })
 
             sel_config = config.get("source_selection", {})
@@ -1014,6 +1042,10 @@ class SharedState:
                 "blocked_switches": list(ctx.source_blocked_switches),
                 # back-compat alias retained during frontend rollout
                 "last_switch_reason": ctx.source_switch_reason,
+                # INSTRUCTION-391 — effective vs actual electricity price for the
+                # "effective vs actual" contrast on the card.
+                "effective_electricity_price": round(_eff_price, 4),
+                "tariff_electricity": round(_tariff_elec, 4),
             }
 
         # ====================================================================

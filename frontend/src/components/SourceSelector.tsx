@@ -151,6 +151,8 @@ export const SourceSelector = memo(function SourceSelector({ sourceSelection, on
             source={src}
             isActive={src.name === sourceSelection.active_source}
             engineering={engineering}
+            effectivePrice={sourceSelection.effective_electricity_price}
+            tariffPrice={sourceSelection.tariff_electricity}
           />
         ))}
       </div>
@@ -206,8 +208,24 @@ const SOURCE_ICONS: Record<string, React.ComponentType<{ size?: number; classNam
   oil_boiler: Flame,
 }
 
-function SourceCard({ source, isActive, engineering }: { source: SourceState; isActive: boolean; engineering: boolean }) {
+function SourceCard({ source, isActive, engineering, effectivePrice, tariffPrice }: {
+  source: SourceState
+  isActive: boolean
+  engineering: boolean
+  effectivePrice?: number
+  tariffPrice?: number
+}) {
   const Icon = SOURCE_ICONS[source.type] ?? Flame
+  // INSTRUCTION-391 — effective-price basis line (engineering only). Keyed on
+  // export_priced: an HP priced below tariff shows the solar-adjusted basis vs a
+  // muted tariff; otherwise the effective price is shown plainly (an Agile plunge
+  // below a fixed export rate is not "solar-adjusted"). Boiler shows its pump
+  // adder when non-zero. Undefined fields (older payloads) render nothing extra.
+  const showEffective =
+    engineering && source.type === 'heat_pump' &&
+    effectivePrice !== undefined && tariffPrice !== undefined
+  const parasitic = source.parasitic_per_kwh
+  const showParasitic = engineering && parasitic !== undefined && parasitic > 0
   return (
     <div
       className={cn(
@@ -234,6 +252,18 @@ function SourceCard({ source, isActive, engineering }: { source: SourceState; is
       <div className="text-right text-xs text-[var(--text-muted)] whitespace-nowrap">
         <div>{efficiencyLabel(source)} · £{source.fuel_cost_per_kwh.toFixed(3)}/kWh in</div>
         <div className="text-[var(--text)]">£{source.cost_per_kwh_thermal.toFixed(3)}/kWh heat</div>
+        {showEffective && (
+          source.export_priced ? (
+            <div>
+              £{effectivePrice!.toFixed(2)}/kWh{' '}
+              <span className="text-[var(--green)]">(solar-adjusted)</span>{' '}
+              <span className="text-[var(--text-muted)]">tariff £{tariffPrice!.toFixed(2)}</span>
+            </div>
+          ) : (
+            <div>£{effectivePrice!.toFixed(2)}/kWh effective</div>
+          )
+        )}
+        {showParasitic && <div>+£{parasitic!.toFixed(2)}/kWh pump</div>}
         {engineering && <div>score {source.score.toFixed(3)}</div>}
       </div>
     </div>
