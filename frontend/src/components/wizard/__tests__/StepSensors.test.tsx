@@ -4,7 +4,7 @@
  * so the operator always sees whether the capability fallback is in effect.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { StepSensors } from '../StepSensors'
 import { StepReview } from '../StepReview'
 import type { EntityCandidate } from '../../../types/config'
@@ -142,6 +142,144 @@ describe('StepReview — flow_rate summary row', () => {
     expect(screen.getByText(/Flow rate sensor/i)).toBeDefined()
     expect(screen.getByText(/Not configured \(capability fallback\)/i)).toBeDefined()
   })
+})
+
+/**
+ * INSTRUCTION-394 — Grid/Battery UI decoupling + single-writer MQTT topics.
+ * The grid meter is no longer a battery accessory: a standalone grid question
+ * on both drivers, battery "No" no longer clears grid, and the MQTT "No"
+ * handlers additionally clear pre-R1 legacy section-key residue.
+ */
+describe('StepSensors — grid decoupled from battery (INSTRUCTION-394)', () => {
+  const clickAnswer = (questionText: string, answer: 'Yes' | 'No') => {
+    const q = screen.getByText(questionText)
+    const row = q.parentElement as HTMLElement
+    fireEvent.click(within(row).getByText(answer))
+  }
+
+  const GRID_Q = 'Do you monitor grid import/export?'
+  const BATTERY_Q = 'Do you have a home battery?'
+
+  it('HA: grid question renders independent of battery answer', () => {
+    render(<StepSensors config={{ driver: 'ha' }} onUpdate={vi.fn()} />)
+    expect(screen.getByText(GRID_Q)).toBeInTheDocument()
+  })
+
+  it('MQTT: grid question renders independent of battery answer', () => {
+    const config = { driver: 'mqtt', mqtt: { broker: 'localhost', port: 1883, inputs: {} } }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByText(GRID_Q)).toBeInTheDocument()
+  })
+
+  it('MQTT: battery "Yes" is not required to reach the grid picker', () => {
+    // grid_power configured, no battery → grid picker visible, battery collapsed.
+    const config = {
+      driver: 'mqtt',
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { grid_power: { topic: 'grid/power', format: 'plain' } },
+      },
+    }
+    render(<StepSensors config={config} onUpdate={vi.fn()} />)
+    expect(screen.getByText('Grid Power')).toBeInTheDocument()
+    expect(screen.queryByText('Battery SoC')).toBeNull()
+  })
+
+  it('MQTT: "No" to battery preserves an existing grid_power topic', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt',
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: {
+          battery_soc: { topic: 'battery/soc', format: 'plain' },
+          grid_power: { topic: 'grid/power', format: 'plain' },
+        },
+      },
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+    clickAnswer(BATTERY_Q, 'No')
+    const mqttCalls = onUpdate.mock.calls.filter((c) => c[0] === 'mqtt')
+    expect(mqttCalls.length).toBeGreaterThan(0)
+    const last = mqttCalls[mqttCalls.length - 1][1] as { inputs?: Record<string, unknown> }
+    expect(last.inputs?.grid_power).toEqual({ topic: 'grid/power', format: 'plain' })
+    expect(last.inputs?.battery_soc).toBeUndefined()
+  })
+
+  it('MQTT: "No" to grid clears grid_power', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt',
+      mqtt: {
+        broker: 'localhost', port: 1883,
+        inputs: { grid_power: { topic: 'grid/power', format: 'plain' } },
+      },
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+    clickAnswer(GRID_Q, 'No')
+    const mqttCalls = onUpdate.mock.calls.filter((c) => c[0] === 'mqtt')
+    expect(mqttCalls.length).toBeGreaterThan(0)
+    const last = mqttCalls[mqttCalls.length - 1][1] as { inputs?: Record<string, unknown> }
+    expect(last.inputs?.grid_power).toBeUndefined()
+  })
+
+  it('HA: "No" to battery preserves the grid section', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'ha',
+      battery: { soc_entity: 'sensor.batt' },
+      grid: { power_entity: 'sensor.grid' },
+    }
+    render(<StepSensors config={config} onUpdate={onUpdate} />)
+    clickAnswer(BATTERY_Q, 'No')
+    // Only 'battery' is cleared; 'grid' is not touched by the battery toggle.
+    const gridClears = onUpdate.mock.calls.filter((c) => c[0] === 'grid' && c[1] === undefined)
+    expect(gridClears).toHaveLength(0)
+    const batteryClears = onUpdate.mock.calls.filter((c) => c[0] === 'battery' && c[1] === undefined)
+    expect(batteryClears.length).toBeGreaterThan(0)
+  })
+
+  // F-394-2 — MQTT "No" handlers clear the paired legacy section key alongside
+  // the canonical key, for all three of solar/battery/grid.
+  const legacyResidueCase = (
+    label: string,
+    section: 'solar' | 'battery' | 'grid',
+    legacyKey: string,
+    canonicalKey: string,
+    questionText: string,
+  ) => {
+    it(`MQTT: "No" to ${label} clears both canonical ${canonicalKey} and legacy ${section}.${legacyKey} (F-394-2)`, () => {
+      const onUpdate = vi.fn()
+      const config: Record<string, unknown> = {
+        driver: 'mqtt',
+        mqtt: {
+          broker: 'localhost', port: 1883,
+          inputs: { [canonicalKey]: { topic: 'x/y', format: 'plain' } },
+        },
+        [section]: { [legacyKey]: 'legacy/topic' },
+      }
+      render(<StepSensors config={config} onUpdate={onUpdate} />)
+      clickAnswer(questionText, 'No')
+
+      // Canonical key gone from the outgoing mqtt.inputs.
+      const mqttCalls = onUpdate.mock.calls.filter((c) => c[0] === 'mqtt')
+      expect(mqttCalls.length).toBeGreaterThan(0)
+      const lastMqtt = mqttCalls[mqttCalls.length - 1][1] as { inputs?: Record<string, unknown> }
+      expect(lastMqtt.inputs?.[canonicalKey]).toBeUndefined()
+
+      // Legacy section key gone (section was only the legacy key → section undefined).
+      const sectionClears = onUpdate.mock.calls.filter((c) => c[0] === section)
+      expect(sectionClears.length).toBeGreaterThan(0)
+      const lastSection = sectionClears[sectionClears.length - 1][1] as
+        | Record<string, unknown>
+        | undefined
+      expect(lastSection === undefined || !(legacyKey in lastSection)).toBe(true)
+    })
+  }
+
+  legacyResidueCase('solar', 'solar', 'production_topic', 'solar_production', 'Do you have solar panels?')
+  legacyResidueCase('battery', 'battery', 'soc_topic', 'battery_soc', BATTERY_Q)
+  legacyResidueCase('grid', 'grid', 'power_topic', 'grid_power', GRID_Q)
 })
 
 /**

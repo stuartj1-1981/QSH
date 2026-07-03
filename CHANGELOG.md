@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.5.21] — 2026-07-03
+
+### Added
+- Solar, battery and grid sensors are now supported over MQTT, with correct
+  import/export sign handling for grid power and energy.
+- Stored heat-pump efficiency (COP) is now honoured on MQTT installs, so the
+  configured efficiency is preserved end-to-end rather than being re-derived.
+
+### Changed
+- Grid and battery settings in the UI are now decoupled, giving clearer,
+  independent configuration of each.
+- Improved TRV valve-offset learning using a settle time derived from the
+  learned building thermal parameters, plus richer source-capability reporting.
+
 ## [1.5.20] — 2026-07-02
 
 ### Fixed

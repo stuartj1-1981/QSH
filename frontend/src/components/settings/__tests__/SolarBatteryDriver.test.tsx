@@ -1,9 +1,11 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('../../../hooks/useConfig', () => ({
   patchOrDelete: vi.fn().mockResolvedValue({}),
 }))
+
+import { patchOrDelete } from '../../../hooks/useConfig'
 
 vi.mock('../../../hooks/useEntityResolve', () => ({
   useEntityResolve: () => ({ resolved: {}, loading: false }),
@@ -110,6 +112,175 @@ describe('SolarBatterySettings driver branching', () => {
       expect(screen.getByText('Grid Power Topic')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('grid/import_w')).toBeInTheDocument()
       expect(screen.queryByText('Grid Power Entity')).toBeNull()
+    })
+  })
+})
+
+
+// ── INSTRUCTION-394 — Grid card decoupling + single-writer MQTT topics ──
+
+describe('SolarBatterySettings — grid decoupling + single-writer (INSTRUCTION-394)', () => {
+  const getCheckbox = (labelText: string): HTMLInputElement => {
+    const label = screen.getByText(labelText).closest('label') as HTMLLabelElement
+    return label.querySelector('input[type="checkbox"]') as HTMLInputElement
+  }
+
+  beforeEach(() => {
+    vi.mocked(patchOrDelete).mockClear().mockResolvedValue({})
+    mockUseSysid.mockReturnValue({ data: null, error: null })
+  })
+
+  it('HA: grid card visible + editable with battery unticked', () => {
+    render(
+      <SolarBatterySettings
+        grid={{ power_entity: 'sensor.grid_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    expect(screen.getByText('I have a grid import/export meter')).toBeInTheDocument()
+    expect(screen.getByText('Grid Power Entity')).toBeInTheDocument()
+    // Battery card collapsed (no soc config).
+    expect(screen.queryByText('Battery SoC Entity')).toBeNull()
+  })
+
+  it('MQTT: grid card visible + editable with battery unticked', () => {
+    render(
+      <SolarBatterySettings
+        mqtt={{ broker: 'x', port: 1883, inputs: { grid_power: { topic: 'grid/power' } } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />
+    )
+    expect(screen.getByText('Grid Power Topic')).toBeInTheDocument()
+    expect(screen.queryByText('Battery SoC Topic')).toBeNull()
+  })
+
+  it('F-394-1: hasGrid initialises true from a voltage-only section (HA)', () => {
+    render(
+      <SolarBatterySettings grid={{ nominal_voltage: 230 }} driver="ha" onRefetch={noop} />
+    )
+    expect(getCheckbox('I have a grid import/export meter').checked).toBe(true)
+    expect(screen.getByText('Grid Power Entity')).toBeInTheDocument()
+  })
+
+  it('F-394-1: hasGrid initialises true from { power_entity } (HA)', () => {
+    render(
+      <SolarBatterySettings
+        grid={{ power_entity: 'sensor.grid_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    expect(getCheckbox('I have a grid import/export meter').checked).toBe(true)
+  })
+
+  it('D-1(ii): MQTT hasGrid initialises true from canonical grid_power with NO grid section', () => {
+    render(
+      <SolarBatterySettings
+        mqtt={{ broker: 'x', port: 1883, inputs: { grid_power: { topic: 'grid/power' } } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />
+    )
+    expect(getCheckbox('I have a grid import/export meter').checked).toBe(true)
+    expect(screen.getByText('Grid Power Topic')).toBeInTheDocument()
+  })
+
+  it('save: hasGrid true + hasBattery false PATCHes grid, deletes battery', async () => {
+    render(
+      <SolarBatterySettings
+        grid={{ power_entity: 'sensor.grid_power' }}
+        driver="ha"
+        onRefetch={noop}
+      />
+    )
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => {
+      expect(vi.mocked(patchOrDelete)).toHaveBeenCalled()
+    })
+    const calls = vi.mocked(patchOrDelete).mock.calls
+    const gridCall = calls.find((c) => c[0] === 'grid')
+    const batteryCall = calls.find((c) => c[0] === 'battery')
+    expect(gridCall?.[1]).toBe(true)
+    expect(batteryCall?.[1]).toBe(false)
+  })
+
+  it('F-394-1: save with an untouched voltage-only grid section preserves it', async () => {
+    render(
+      <SolarBatterySettings grid={{ nominal_voltage: 230 }} driver="ha" onRefetch={noop} />
+    )
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(vi.mocked(patchOrDelete)).toHaveBeenCalled())
+    const gridCall = vi.mocked(patchOrDelete).mock.calls.find((c) => c[0] === 'grid')
+    expect(gridCall?.[1]).toBe(true)
+    expect((gridCall?.[2] as Record<string, unknown>).nominal_voltage).toBe(230)
+  })
+
+  describe('MQTT single-writer save', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+    beforeEach(() => {
+      fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    const bodyOf = (): { inputs?: Record<string, unknown> } => {
+      const mqttCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('config/mqtt'))
+      expect(mqttCall).toBeTruthy()
+      return JSON.parse((mqttCall![1] as RequestInit).body as string).data
+    }
+
+    it('D-1(i): editing MQTT grid topic PATCHes mqtt.inputs.grid_power, no grid.power_topic', async () => {
+      render(
+        <SolarBatterySettings
+          mqtt={{ broker: 'x', port: 1883, inputs: { grid_power: { topic: 'old/grid' } } }}
+          driver="mqtt"
+          onRefetch={noop}
+        />
+      )
+      const input = screen.getByPlaceholderText('grid/import_w') as HTMLInputElement
+      fireEvent.change(input, { target: { value: 'new/grid' } })
+      fireEvent.click(screen.getByText('Save Changes'))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      const data = bodyOf()
+      expect((data.inputs?.grid_power as { topic: string }).topic).toBe('new/grid')
+      // No code path writes grid.power_topic — all grid section PATCHes are stripped.
+      const gridSectionCalls = vi.mocked(patchOrDelete).mock.calls.filter((c) => c[0] === 'grid')
+      for (const c of gridSectionCalls) {
+        expect((c[2] as Record<string, unknown>)?.power_topic).toBeUndefined()
+      }
+    })
+
+    it('editing a dict-form canonical entry preserves format/json_path', async () => {
+      render(
+        <SolarBatterySettings
+          mqtt={{
+            broker: 'x', port: 1883,
+            inputs: { grid_power: { topic: 'old', format: 'json', json_path: '$.p' } },
+          }}
+          driver="mqtt"
+          onRefetch={noop}
+        />
+      )
+      const input = screen.getByPlaceholderText('grid/import_w') as HTMLInputElement
+      fireEvent.change(input, { target: { value: 'new' } })
+      fireEvent.click(screen.getByText('Save Changes'))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(bodyOf().inputs?.grid_power).toEqual({ topic: 'new', format: 'json', json_path: '$.p' })
+    })
+
+    it('D-1(ii): unticking hasGrid on MQTT deletes mqtt.inputs.grid_power', async () => {
+      render(
+        <SolarBatterySettings
+          mqtt={{ broker: 'x', port: 1883, inputs: { grid_power: { topic: 'x' } } }}
+          driver="mqtt"
+          onRefetch={noop}
+        />
+      )
+      fireEvent.click(getCheckbox('I have a grid import/export meter'))
+      fireEvent.click(screen.getByText('Save Changes'))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(bodyOf().inputs?.grid_power).toBeUndefined()
     })
   })
 })
