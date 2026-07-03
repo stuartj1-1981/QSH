@@ -7,16 +7,31 @@ import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { HelpTip } from '../HelpTip'
 import { SOLAR } from '../../lib/helpText'
-import type { SolarYaml, BatteryYaml, GridYaml, InverterYaml, Driver } from '../../types/config'
+import { apiUrl } from '../../lib/api'
+import type {
+  SolarYaml, BatteryYaml, GridYaml, InverterYaml, MqttConfig, MqttTopicInput, Driver,
+} from '../../types/config'
 
 // INSTRUCTION-227C — keep aligned with SOLAR_CAPACITY_MIN_OBS in qsh/sysid.py.
 const SOLAR_CAPACITY_MIN_OBS = 50
+
+// INSTRUCTION-394 — canonical mqtt.inputs entries are either a plain string
+// (topic) or a dict {topic, format, json_path?}. Extract the topic uniformly.
+// Typed to accept both runtime shapes: the type declares MqttTopicInput but
+// INSTRUCTION-393's shim writes plain strings, so a legacy-migrated install can
+// present a string here.
+function topicOf(v: MqttTopicInput | string | undefined): string {
+  return typeof v === 'string' ? v : v?.topic ?? ''
+}
+
+const sectionNonEmpty = (s?: object): boolean => !!s && Object.keys(s).length > 0
 
 interface SolarBatterySettingsProps {
   solar?: SolarYaml
   battery?: BatteryYaml
   grid?: GridYaml
   inverter?: InverterYaml
+  mqtt?: MqttConfig
   driver: Driver
   onRefetch: () => void
 }
@@ -26,18 +41,28 @@ export function SolarBatterySettings({
   battery: initialBattery,
   grid: initialGrid,
   inverter: initialInverter,
+  mqtt,
   driver,
   onRefetch,
 }: SolarBatterySettingsProps) {
   const [hasSolar, setHasSolar] = useState(
     driver === 'mqtt'
-      ? !!initialSolar?.production_topic || !!initialSolar?.production_entity
+      ? topicOf(mqtt?.inputs?.solar_production) !== '' || sectionNonEmpty(initialSolar)
       : !!initialSolar?.production_entity
   )
   const [hasBattery, setHasBattery] = useState(
     driver === 'mqtt'
-      ? !!initialBattery?.soc_topic || !!initialBattery?.soc_entity
+      ? topicOf(mqtt?.inputs?.battery_soc) !== '' || sectionNonEmpty(initialBattery)
       : !!initialBattery?.soc_entity
+  )
+  // INSTRUCTION-394 F-394-1 — content-based grid predicate. hasGrid is true iff
+  // there is any persisted grid configuration: on MQTT the canonical topic OR a
+  // grid section (voltage-only counts); on HA a grid section (power_entity or
+  // voltages). Decoupled from hasBattery entirely.
+  const [hasGrid, setHasGrid] = useState(
+    driver === 'mqtt'
+      ? topicOf(mqtt?.inputs?.grid_power) !== '' || sectionNonEmpty(initialGrid)
+      : sectionNonEmpty(initialGrid)
   )
 
   const [solar, setSolar] = useState<SolarYaml>(initialSolar || {})
@@ -45,22 +70,29 @@ export function SolarBatterySettings({
   const [grid, setGrid] = useState<GridYaml>(initialGrid || {})
   const [inverter, setInverter] = useState<InverterYaml>(initialInverter || {})
 
+  // INSTRUCTION-394 — MQTT topic fields are single-writer against the canonical
+  // mqtt.inputs.* map (OutdoorWeatherSettings.tsx:25-26/:53-60 pattern).
+  const [mqttSolarTopic, setMqttSolarTopic] = useState(topicOf(mqtt?.inputs?.solar_production))
+  const [mqttBatteryTopic, setMqttBatteryTopic] = useState(topicOf(mqtt?.inputs?.battery_soc))
+  const [mqttGridTopic, setMqttGridTopic] = useState(topicOf(mqtt?.inputs?.grid_power))
+
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setSolar(initialSolar || {})
   }, [initialSolar])
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setBattery(initialBattery || {})
   }, [initialBattery])
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setGrid(initialGrid || {})
   }, [initialGrid])
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setInverter(initialInverter || {})
   }, [initialInverter])
+  useEffect(() => {
+    setMqttSolarTopic(topicOf(mqtt?.inputs?.solar_production))
+    setMqttBatteryTopic(topicOf(mqtt?.inputs?.battery_soc))
+    setMqttGridTopic(topicOf(mqtt?.inputs?.grid_power))
+  }, [mqtt])
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,18 +113,68 @@ export function SolarBatterySettings({
   const { data: sysidData } = useSysid()
   const capacity = sysidData?.installation_solar_capacity_kw ?? null
 
+  // INSTRUCTION-394 — strip legacy MQTT topic keys from a section before save so
+  // no code path re-writes solar.production_topic / battery.soc_topic /
+  // grid.power_topic (D-1/R1 single writer). Sections keep non-topic config only.
+  const stripLegacyTopic = <T extends object>(section: T, key: string): T => {
+    const next = { ...section } as Record<string, unknown>
+    delete next[key]
+    return next as T
+  }
+
   const save = async () => {
     setSaving(true)
     setError(null)
 
-    // Save sections sequentially to avoid config race
+    const failures: string[] = []
+
+    // INSTRUCTION-394 — MQTT single-writer: PATCH the full mqtt object with only
+    // the relevant inputs keys mutated, spreading ...mqtt / ...mqtt.inputs to
+    // preserve broker credentials and unrelated inputs. restore_redacted handles
+    // the credential sentinel server-side (config.py:213-226).
+    if (driver === 'mqtt') {
+      try {
+        const buildEntry = (
+          existing: MqttTopicInput | string | undefined,
+          topic: string,
+          enabled: boolean
+        ): MqttTopicInput | string | undefined => {
+          if (!enabled || !topic) return undefined
+          // Editing an existing dict-form entry preserves format/json_path;
+          // creating a new entry writes a plain string (topic_map.py:706-708).
+          if (existing && typeof existing === 'object') return { ...existing, topic }
+          return topic
+        }
+        const newInputs: Record<string, MqttTopicInput | string> = {
+          ...(mqtt?.inputs as Record<string, MqttTopicInput | string> | undefined),
+        }
+        const apply = (key: string, entry: MqttTopicInput | string | undefined) => {
+          if (entry === undefined) delete newInputs[key]
+          else newInputs[key] = entry
+        }
+        apply('solar_production', buildEntry(mqtt?.inputs?.solar_production, mqttSolarTopic, hasSolar))
+        apply('battery_soc', buildEntry(mqtt?.inputs?.battery_soc, mqttBatteryTopic, hasBattery))
+        apply('grid_power', buildEntry(mqtt?.inputs?.grid_power, mqttGridTopic, hasGrid))
+        const updatedMqtt = { ...mqtt, inputs: newInputs }
+        const resp = await fetch(apiUrl('api/config/mqtt'), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: updatedMqtt }),
+        })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      } catch {
+        failures.push('mqtt')
+      }
+    }
+
+    // Section config (non-topic only). Grid persists/deletes on its own hasGrid
+    // checkbox — decoupled from hasBattery.
     const sections: Array<{ name: string; fn: () => Promise<unknown> }> = [
-      { name: 'solar', fn: () => patchOrDelete('solar', hasSolar, solar) },
-      { name: 'battery', fn: () => patchOrDelete('battery', hasBattery, battery) },
-      { name: 'grid', fn: () => patchOrDelete('grid', hasBattery, grid) },
+      { name: 'solar', fn: () => patchOrDelete('solar', hasSolar, stripLegacyTopic(solar, 'production_topic')) },
+      { name: 'battery', fn: () => patchOrDelete('battery', hasBattery, stripLegacyTopic(battery, 'soc_topic')) },
+      { name: 'grid', fn: () => patchOrDelete('grid', hasGrid, stripLegacyTopic(grid, 'power_topic')) },
       { name: 'inverter', fn: () => patchOrDelete('inverter', hasSolar, inverter) },
     ]
-    const failures: string[] = []
     for (const { name, fn } of sections) {
       try { await fn() } catch { failures.push(name) }
     }
@@ -180,8 +262,8 @@ export function SolarBatterySettings({
             ) : (
               <TopicField
                 label="Solar Production Topic"
-                value={solar.production_topic || ''}
-                onChange={(v) => setSolar(prev => ({ ...prev, production_topic: v || undefined }))}
+                value={mqttSolarTopic}
+                onChange={setMqttSolarTopic}
                 placeholder="solar/production_w"
                 helpText={SOLAR.solarEntity}
               />
@@ -235,8 +317,8 @@ export function SolarBatterySettings({
             ) : (
               <TopicField
                 label="Battery SoC Topic"
-                value={battery.soc_topic || ''}
-                onChange={(v) => setBattery(prev => ({ ...prev, soc_topic: v || undefined }))}
+                value={mqttBatteryTopic}
+                onChange={setMqttBatteryTopic}
                 placeholder="battery/soc_pct"
                 helpText={SOLAR.batteryEntity}
               />
@@ -305,9 +387,26 @@ export function SolarBatterySettings({
                 />
               </div>
             </div>
+          </div>
+        )}
+      </div>
 
-            {/* Grid */}
-            <h4 className="text-sm font-medium text-[var(--text)] mt-4">Grid</h4>
+      {/* Grid — INSTRUCTION-394: own card, own enable state, saved independently
+          of hasBattery. A meter-only or solar-no-battery install can wire the
+          grid sensor without claiming a battery. */}
+      <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-4">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={hasGrid}
+            onChange={(e) => setHasGrid(e.target.checked)}
+            className="accent-[var(--accent)]"
+          />
+          <span className="text-sm font-medium text-[var(--text)]">I have a grid import/export meter</span>
+        </label>
+
+        {hasGrid && (
+          <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
             {driver === 'ha' ? (
               <EntityField
                 label="Grid Power Entity"
@@ -317,13 +416,15 @@ export function SolarBatterySettings({
                 unit={resolved[grid.power_entity || '']?.unit}
                 onChange={(v) => setGrid(prev => ({ ...prev, power_entity: v || undefined }))}
                 placeholder="sensor.grid_power"
+                helpText="kW, negative = export"
               />
             ) : (
               <TopicField
                 label="Grid Power Topic"
-                value={grid.power_topic || ''}
-                onChange={(v) => setGrid(prev => ({ ...prev, power_topic: v || undefined }))}
+                value={mqttGridTopic}
+                onChange={setMqttGridTopic}
                 placeholder="grid/import_w"
+                helpText="kW, negative = export"
               />
             )}
             <div className="grid grid-cols-3 gap-4">

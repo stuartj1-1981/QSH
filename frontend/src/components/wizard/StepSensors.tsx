@@ -116,6 +116,11 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
   const [hasBattery, setHasBattery] = useState(
     !!(config.battery as BatteryYaml | undefined)?.soc_entity
   )
+  // INSTRUCTION-394 — grid is independent of battery. A meter-only install can
+  // wire the grid sensor without claiming a battery.
+  const [hasGrid, setHasGrid] = useState(
+    !!(config.grid as GridYaml | undefined)?.power_entity
+  )
 
   const updateSensor = (key: string, value: string) => {
     const newSensors = { ...sensors, [key]: value || undefined }
@@ -144,7 +149,14 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
   const toggleBattery = (enabled: boolean) => {
     setHasBattery(enabled)
     if (!enabled) {
+      // INSTRUCTION-394 — battery "No" no longer clears grid; grid is independent.
       onUpdate('battery', undefined)
+    }
+  }
+
+  const toggleGrid = (enabled: boolean) => {
+    setHasGrid(enabled)
+    if (!enabled) {
       onUpdate('grid', undefined)
     }
   }
@@ -364,10 +376,10 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
         </div>
       </div>
 
-      {/* Solar & Battery */}
+      {/* Solar, Battery & Grid */}
       <div className="space-y-4">
         <h3 className="text-sm font-medium text-[var(--text)]">
-          Solar & Battery (optional)
+          Solar, Battery & Grid (optional)
         </h3>
 
         {/* Solar toggle */}
@@ -448,16 +460,47 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
                 }
                 candidates={candidates.battery_soc || []}
               />
-              <EntityPicker
-                slot="grid_power"
-                label="Grid Power"
-                value={(config.grid as GridYaml | undefined)?.power_entity || ''}
-                onChange={(v) =>
-                  onUpdate('grid', { ...(config.grid as object || {}), power_entity: v || undefined })
-                }
-                candidates={candidates.grid_power || []}
-              />
             </div>
+          )}
+        </div>
+
+        {/* Grid toggle — INSTRUCTION-394: standalone, independent of battery. */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-[var(--text)]">Do you monitor grid import/export?</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => toggleGrid(true)}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  hasGrid
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg)] text-[var(--text-muted)] border border-[var(--border)]'
+                }`}
+              >
+                Yes
+              </button>
+              <button
+                onClick={() => toggleGrid(false)}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  !hasGrid
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg)] text-[var(--text-muted)] border border-[var(--border)]'
+                }`}
+              >
+                No
+              </button>
+            </div>
+          </div>
+          {hasGrid && (
+            <EntityPicker
+              slot="grid_power"
+              label="Grid Power"
+              value={(config.grid as GridYaml | undefined)?.power_entity || ''}
+              onChange={(v) =>
+                onUpdate('grid', { ...(config.grid as object || {}), power_entity: v || undefined })
+              }
+              candidates={candidates.grid_power || []}
+            />
           )}
         </div>
       </div>
@@ -486,6 +529,23 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
 
   const [hasSolar, setHasSolar] = useState(!!inputs.solar_production?.topic)
   const [hasBattery, setHasBattery] = useState(!!inputs.battery_soc?.topic)
+  // INSTRUCTION-394 — grid independent of battery, initialised from the canonical
+  // mqtt.inputs map.
+  const [hasGrid, setHasGrid] = useState(!!inputs.grid_power?.topic)
+
+  // INSTRUCTION-394 F-394-2 — clear a legacy section topic key alongside the
+  // canonical key on a "No" answer, so a pre-R1 YAML's residue cannot be
+  // re-migrated by INSTRUCTION-393's shim at next load (a disabled input can no
+  // longer silently re-enable). Post-R1 configs carry no legacy keys, so this is
+  // a defensive no-op on them.
+  const clearLegacySectionTopic = (section: 'solar' | 'battery' | 'grid', key: string) => {
+    const current = config[section] as Record<string, unknown> | undefined
+    if (current && key in current) {
+      const next = { ...current }
+      delete next[key]
+      onUpdate(section, Object.keys(next).length > 0 ? next : undefined)
+    }
+  }
 
   const updateInput = (key: string, topic: string, format?: string, jsonPath?: string) => {
     const newInputs = { ...inputs }
@@ -696,9 +756,9 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
         </div>
       </div>
 
-      {/* Solar & Battery */}
+      {/* Solar, Battery & Grid */}
       <div className="space-y-4">
-        <h3 className="text-sm font-medium text-[var(--text)]">Solar & Battery (optional)</h3>
+        <h3 className="text-sm font-medium text-[var(--text)]">Solar, Battery & Grid (optional)</h3>
 
         <div className="space-y-3">
           <div className="flex items-center gap-3">
@@ -715,7 +775,7 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 Yes
               </button>
               <button
-                onClick={() => { setHasSolar(false); updateInput('solar_production', '') }}
+                onClick={() => { setHasSolar(false); updateInput('solar_production', ''); clearLegacySectionTopic('solar', 'production_topic') }}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                   !hasSolar
                     ? 'bg-[var(--accent)] text-white'
@@ -753,7 +813,7 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 Yes
               </button>
               <button
-                onClick={() => { setHasBattery(false); updateInput('battery_soc', ''); updateInput('grid_power', '') }}
+                onClick={() => { setHasBattery(false); updateInput('battery_soc', ''); clearLegacySectionTopic('battery', 'soc_topic') }}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                   !hasBattery
                     ? 'bg-[var(--accent)] text-white'
@@ -774,15 +834,46 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 onChange={(topic, fmt, jp) => updateInput('battery_soc', topic, fmt, jp)}
                 scanResults={scanResults}
               />
-              <TopicPicker
-                label="Grid Power"
-                value={getInputTopic('grid_power')}
-                format={inputs.grid_power?.format}
-                jsonPath={inputs.grid_power?.json_path}
-                onChange={(topic, fmt, jp) => updateInput('grid_power', topic, fmt, jp)}
-                scanResults={scanResults}
-              />
             </div>
+          )}
+        </div>
+
+        {/* Grid question — INSTRUCTION-394: standalone, independent of battery. */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-[var(--text)]">Do you monitor grid import/export?</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setHasGrid(true)}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  hasGrid
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg)] text-[var(--text-muted)] border border-[var(--border)]'
+                }`}
+              >
+                Yes
+              </button>
+              <button
+                onClick={() => { setHasGrid(false); updateInput('grid_power', ''); clearLegacySectionTopic('grid', 'power_topic') }}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  !hasGrid
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg)] text-[var(--text-muted)] border border-[var(--border)]'
+                }`}
+              >
+                No
+              </button>
+            </div>
+          </div>
+          {hasGrid && (
+            <TopicPicker
+              label="Grid Power"
+              value={getInputTopic('grid_power')}
+              format={inputs.grid_power?.format}
+              jsonPath={inputs.grid_power?.json_path}
+              onChange={(topic, fmt, jp) => updateInput('grid_power', topic, fmt, jp)}
+              scanResults={scanResults}
+            />
           )}
         </div>
       </div>

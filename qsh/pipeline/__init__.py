@@ -328,12 +328,22 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
 
     # COP: already in InputBlock.hp_cop
     # Signature: get_cop(config, cop_history)
+    # COP (INSTRUCTION-395): live COP, where a topic exists, reaches
+    # ctx.live_cop via the CycleController live-first path — this fallback
+    # covers the no-topic case. It mirrors drivers/ha/cop_fetcher.py:26-29:
+    # track the ACTIVE source's stored efficiency, stamped into config each
+    # cycle by SourceSelection (source_selection.py:1133) and seeded at boot
+    # (config.py:2412). Never an UNCONDITIONAL constant — the constant-3.5
+    # stub was the root cause of the stuck-COP defect (3 Jul 2026, MQTT
+    # dual-source install, v1.5.20); 3.5 below survives only as the
+    # key-absent default, matching cop_fetcher.py:26.
     if resolved.get("get_reliable_cop_fn") is None:
 
-        def _noop_cop(*args, **kw):
-            return 3.5
+        def _config_baseline_cop(config, cop_history):
+            del cop_history  # signature parity with get_reliable_cop
+            return config.get("heat_source_efficiency", 3.5)
 
-        resolved["get_reliable_cop_fn"] = _noop_cop
+        resolved["get_reliable_cop_fn"] = _config_baseline_cop
 
     # INSTRUCTION-370 — non-HA drivers have no HA valve-entity reachability path.
     # Report every zone as reachable (never demote) and make the park a no-op:

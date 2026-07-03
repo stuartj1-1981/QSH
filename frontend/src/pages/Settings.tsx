@@ -150,6 +150,7 @@ export function Settings({ onRunWizard }: SettingsProps) {
             battery={data.battery}
             grid={data.grid}
             inverter={data.inverter}
+            mqtt={data.mqtt}
             driver={driver}
             onRefetch={refetch}
           />
