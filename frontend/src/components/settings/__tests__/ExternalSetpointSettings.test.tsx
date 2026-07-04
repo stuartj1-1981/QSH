@@ -28,12 +28,23 @@ let mockResolvedReturn = {
   loading: false,
 }
 
+let mockConfigReturn = {
+  data: { control: {} } as { control?: { pid_target_topic?: string; dfan_control_topic?: string } } | null,
+  loading: false,
+  error: null as string | null,
+  refetch: vi.fn(),
+}
+
 vi.mock('../../../hooks/useExternalSetpoints', () => ({
   useExternalSetpoints: () => mockHookReturn,
 }))
 
 vi.mock('../../../hooks/useEntityResolve', () => ({
   useEntityResolve: () => mockResolvedReturn,
+}))
+
+vi.mock('../../../hooks/useConfig', () => ({
+  useConfig: () => mockConfigReturn,
 }))
 
 describe('ExternalSetpointSettings', () => {
@@ -52,6 +63,12 @@ describe('ExternalSetpointSettings', () => {
     mockResolvedReturn = {
       resolved: {},
       loading: false,
+    }
+    mockConfigReturn = {
+      data: { control: {} },
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
     }
   })
 
@@ -187,5 +204,67 @@ describe('ExternalSetpointSettings', () => {
     expect(screen.queryByText(/outside safe range/)).toBeNull()
     // Should not show "Current:" for non-numeric state
     expect(screen.queryByText(/Current:/)).toBeNull()
+  })
+
+  // ── INSTRUCTION-400 — MQTT branch topic panel ──
+
+  it('MQTT: renders both configured topic strings and drops the dead-end copy', () => {
+    mockConfigReturn = {
+      ...mockConfigReturn,
+      data: {
+        control: {
+          pid_target_topic: 'qsh/setpoint/pid_target',
+          dfan_control_topic: 'qsh/setpoint/dfan',
+        },
+      },
+    }
+
+    render(<ExternalSetpointSettings driver="mqtt" onRefetch={mockRefetch} />)
+
+    expect(screen.getByText('MQTT setpoint input topics')).toBeInTheDocument()
+    expect(screen.getByText('qsh/setpoint/pid_target')).toBeInTheDocument()
+    expect(screen.getByText('qsh/setpoint/dfan')).toBeInTheDocument()
+    expect(screen.getAllByText(/QSH follows this topic live/).length).toBe(2)
+    // The misleading static paragraph is gone.
+    expect(screen.queryByText(/until they exist/)).toBeNull()
+  })
+
+  it('MQTT: no topics → two Not-configured rows pointing to Control', () => {
+    mockConfigReturn = { ...mockConfigReturn, data: { control: {} } }
+
+    render(<ExternalSetpointSettings driver="mqtt" onRefetch={mockRefetch} />)
+
+    const rows = screen.getAllByText(/Not configured — set it in Settings → Control/)
+    expect(rows.length).toBe(2)
+    expect(screen.getByText('PID Target Temperature')).toBeInTheDocument()
+    expect(screen.getByText('Active Control (DFAN)')).toBeInTheDocument()
+  })
+
+  it('MQTT: config loading → spinner, no crash', () => {
+    mockConfigReturn = { ...mockConfigReturn, data: null, loading: true }
+
+    const { container } = render(
+      <ExternalSetpointSettings driver="mqtt" onRefetch={mockRefetch} />
+    )
+
+    expect(container.querySelector('.animate-spin')).toBeInTheDocument()
+    expect(screen.queryByText('MQTT setpoint input topics')).toBeNull()
+  })
+
+  it('MQTT: config error → panel renders with not-configured rows and error notice', () => {
+    mockConfigReturn = {
+      ...mockConfigReturn,
+      data: null,
+      loading: false,
+      error: 'HTTP 500',
+    }
+
+    render(<ExternalSetpointSettings driver="mqtt" onRefetch={mockRefetch} />)
+
+    expect(screen.getByText('HTTP 500')).toBeInTheDocument()
+    expect(screen.getByText('MQTT setpoint input topics')).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/Not configured — set it in Settings → Control/).length
+    ).toBe(2)
   })
 })
