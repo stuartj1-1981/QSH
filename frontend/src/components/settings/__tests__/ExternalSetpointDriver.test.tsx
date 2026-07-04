@@ -27,18 +27,29 @@ vi.mock('../../../hooks/useEntityResolve', () => ({
   useEntityResolve: () => ({ resolved: {}, loading: false }),
 }))
 
+vi.mock('../../../hooks/useConfig', () => ({
+  useConfig: () => ({
+    data: { control: { pid_target_topic: 'qsh/setpoint/pid_target' } },
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}))
+
 import { ExternalSetpointSettings } from '../ExternalSetpointSettings'
 
 const noop = () => {}
 
 describe('ExternalSetpointSettings driver branching', () => {
-  it('MQTT driver: renders notice, no entity fields', () => {
+  it('MQTT driver: renders the topic panel, no entity fields (INSTRUCTION-400)', () => {
     render(<ExternalSetpointSettings driver="mqtt" onRefetch={noop} />)
 
     expect(screen.getByText('External Setpoints')).toBeInTheDocument()
-    expect(screen.getByText(/External setpoint entity binding is a Home Assistant driver feature/)).toBeInTheDocument()
-    expect(screen.getByText(/publish setpoint values directly/)).toBeInTheDocument()
-    // No entity fields
+    expect(screen.getByText('MQTT setpoint input topics')).toBeInTheDocument()
+    expect(screen.getByText('qsh/setpoint/pid_target')).toBeInTheDocument()
+    // The old dead-end copy is gone.
+    expect(screen.queryByText(/until they exist/)).toBeNull()
+    // No entity binding fields / Save button on the MQTT branch.
     expect(screen.queryByText(/Comfort Temperature/)).toBeNull()
     expect(screen.queryByText(/Flow Minimum/)).toBeNull()
     expect(screen.queryByText(/Save Changes/)).toBeNull()
@@ -55,9 +66,9 @@ describe('ExternalSetpointSettings driver branching', () => {
     expect(screen.getByText(/Overtemp Protection/)).toBeInTheDocument()
   })
 
-  it('HA driver: does not show MQTT notice', () => {
+  it('HA driver: does not show the MQTT topic panel', () => {
     render(<ExternalSetpointSettings driver="ha" onRefetch={noop} />)
 
-    expect(screen.queryByText(/External setpoint entity binding is a Home Assistant driver feature/)).toBeNull()
+    expect(screen.queryByText('MQTT setpoint input topics')).toBeNull()
   })
 })

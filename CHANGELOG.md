@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.5.22] — 2026-07-04
+
+### Fixed
+- On dual-source systems, a standby heat pump's efficiency is now taken from
+  your configured per-source efficiency rather than a generic estimate, so its
+  running-cost score is no longer flattered while another source is active.
+- A zero or negative fuel price on a combustion source (gas, LPG, oil) is now
+  treated as implausible: the system holds the last valid price instead of
+  switching to that source on a phantom "free heat" reading. Electricity sources
+  still honour genuine zero/negative pricing (e.g. Octopus Agile).
+- Boiler input-power readings on MQTT installs now briefly hold their last valid
+  value and fall back to rated output when a reading drops out, eliminating the
+  frequent "boiler input power absent" flapping and the short zero-energy /
+  zero-cost metering gaps it caused.
+
+### Changed
+- The External Setpoints settings page on MQTT installs now shows the configured
+  setpoint input topics and their status, with clearer copy, instead of a
+  placeholder that looked like it was waiting for a binding UI.
+
 ## [1.5.21] — 2026-07-03
 
 ### Added

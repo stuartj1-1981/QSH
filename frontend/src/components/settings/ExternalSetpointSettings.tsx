@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { Save, Loader2, AlertTriangle, CheckCircle } from 'lucide-react'
 import { useExternalSetpoints } from '../../hooks/useExternalSetpoints'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
+import { useConfig } from '../../hooks/useConfig'
 import { EntityField } from './EntityField'
-import { SETPOINT_RANGES, type Driver } from '../../types/config'
+import { SETPOINT_RANGES, type Driver, type ControlYaml } from '../../types/config'
 
 interface ExternalSetpointSettingsProps {
   driver: Driver
@@ -17,6 +18,9 @@ const ALL_KEYS = [...TEMP_KEYS, ...FLOW_KEYS, ...SEASONAL_KEYS]
 
 export function ExternalSetpointSettings({ driver, onRefetch }: ExternalSetpointSettingsProps) {
   const { data, loading, error, saving, save } = useExternalSetpoints()
+  // Unconditional (hooks rules); cheap, and the HA branch ignores it. Drives the
+  // MQTT topic panel (INSTRUCTION-400).
+  const { data: config, loading: configLoading, error: configError } = useConfig()
   const [success, setSuccess] = useState(false)
 
   // Local state for the 6 entity ID fields
@@ -72,15 +76,43 @@ export function ExternalSetpointSettings({ driver, onRefetch }: ExternalSetpoint
   }
 
   if (driver === 'mqtt') {
+    // INSTRUCTION-400 — read-only panel of the configured MQTT setpoint input
+    // topics. Replaces the static paragraph that (mis)implied a binding UI would
+    // materialise once topics existed; on MQTT there is nothing to bind here,
+    // ever — QSH follows the input topics directly (driver.py:1248).
+    if (configLoading) {
+      return (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 size={24} className="animate-spin text-[var(--text-muted)]" />
+        </div>
+      )
+    }
+
+    const control: ControlYaml | undefined = config?.control
+
     return (
       <div className="space-y-6">
         <h2 className="text-lg font-bold text-[var(--text)]">External Setpoints</h2>
-        <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-sm text-[var(--text-muted)]">
-          External setpoint entity binding is a Home Assistant driver feature. On MQTT driver,
-          publish setpoint values directly to the corresponding command topics configured in
-          Control and Heat Source settings. If you haven&apos;t configured those topics yet, do that
-          first — there is no setpoint binding to do here until they exist.
+
+        {configError && (
+          <div className="px-3 py-2 rounded border border-red-500/30 bg-red-500/5 text-red-600 text-xs">
+            {configError}
+          </div>
+        )}
+
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
+          <div className="px-4 py-3 border-b border-[var(--border)]">
+            <h3 className="text-sm font-medium text-[var(--text)]">MQTT setpoint input topics</h3>
+          </div>
+          <MqttTopicRow label="PID Target Temperature" topic={control?.pid_target_topic ?? ''} />
+          <MqttTopicRow label="Active Control (DFAN)" topic={control?.dfan_control_topic ?? ''} />
         </div>
+
+        <p className="text-xs text-[var(--text-muted)]">
+          Entity binding on this page is a Home Assistant driver feature. On MQTT, the five remaining
+          setpoints (flow min, flow max, antifrost OAT threshold, shoulder threshold, overtemp
+          protection) are plain configuration values on their settings pages — they have no input topics.
+        </p>
       </div>
     )
   }
@@ -165,6 +197,33 @@ export function ExternalSetpointSettings({ driver, onRefetch }: ExternalSetpoint
           />
         ))}
       </div>
+    </div>
+  )
+}
+
+interface MqttTopicRowProps {
+  label: string
+  topic: string
+}
+
+/** One row in the MQTT setpoint-topic panel (INSTRUCTION-400). Shows the topic
+ * string in monospace when configured, else a muted "Not configured" pointer. */
+function MqttTopicRow({ label, topic }: MqttTopicRowProps) {
+  return (
+    <div className="px-4 py-3 border-b border-[var(--border)] last:border-b-0">
+      <div className="text-sm text-[var(--text)]">{label}</div>
+      {topic ? (
+        <>
+          <div className="mt-1 font-mono text-xs text-[var(--text)] break-all">{topic}</div>
+          <div className="mt-1 text-xs text-[var(--text-muted)]">
+            QSH follows this topic live; publish a value to drive it. No binding step is needed.
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 text-xs text-[var(--text-muted)]">
+          Not configured — set it in Settings → Control
+        </div>
+      )}
     </div>
   )
 }
