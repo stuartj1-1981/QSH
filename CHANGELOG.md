@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.5.23] — 2026-07-05
+
+### Added
+- Measurement & Verification (M&V): QSH now continuously simulates what your
+  system's original weather-compensation setup would have used and tracks the
+  running energy, cost and comfort difference against what QSH actually
+  delivered, giving an auditable savings figure per install. Available via new
+  /api/mv and /api/mv/report endpoints (JSON or CSV), with an M&V plan template.
+- Flow-control decisions are now recorded every cycle — which control priority
+  won and what limited the flow — visible on the status API and in the
+  historian, for clearer diagnostics and support.
+
+### Changed
+- Custom MQTT control topics (setpoint and control-enable) are now read from
+  your actual configuration end-to-end, so writes and read-backs work correctly
+  on installs using non-default topic names.
+
+### Fixed
+- Slow-publishing per-source price feeds over MQTT no longer expire between
+  updates and fall back to a fixed default price — the cause of the system
+  oscillating between heat sources in the evenings. Stale prices now hold their
+  last valid value and are flagged.
+- Fixed repeating historian write failures that could drop room data points when
+  a room's target temperature landed on a whole number.
+
 ## [1.5.22] — 2026-07-04
 
 ### Fixed

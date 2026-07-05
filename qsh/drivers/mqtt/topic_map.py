@@ -52,6 +52,12 @@ BUILTIN_STALENESS_DEFAULTS: Dict[str, Dict[str, int]] = {
     "power":       {"fresh": 180,  "unavailable": 600},
     "energy":      {"fresh": 300,  "unavailable": 900},
     "outdoor":     {"fresh": 1800, "unavailable": 3600},
+    # Prices are slow-moving on-change data (LPG/gas unit rates change daily at
+    # most, often far less), not telemetry. `fresh` 24 h, `unavailable` 48 h.
+    # User-overridable per category via `mqtt.staleness_defaults.price` (the
+    # merge at _merge_staleness_defaults covers new built-ins with no further
+    # wiring).
+    "price":       {"fresh": 86400, "unavailable": 172800},
     "default":     {"fresh": 90,   "unavailable": 300},
 }
 
@@ -829,7 +835,7 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                 room=None,
                 payload_format=entry.get("format", "plain"),
                 json_path=entry.get("json_path"),
-                category="default",
+                category="price",
                 availability=_build_availability_spec(entry.get("availability"), prefix),
                 last_seen=_build_last_seen_spec(entry.get("last_seen")),
             ))

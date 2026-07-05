@@ -549,7 +549,12 @@ def set_pid_target_internal(body: PidTargetBody):
     except Exception as e:
         logger.warning("Failed to persist pid_target_internal: %s", e)
 
-    _mqtt_writeback("pid_target", str(body.value))
+    # INSTRUCTION-401 Task 3.3: key must be "comfort_temp" — the driver's
+    # pending-writeback lookup is a literal-string match on that key
+    # (driver.py:592), and comfort_temp resolves to the configured pid_target
+    # topic. The previous "pid_target" key was never looked up and published to
+    # a topic nothing reads (see the explanatory note at set_comfort_temp).
+    _mqtt_writeback("comfort_temp", str(body.value))
 
     return {"pid_target_internal": body.value}
 
@@ -583,6 +588,21 @@ def set_dfan_control_internal(body: DfanControlBody):
     return {"control_enabled": body.enabled}
 
 
+def _writeback_topic_suffix(config: dict, control_key: str) -> str:
+    """Resolve the write-back publish suffix through the SAME resolution the
+    MQTT driver uses for its subscriptions (topic_map.configured_control_topic),
+    so INSTRUCTION-268 round-trips survive operator-configured custom topics.
+    Fixed-suffix write-back controls (flow_min, flow_max — the complete set;
+    away/away_days/per-room are subscription-only, no write-back call sites
+    exist for them) keep control/{key}."""
+    from ...drivers.mqtt.topic_map import configured_control_topic
+    if control_key == "comfort_temp":
+        return configured_control_topic(config, "pid_target")
+    if control_key == "dfan_control":
+        return configured_control_topic(config, "dfan")
+    return f"control/{control_key}"
+
+
 def _mqtt_writeback(control_key: str, payload: str) -> None:
     """Publish a value to the MQTT control topic if MQTT driver is active.
 
@@ -592,6 +612,11 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
     INSTRUCTION-268: after a successful or attempted publish, records a
     PendingWriteback on shared_state so the MQTT driver's next read_inputs
     cycle can verify the round-trip.
+
+    INSTRUCTION-401: the publish topic is resolved through the same
+    configured_control_topic() the driver subscribes with, then prefixed with
+    driver `_prefixed` parity (bare suffix when the prefix is empty), so custom
+    control topics do not desync the write-and-readback round-trip.
     """
     config = shared_state.get_config()
     if config is None:
@@ -601,11 +626,12 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
     written_at = time.time()
     client_unavailable = False
     topic = None
+    suffix = _writeback_topic_suffix(config, control_key)
 
     if driver == "mqtt":
         # Direct MQTT driver — publish to control topic via shared client ref
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
-        topic = f"{prefix}/control/{control_key}" if prefix else f"qsh/control/{control_key}"
+        topic = f"{prefix}/{suffix}" if prefix else suffix
         try:
             client = shared_state.get_mqtt_client()
             if client:
@@ -625,7 +651,7 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
     elif driver == "ha" and config.get("control_method") == "mqtt":
         # HA driver with MQTT flow control — publish via HA MQTT service
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
-        topic = f"{prefix}/control/{control_key}" if prefix else f"qsh/control/{control_key}"
+        topic = f"{prefix}/{suffix}" if prefix else suffix
         try:
             from ...drivers.ha.integration import set_ha_service
             set_ha_service(

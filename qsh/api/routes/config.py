@@ -384,18 +384,12 @@ def get_raw_config():
     return _redact_config(raw)
 
 
-@router.patch("/config/{section}")
-def patch_config_section(section: str, body=Body(...)):
-    """Update a single config section.
-
-    All changes trigger a pipeline restart to adopt the new config.
-
-    INSTRUCTION-237A: body is declared via fastapi.Body so list-shaped PATCHes
-    (heat_sources) are accepted alongside dict-shaped ones. The
-    body.get("data", body) pattern below collapses both forms uniformly when
-    body is a dict; lists pass through directly.
-    """
-    valid_sections = {
+# INSTRUCTION-401 Task 2: PATCH-able top-level config sections, hoisted to a
+# module constant so the carry-through class-closure guard test can import and
+# assert every member is either carried into HOUSE_CONFIG or documented-as-
+# consumed. Zero behaviour change — same members, same rejection path.
+VALID_PATCH_SECTIONS: frozenset[str] = frozenset(
+    {
         "rooms",
         "property",
         "heat_source",
@@ -425,8 +419,21 @@ def patch_config_section(section: str, body=Body(...)):
         "mqtt",
         "root",
     }
+)
 
-    if section not in valid_sections:
+
+@router.patch("/config/{section}")
+def patch_config_section(section: str, body=Body(...)):
+    """Update a single config section.
+
+    All changes trigger a pipeline restart to adopt the new config.
+
+    INSTRUCTION-237A: body is declared via fastapi.Body so list-shaped PATCHes
+    (heat_sources) are accepted alongside dict-shaped ones. The
+    body.get("data", body) pattern below collapses both forms uniformly when
+    body is a dict; lists pass through directly.
+    """
+    if section not in VALID_PATCH_SECTIONS:
         raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
 
     # INSTRUCTION-237A Task 1b: heat_sources element-level guard. Element

@@ -45,6 +45,7 @@ from .hardware_controller import HardwareController
 from .shadow_controller import ShadowController
 from .cost_controller import CostController
 from .historian_controller import HistorianController
+from .mv_controller import MVController
 from .tariff_optimiser import TariffOptimiserController
 from .allostatic_load_controller import AllostaticLoadController
 from .composite_confidence_controller import CompositeConfidenceController
@@ -76,6 +77,7 @@ __all__ = [
     "ShadowController",
     "CostController",
     "HistorianController",
+    "MVController",
     "TariffOptimiserController",
     "AllostaticLoadController",
     "CompositeConfidenceController",
