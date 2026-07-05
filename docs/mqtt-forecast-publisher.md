@@ -9,7 +9,15 @@ relaying them as retained MQTT messages on the agreed topic.
 This document defines the wire format. Anything that produces a
 conformant retained-message payload on the configured topic will work.
 
-INSTRUCTION-220C — DFAN Forecast T-27 Retrofit.
+QSH is a cyclic engine - it is recommended to update all MQTT topics every 30s.
+
+```
+mqtt:
+  staleness_defaults:
+    default:
+      fresh: 90
+      unavailable: 300
+```
 
 ## QSH-side configuration
 
