@@ -251,6 +251,13 @@ class CycleSnapshot:
     # touching ManualEntry's frozen dataclass.
     manual_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    # INSTRUCTION-404 — flow-arbitration provenance for the applied cycle.
+    # Forwarded as-is from ctx.flow_arbitration (ArbiterResult.provenance_dict);
+    # keys: tier, clip_source, base_flow, flow, envelope_min/max,
+    # rl_contribution, recovery_contribution. Empty dict before FlowController
+    # runs. Additive, unconsumed by the frontend in this instruction.
+    flow_arbitration: Dict[str, Any] = field(default_factory=dict)
+
 
 def _resolve_operating_state(ctx) -> str:
     """Extract operating_state with clear priority and fallback.
@@ -482,6 +489,7 @@ class SharedState:
         self._sysid_ref = None      # Reference to SystemIdentifier (read-only)
         self._config_ref = None     # Reference to HOUSE_CONFIG dict (read-only)
         self._balancing_ref = None  # Reference to BalancingDetector (set after API start)
+        self._mv_ref = None  # Reference to MVAccumulator (INSTRUCTION-403, set after API start)
         self._swarm_ref = None      # SwarmRuntime (set after construction); None when swarm disabled
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
@@ -816,6 +824,9 @@ class SharedState:
             # defence-in-depth getattr for pre-261 SimpleNamespace test
             # fixtures.
             allostatic_load=dict(getattr(ctx, "allostatic_load_snapshot", {}) or {}),
+            # INSTRUCTION-404 — None-safe forward of the applied arbitration
+            # provenance (empty dict until FlowController writes ctx).
+            flow_arbitration=dict(getattr(ctx, "flow_arbitration", None) or {}),
         )
 
         # ── Recovery time & capacity % (Newton's law per-room solver) ──
@@ -1183,6 +1194,16 @@ class SharedState:
     def set_balancing(self, detector):
         with self._lock:
             self._balancing_ref = detector
+
+    def get_mv(self):
+        """MVAccumulator accessor for /api/mv routes (INSTRUCTION-403). None
+        until main.py wires the reference after API server start."""
+        with self._lock:
+            return self._mv_ref
+
+    def set_mv(self, accumulator):
+        with self._lock:
+            self._mv_ref = accumulator
 
     def get_swarm(self):
         """SwarmRuntime accessor for /api/swarm/* routes (INSTRUCTION-288B).

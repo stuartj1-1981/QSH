@@ -46,6 +46,7 @@ from .controllers import (
     ShadowController,
     CostController,
     HistorianController,
+    MVController,
     TariffOptimiserController,
     AllostaticLoadController,
     CompositeConfidenceController,
@@ -578,6 +579,10 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             registry=allostatic_registry,
             config=config,
         ),
+        # INSTRUCTION-402 — MVController runs immediately before HistorianController
+        # so ctx.mv_cycle (the per-cycle M&V carrier) is populated before the
+        # historian writes the qsh_system point (INSTRUCTION-403 consumer).
+        MVController(config=config),
         HistorianController(
             room_control_state=kw.get("room_control_state"),
         ),
