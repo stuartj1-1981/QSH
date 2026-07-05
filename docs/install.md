@@ -58,6 +58,16 @@ QSH runs continuously in the background. The web dashboard (accessible from the 
    - Map your control topics (flow temperature setpoint, HP mode)
    - Assign rooms and set comfort targets
 
+### Publishing contract
+
+QSH is a cyclic engine: every 30 s it samples a complete process image from the MQTT cache and runs one control pass. Your install owns that image — QSH reads whatever is in the cache each cycle and does not reconstruct missing values. Three rules follow:
+
+- **Publish retained.** Every topic QSH reads — sensors and control setpoints — should be published with `retain=true`, so QSH has the latest value on connect and after a broker or QSH restart.
+- **Refresh at ≤ 30 s.** Any value that feeds the control scan should be republished at least once per cycle. A control setpoint not seen on a given cycle falls back to its internal default until the next message arrives.
+- **Complete payloads, not deltas.** If you multiplex fields onto one topic (a JSON telemetry blob), every field QSH reads must be present in *every* message. Publishing sparse deltas — where a setpoint appears only when it changes — makes QSH read it as absent on the cycles it is missing, and the value flips between the published value and the internal default. Send the full object each publish, or give the setpoint its own retained topic.
+
+Freshness tolerances are set by `mqtt.staleness_defaults` (per-category `fresh` / `unavailable` seconds); the shipped defaults suit 30 s telemetry. Slow, on-change sources such as the weather forecast and unit prices are handled separately — see their own references.
+
 ### Node-RED Users
 
 If you use Node-RED, QSH connects to the same MQTT broker as your Node-RED instance. No special integration is needed — QSH subscribes to sensor topics and publishes control commands via MQTT. Your existing Node-RED flows continue to work alongside QSH.

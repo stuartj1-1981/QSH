@@ -9,15 +9,34 @@ relaying them as retained MQTT messages on the agreed topic.
 This document defines the wire format. Anything that produces a
 conformant retained-message payload on the configured topic will work.
 
-QSH is a cyclic engine - it is recommended to update all MQTT topics every 30s.
+## Update cadence and freshness
 
-```
+QSH is a cyclic engine: every 30 s it samples a complete process image
+from the MQTT cache and runs one control pass. Topics that feed the
+control scan — setpoints and live telemetry — should refresh at **≤ 30 s**,
+and their freshness is governed by the per-category `mqtt.staleness_defaults`.
+The `default` category is:
+
+```yaml
 mqtt:
   staleness_defaults:
     default:
-      fresh: 90
-      unavailable: 300
+      fresh: 90         # s — within this the value is current
+      unavailable: 300  # s — past this the value is treated as lost
 ```
+
+Between the two thresholds the value is stale but still used
+(last-known-good); past `unavailable` it is dropped. Categories other than
+`default` (temperature, outdoor, price, …) ship with much wider windows for
+sources that legitimately cannot report every 30 s.
+
+**Forecast is a deliberate exception to both rules.** It is slow-cadence,
+on-change data, not per-scan telemetry: publish it **retained** every
+15–30 min and QSH reads the last retained value from cache on each cycle.
+Forecast is *excluded* from `staleness_defaults` — routing a 20-minute topic
+through the 90/300 `default` category would flag a perfectly healthy forecast
+"unavailable" a few minutes after every publish. Forecast freshness is instead
+tracked by its own failure counter; see Failure handling, below.
 
 ## QSH-side configuration
 
