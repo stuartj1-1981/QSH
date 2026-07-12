@@ -333,7 +333,9 @@ class HADriver:
         current_rate = (
             pick_octopus_rate(tariff_rates, fallback=fallback_rate) if tariff_rates else fallback_rate
         )
-        export_rate = safe_float(config.get("export_rate", 0.15), 0.15)
+        # INSTRUCTION-410 — export default demoted 0.15→0.0 (no phantom credit;
+        # unconfigured export falls to the import tariff via the present-but-0 guard).
+        export_rate = safe_float(config.get("export_rate", 0.0), 0.0)
 
         # Flow limits from HA entities
         flow_min, flow_max = get_flow_temp_limits(config)

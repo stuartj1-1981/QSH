@@ -150,6 +150,14 @@ def _resolve_ha_defaults(kwargs):
 
         resolved["degradation_park_fn"] = park_degraded_zone
 
+    # INSTRUCTION-408 — API-channel health gate. The DegradationController freezes
+    # while the HA circuit breaker is open (channel loss ≠ device loss). Bound here
+    # (composition root) so the controller never imports from drivers.ha directly.
+    if resolved.get("degradation_channel_fn") is None:
+        from ..drivers.ha.integration import ha_api_available
+
+        resolved["degradation_channel_fn"] = ha_api_available
+
     # Valve functions: bind HA dispatch callables into the pure logic functions
     # so ValveController can call them with the original positional signature.
     if resolved.get("apply_dissipation_fn") is None:
@@ -364,6 +372,15 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
 
         resolved["degradation_park_fn"] = _noop_degradation_park
 
+    # INSTRUCTION-408 — non-HA drivers have no HA circuit breaker; the channel is
+    # always healthy so the freeze gate never fires (detection is already no-op'd).
+    if resolved.get("degradation_channel_fn") is None:
+
+        def _noop_degradation_channel():
+            return True
+
+        resolved["degradation_channel_fn"] = _noop_degradation_channel
+
     # Valve functions: OutputBlock captures setpoints, driver dispatches
     if resolved.get("apply_dissipation_fn") is None:
 
@@ -497,6 +514,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             room_control_state=kw.get("room_control_state"),
             check_valve_available_fn=kw.get("degradation_check_fn"),
             park_fn=kw.get("degradation_park_fn"),
+            channel_available_fn=kw.get("degradation_channel_fn"),
         ),
         boost,
         ThermalController(
@@ -505,6 +523,8 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         EnergyController(
             config=config,
             providers=kw.get("tariff_providers"),
+            # INSTRUCTION-410 — dedicated export provider (D6), None when absent.
+            export_provider=kw.get("export_provider"),
             fetch_ha_entity_fn=kw.get("fetch_ha_entity_fn"),
             parse_rates_fn=kw.get("parse_rates_fn"),
             current_rate_fn=kw.get("current_rate_fn"),

@@ -1521,6 +1521,10 @@ def test_octopus(req: OctopusTestRequest):
 class PersistOctopusTariffCodesRequest(BaseModel):
     electricity_tariff_code: Optional[str] = None
     gas_tariff_code: Optional[str] = None
+    # INSTRUCTION-410 — outgoing/export tariff code discovered by test-octopus,
+    # persisted to energy.electricity.octopus_export_tariff_code (electricity
+    # only). Read by create_export_provider to decode the live export rate.
+    electricity_export_tariff_code: Optional[str] = None
 
 
 @router.post("/persist-octopus-tariff-codes")
@@ -1563,6 +1567,8 @@ def persist_octopus_tariff_codes(req: PersistOctopusTariffCodesRequest):
     for label, code in (
         ("electricity_tariff_code", req.electricity_tariff_code),
         ("gas_tariff_code", req.gas_tariff_code),
+        # INSTRUCTION-410 — same non-empty / ≤64-char discipline for the export code.
+        ("electricity_export_tariff_code", req.electricity_export_tariff_code),
     ):
         if code is not None and (len(code) > 64 or not code.strip()):
             raise HTTPException(
@@ -1570,7 +1576,11 @@ def persist_octopus_tariff_codes(req: PersistOctopusTariffCodesRequest):
                 detail=f"{label} invalid (must be non-empty and ≤64 chars)",
             )
 
-    if req.electricity_tariff_code is None and req.gas_tariff_code is None:
+    if (
+        req.electricity_tariff_code is None
+        and req.gas_tariff_code is None
+        and req.electricity_export_tariff_code is None
+    ):
         return {
             "persisted": {"electricity": False, "gas": False},
             "restart_required": False,
@@ -1619,6 +1629,19 @@ def persist_octopus_tariff_codes(req: PersistOctopusTariffCodesRequest):
                 continue
             block["octopus_tariff_code"] = code
             persisted[fuel] = True
+        # INSTRUCTION-410 — export tariff code (electricity only), written
+        # independently of the import code so an export-only persist still lands.
+        # Same non-Octopus provider gate; fail-closed when provider is absent.
+        if req.electricity_export_tariff_code is not None:
+            elec_block = energy.get("electricity")
+            if isinstance(elec_block, dict) and elec_block.get("provider") == "octopus":
+                elec_block["octopus_export_tariff_code"] = req.electricity_export_tariff_code
+                persisted["electricity"] = True
+            else:
+                logger.debug(
+                    "persist-octopus-tariff-codes: energy.electricity block "
+                    "missing/non-Octopus — skipping export code persist"
+                )
         return raw
 
     read_modify_write(_apply)

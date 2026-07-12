@@ -7,8 +7,11 @@ module — never in pipeline controllers, HTTP route handlers, or `utils`-style
 modules.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import List, Literal, Protocol, Tuple, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 # V3 M8: Hard upper bound on every upstream HTTP call made by any provider.
 # Provenance: INSTRUCTION-116 set REQUEST_TIMEOUT_SECONDS = 5 for HP control
@@ -183,6 +186,22 @@ GAS_FIXED_RATE_REQUIRED_MSG = (
 )
 
 
+# INSTRUCTION-411 R8: the new-shape credential keys required, per fuel, for a
+# block to resolve to the Octopus provider. Single source of truth shared by
+# `_normalise_legacy_config` (below — its legacy synthesis gate derives from
+# this), by the migration's D7 resolution-preserving declaration, and by
+# `_legacy_still_consumed` in qsh/api/routes/config.py. The cross-module
+# lockstep test asserts the config.py forward map agrees with this constant.
+#
+# These mirror `_normalise_legacy_config`'s legacy synthesis gates exactly:
+#   electricity legacy `api_key ∧ account_number`  → octopus_api_key ∧ octopus_account_number
+#   gas         legacy `api_key ∧ gas_tariff_code` → octopus_api_key ∧ octopus_tariff_code
+OCTOPUS_REQUIRED_CREDENTIALS: dict[Fuel, tuple[str, ...]] = {
+    "electricity": ("octopus_api_key", "octopus_account_number"),
+    "gas": ("octopus_api_key", "octopus_tariff_code"),
+}
+
+
 def _fixed_rate_missing(value) -> bool:
     """True when a fixed_rate is absent or unusable: None, or an empty/blank
     string. The single definition of 'missing fixed_rate' shared by the
@@ -229,6 +248,24 @@ def fuel_for_source(source_type: str) -> Fuel:
 from qsh.tariff.fixed import FixedRateProvider  # noqa: E402
 from qsh.tariff.fallback import FallbackProvider  # noqa: E402
 
+# INSTRUCTION-411 D5/D6: a built Octopus provider that will silently degrade to
+# its fallback rate (api_key present but tariff_code missing — the REST refresh
+# gate is unsatisfiable) is a LATCHED in-fault condition, annunciated once and
+# aggregated from create_tariff_providers. The EventSpec is registered at module
+# scope so it is import-guaranteed before any factory call; re-registration of
+# the identical spec is idempotent (a suite that drops the annunciator singleton
+# via reset_for_testing() is defended by the re-register in the raise site).
+from qsh.events import EventKind, EventSpec, get_annunciator  # noqa: E402
+
+_OCTOPUS_CREDS_INCOMPLETE_SPEC = EventSpec(
+    name="TARIFF.octopus_credentials_incomplete",
+    kind=EventKind.LATCHED,
+    payload_fields=(),
+    latch_key=(),
+    default_level=logging.WARNING,
+)
+get_annunciator().register(_OCTOPUS_CREDS_INCOMPLETE_SPEC)
+
 
 def _normalise_legacy_config(energy_config: dict, fuel: Fuel) -> dict | None:
     """V2 L3 read-side compatibility.
@@ -247,13 +284,18 @@ def _normalise_legacy_config(energy_config: dict, fuel: Fuel) -> dict | None:
         legacy_octopus = energy_config.get("octopus", {})
         api_key = legacy_octopus.get("api_key")
         account_number = legacy_octopus.get("account_number")
-        if api_key and account_number:
-            return {
-                "provider": "octopus",
-                "octopus_api_key": api_key,
-                "octopus_account_number": account_number,
-                "octopus_tariff_code": legacy_octopus.get("electricity_tariff_code"),
-            }
+        # INSTRUCTION-411 R8: gate derives from OCTOPUS_REQUIRED_CREDENTIALS so
+        # the synthesis rule, the migration's D7 declaration, and the strip's
+        # consumer gate cannot drift. Behaviour is identical to the prior
+        # `if api_key and account_number:` check.
+        candidate = {
+            "provider": "octopus",
+            "octopus_api_key": api_key,
+            "octopus_account_number": account_number,
+            "octopus_tariff_code": legacy_octopus.get("electricity_tariff_code"),
+        }
+        if all(candidate.get(k) for k in OCTOPUS_REQUIRED_CREDENTIALS["electricity"]):
+            return candidate
         # 158B V2 (Finding 6): partial-credentials warn-and-route. A user
         # with only api_key OR only account_number cannot construct the
         # OctopusElectricityProvider. Silent reroute to ha_entity is a
@@ -291,13 +333,17 @@ def _normalise_legacy_config(energy_config: dict, fuel: Fuel) -> dict | None:
     if fuel == "gas":
         legacy_octopus = energy_config.get("octopus", {})
         legacy_tariff = energy_config.get("tariff", {})
-        if legacy_octopus.get("api_key") and legacy_octopus.get("gas_tariff_code"):
-            return {
-                "provider": "octopus",
-                "octopus_api_key": legacy_octopus["api_key"],
-                "octopus_account_number": legacy_octopus.get("account_number"),
-                "octopus_tariff_code": legacy_octopus["gas_tariff_code"],
-            }
+        # INSTRUCTION-411 R8: gate derives from OCTOPUS_REQUIRED_CREDENTIALS
+        # (octopus_api_key ∧ octopus_tariff_code). Behaviour is identical to the
+        # prior `if api_key and gas_tariff_code:` check.
+        candidate = {
+            "provider": "octopus",
+            "octopus_api_key": legacy_octopus.get("api_key"),
+            "octopus_account_number": legacy_octopus.get("account_number"),
+            "octopus_tariff_code": legacy_octopus.get("gas_tariff_code"),
+        }
+        if all(candidate.get(k) for k in OCTOPUS_REQUIRED_CREDENTIALS["gas"]):
+            return candidate
         if "gas_price" in legacy_tariff:
             return {"provider": "fixed", "fixed_rate": legacy_tariff["gas_price"]}
 
@@ -326,7 +372,109 @@ def create_tariff_providers(
     at least a `type` key.
     """
     fuels_in_use: set[Fuel] = {fuel_for_source(hs["type"]) for hs in heat_sources}
-    return {fuel: _build_provider(fuel, energy_config) for fuel in fuels_in_use}
+    providers = {fuel: _build_provider(fuel, energy_config) for fuel in fuels_in_use}
+    _annunciate_degraded_octopus_credentials(providers)
+    return providers
+
+
+def _annunciate_degraded_octopus_credentials(
+    providers: dict[Fuel, TariffProvider],
+) -> None:
+    """INSTRUCTION-411 D5/D6: raise a single aggregated LATCHED alarm naming
+    every fuel whose built Octopus provider will silently degrade to its
+    fallback rate (`credentials_degraded()` — api_key set, tariff_code missing).
+
+    Provider-sourced (M1/M2/R2): reads each built provider's own credential view,
+    so a declared block that resolves its credentials from the legacy
+    energy.octopus.* section (OctopusGasProvider merges legacy) does NOT
+    false-fire. The falling edge (all providers healthy) clears the latch.
+
+    Defensively re-registers the spec — a full-suite run may have dropped the
+    annunciator singleton via reset_for_testing(); register() is idempotent."""
+    ann = get_annunciator()
+    ann.register(_OCTOPUS_CREDS_INCOMPLETE_SPEC)
+    degraded = sorted(
+        fuel
+        for fuel, provider in providers.items()
+        if callable(getattr(provider, "credentials_degraded", None))
+        and provider.credentials_degraded()
+    )
+    if degraded:
+        logger.warning(
+            "Octopus credentials incomplete for fuel(s) %s — api_key set but "
+            "tariff_code missing; the provider will use the fallback rate until "
+            "the tariff code is set (run wizard Test Connection).",
+            ", ".join(degraded),
+        )
+        ann.entered("TARIFF.octopus_credentials_incomplete")
+    else:
+        ann.exited("TARIFF.octopus_credentials_incomplete")
+
+
+def create_export_provider(
+    energy_config: dict,
+    config_entities: dict | None = None,
+) -> "TariffProvider | None":
+    """INSTRUCTION-410 — construct a DEDICATED export/outgoing electricity
+    provider, reusing OctopusElectricityProvider unchanged (D1). Returns None
+    when no export tariff code AND no export rate entity is configured.
+
+    The export provider is NOT registered in the `create_tariff_providers`
+    Fuel-keyed dict (D6): that dict is iterated whole by the per-fuel status
+    snapshot and must stay `Fuel`-typed. It is passed to EnergyController as a
+    dedicated `export_provider` and read explicitly to author ctx.export_rate.
+
+    Construction mirrors import: the shared Octopus credentials come from the
+    electricity section (new-shape, legacy `energy.octopus` fallback), the
+    tariff code from the wizard-persisted `energy.electricity.
+    octopus_export_tariff_code`, the HA rate entity from the RESOLVED entity_id
+    value `config_entities["current_day_export_rates"]` (M2 — the value, not the
+    map key), and the cold-start fallback from the operator-set static export
+    rate (`energy.fixed_rates.export_rate` | `energy.fallback_rates.export`).
+    """
+    config_entities = config_entities or {}
+    elec = energy_config.get("electricity")
+    if not isinstance(elec, dict):
+        elec = {}
+
+    # INSTRUCTION-410 N4 — read ONLY the new-shape persisted key. There is no
+    # legacy `energy.octopus.export_tariff_code` writer anywhere (grep-empty), so
+    # a legacy read-fallback would be a dead branch that misleads future readers.
+    export_code = elec.get("octopus_export_tariff_code")
+    export_entity = config_entities.get("current_day_export_rates")
+    if not export_code and not export_entity:
+        return None
+
+    legacy = energy_config.get("octopus")
+    legacy = legacy if isinstance(legacy, dict) else {}
+    api_key = elec.get("octopus_api_key") or legacy.get("api_key")
+    account_number = elec.get("octopus_account_number") or legacy.get("account_number")
+
+    fixed_rates = energy_config.get("fixed_rates") or {}
+    fallback_rates = energy_config.get("fallback_rates") or {}
+    static_export = fixed_rates.get("export_rate")
+    if static_export is None:
+        static_export = fallback_rates.get("export", 0.0)
+    try:
+        static_export = float(static_export)
+    except (TypeError, ValueError):
+        static_export = 0.0
+
+    # The provider reads its config from the "electricity" key of the dict it is
+    # given (OctopusElectricityProvider._read_section); feeding it an
+    # export-directed section yields an export instance with zero class edit.
+    export_section = {
+        "electricity": {
+            "provider": "octopus",
+            "octopus_api_key": api_key,
+            "octopus_account_number": account_number,
+            "octopus_tariff_code": export_code,
+            "ha_rate_entity": export_entity,
+            "fallback_rate": static_export,
+        }
+    }
+    from qsh.tariff.octopus_electricity import OctopusElectricityProvider
+    return OctopusElectricityProvider(export_section)
 
 
 def _build_provider(fuel: Fuel, energy_config: dict) -> TariffProvider:
@@ -424,9 +572,11 @@ __all__ = [
     "VALID_ELECTRICITY_PROVIDERS",
     "ELECTRICITY_FIXED_RATE_REQUIRED_MSG",
     "GAS_FIXED_RATE_REQUIRED_MSG",
+    "OCTOPUS_REQUIRED_CREDENTIALS",
     "validate_energy_fixed_rate",
     "fuel_for_source",
     "create_tariff_providers",
+    "create_export_provider",
     "FixedRateProvider",
     "FallbackProvider",
 ]

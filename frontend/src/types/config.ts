@@ -282,6 +282,9 @@ export interface ElectricityTariffConfig {
   octopus_api_key?: string
   octopus_account_number?: string
   octopus_tariff_code?: string
+  // INSTRUCTION-410 — outgoing/export tariff code; decoded live by the
+  // dedicated export provider. Persisted to energy.electricity via wizard deploy.
+  octopus_export_tariff_code?: string
   edf_region?: string     // A-P
   fixed_rate?: number
   rates_entity?: string        // 158C: HA-brokered rates path (current day)

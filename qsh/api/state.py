@@ -736,7 +736,13 @@ class SharedState:
             flow_rate=ctx.inputs.flow_rate if ctx.inputs else 0.0,
             rooms=rooms,
             current_rate=ctx.current_rate if hasattr(ctx, 'current_rate') else 0.0,
-            export_rate=ctx.inputs.export_rate if ctx.inputs else 0.0,
+            # INSTRUCTION-410 — prefer the live export rate (ctx.export_rate),
+            # else the operator-static ctx.inputs.export_rate, else 0.0. Direct
+            # field read (L2 — export_rate is a CycleContext field with a 0.0
+            # default; matches source_selection.py's idiom).
+            export_rate=ctx.export_rate if ctx.export_rate > 0 else (
+                ctx.inputs.export_rate if ctx.inputs else 0.0
+            ),
             cost_today_pence=shadow.get('input_number.qsh_hp_cost_today_p', 0.0),
             cost_yesterday_pence=shadow.get('input_number.qsh_hp_cost_yesterday', 0.0),
             energy_today_kwh=shadow.get('input_number.qsh_hp_energy_today', 0.0),

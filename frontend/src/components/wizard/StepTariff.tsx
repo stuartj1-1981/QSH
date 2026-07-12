@@ -219,6 +219,10 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
       // one round-trip when present; we write each one only if discovered.
       const elecPatch: Partial<ElectricityTariffConfig> = {}
       if (data.tariff_code) elecPatch.octopus_tariff_code = data.tariff_code
+      // INSTRUCTION-410 — auto-persist the discovered outgoing/export tariff code
+      // into form state so the wizard deploy writes energy.electricity.
+      // octopus_export_tariff_code, enabling the live export-rate decode.
+      if (data.export_tariff) elecPatch.octopus_export_tariff_code = data.export_tariff
       const gasPatch: Partial<GasTariffConfig> = {}
       if (data.gas_tariff_code) gasPatch.octopus_tariff_code = data.gas_tariff_code
 

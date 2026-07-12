@@ -2,6 +2,7 @@ import requests
 import logging
 import json
 import os
+import enum
 import time as _time
 
 HA_URL = "http://supervisor/core"
@@ -10,6 +11,17 @@ REQUEST_TIMEOUT = 2  # seconds for entity fetches
 SERVICE_TIMEOUT = 10  # seconds for service calls (heat pump API is slow)
 
 headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"} if TOKEN else None
+
+
+class WriteOutcome(enum.Enum):
+    """INSTRUCTION-408 — outcome contract for set_ha_service. The transport
+    reports what actually happened so callers can log outcome, not intent.
+    Membership truthiness is deliberately NOT overloaded — compare with
+    `is WriteOutcome.SENT`, never `if result:` (every member is truthy)."""
+    SENT = "sent"                             # POST accepted (< 400)
+    SUPPRESSED_BREAKER_OPEN = "suppressed"    # never attempted — breaker open
+    FAILED = "failed"                         # attempted; HTTP >= 400 or transport error
+    NO_TOKEN = "no_token"                     # no SUPERVISOR_TOKEN — never attempted
 
 
 class _CircuitBreaker:
@@ -21,17 +33,49 @@ class _CircuitBreaker:
     def __init__(self):
         self._consecutive_failures = 0
         self._cooldown_until = 0.0
+        self._suppressed_writes = 0
 
     def is_open(self) -> bool:
         """True if breaker is tripped and still in cooldown."""
         if self._consecutive_failures < self.MAX_FAILURES:
             return False
         if _time.time() >= self._cooldown_until:
-            # Cooldown expired — half-open, allow one attempt
+            # Cooldown expired — half-open, allow one attempt. This is the SINGLE
+            # close path for a tripped breaker: while tripped, no call reaches
+            # record_success (all read/write gates return before the HTTP
+            # attempt), so "connection restored" cannot fire first.
             self._consecutive_failures = 0
             logging.info("HA circuit breaker: cooldown expired, retrying")
+            if self._suppressed_writes:
+                logging.warning(
+                    f"HA circuit breaker: {self._suppressed_writes} write(s) were suppressed while open"
+                )
+                self._suppressed_writes = 0
             return False
         return True
+
+    def is_tripped(self) -> bool:
+        """Pure query — True while tripped AND in cooldown. No side effects:
+        does NOT consume the half-open transition (that belongs to is_open(),
+        called only by the fetch/write gates)."""
+        return (
+            self._consecutive_failures >= self.MAX_FAILURES
+            and _time.time() < self._cooldown_until
+        )
+
+    def note_suppressed_write(self, domain, service, entity):
+        """INSTRUCTION-408 — count writes dropped while open. First drop per
+        open window logs WARNING (operator-visible edge); the rest log DEBUG
+        (a 15-min window can drop hundreds — see the 2026-07-09 rates-retry
+        spam for what per-drop WARNING does to the log)."""
+        self._suppressed_writes += 1
+        if self._suppressed_writes == 1:
+            logging.warning(
+                "HA circuit breaker open — suppressing writes. First dropped: "
+                f"{domain}.{service} entity={entity}. Further drops at DEBUG until cooldown expires."
+            )
+        else:
+            logging.debug(f"HA write suppressed (breaker open): {domain}.{service} entity={entity}")
 
     def record_success(self):
         if self._consecutive_failures > 0:
@@ -42,6 +86,8 @@ class _CircuitBreaker:
         self._consecutive_failures += 1
         if self._consecutive_failures >= self.MAX_FAILURES:
             self._cooldown_until = _time.time() + self.COOLDOWN_S
+            # A new open window starts counting suppressed writes fresh.
+            self._suppressed_writes = 0
             logging.warning(
                 f"HA circuit breaker: {self.MAX_FAILURES} consecutive failures — "
                 f"pausing API calls for {self.COOLDOWN_S // 60} minutes"
@@ -49,6 +95,28 @@ class _CircuitBreaker:
 
 
 _breaker = _CircuitBreaker()
+
+
+def ha_api_available() -> bool:
+    """INSTRUCTION-408 — API-channel health for supervisory consumers
+    (DegradationController gate). Pure; safe to call every cycle."""
+    return not _breaker.is_tripped()
+
+
+def _entity_label(data) -> str:
+    """Render an HA service-call entity_id readably for a log line. HA accepts
+    list-form entity_id (multi-TRV fan-out); render "{first} (+{n-1} more)" for
+    a non-empty list, the scalar value otherwise, "?" when absent."""
+    entity = data.get("entity_id")
+    if isinstance(entity, (list, tuple)):
+        if not entity:
+            return "?"
+        if len(entity) == 1:
+            return str(entity[0])
+        return f"{entity[0]} (+{len(entity) - 1} more)"
+    if entity is None:
+        return "?"
+    return str(entity)
 
 
 def fetch_ha_entity(entity_id, attr=None, default=None, suppress_log=False):
@@ -157,12 +225,13 @@ def fetch_ha_entity_full(entity_id, default=None, suppress_log=False):
         return None
 
 
-def set_ha_service(domain, service, data):
+def set_ha_service(domain, service, data) -> WriteOutcome:
     if not headers:
         logging.warning("No SUPERVISOR_TOKEN found - set_ha_service skipped.")
-        return
+        return WriteOutcome.NO_TOKEN
     if _breaker.is_open():
-        return
+        _breaker.note_suppressed_write(domain, service, _entity_label(data))
+        return WriteOutcome.SUPPRESSED_BREAKER_OPEN
     try:
         response = requests.post(
             f"{HA_URL}/api/services/{domain}/{service}",
@@ -182,13 +251,15 @@ def set_ha_service(domain, service, data):
                 f"HA rejected {domain}.{service}: {response.status_code} entity={entity} value={value!r} body={body}"
             )
             _breaker.record_failure()
-            return
+            return WriteOutcome.FAILED
         _breaker.record_success()
         logging.debug(f"Service {domain}.{service} called successfully.")
+        return WriteOutcome.SENT
     except requests.exceptions.RequestException as e:
         _breaker.record_failure()
         entity = data.get("entity_id", "?")
         value = data.get("value", data.get("option", "?"))
         logging.error(f"HA service error {domain}.{service}: entity={entity} value={value!r} err={e}")
+        return WriteOutcome.FAILED
 
 
