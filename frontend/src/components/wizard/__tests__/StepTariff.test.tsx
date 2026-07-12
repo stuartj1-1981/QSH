@@ -199,6 +199,29 @@ describe('StepTariff — Octopus test connection', () => {
       expect(data.electricity?.octopus_tariff_code).toBe('E-1R-AGILE')
     })
   })
+
+  it('persists discovered export_tariff as octopus_export_tariff_code (INSTRUCTION-410)', async () => {
+    mockFetch({
+      success: true,
+      message: 'Connected',
+      tariff_code: 'E-1R-AGILE',
+      export_tariff: 'E-1R-OUTGOING-VAR-24-10-26-B',
+      gas_tariff_code: null,
+      additional_import_tariffs: [],
+    })
+    const onUpdate = vi.fn()
+    render(<StepTariff config={LEGACY_OCTOPUS_CONFIG} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/Test Connection/i))
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalled()
+      const lastCall = onUpdate.mock.calls[onUpdate.mock.calls.length - 1]
+      const data = lastCall[1] as {
+        electricity?: { octopus_tariff_code?: string; octopus_export_tariff_code?: string }
+      }
+      expect(data.electricity?.octopus_tariff_code).toBe('E-1R-AGILE')
+      expect(data.electricity?.octopus_export_tariff_code).toBe('E-1R-OUTGOING-VAR-24-10-26-B')
+    })
+  })
 })
 
 describe('StepTariff — legacy 90E direction handling (regression)', () => {

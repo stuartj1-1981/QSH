@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [1.5.24] — 2026-07-12
+
+### Added
+- Octopus export (outgoing) tariff support: QSH now reads and decodes your
+  Octopus outgoing/export unit rates the same way it already handles import
+  rates, over both Home Assistant and MQTT. If the Octopus API credentials are
+  missing or rejected, an alarm is raised so the problem is visible rather than
+  silent.
+
+### Changed
+- Faster thermal learning: the system now identifies heat-loss (U) and
+  solar-gain characteristics during active heating periods as well as passive
+  cooling, so the learned building model converges more quickly.
+- MQTT control-topic diagnostics now distinguish an absent payload from an
+  invalid one, making a misconfigured or unpublished control topic easier to
+  identify.
+
+### Fixed
+- Home Assistant writes that fail are now tracked and managed by a write-outcome
+  breaker with clear visibility, instead of being silently dropped; degradation
+  handling is aware of which channel failed.
+- Octopus API credentials now persist correctly across configuration saves. A
+  save-time migration could previously strip stored credentials.
+
 ## [1.5.23] — 2026-07-05
 
 ### Added

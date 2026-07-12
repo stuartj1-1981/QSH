@@ -54,11 +54,24 @@ _UNSET = object()
 # do not strand the references.
 def _register_mqtt_events() -> None:
     ann = get_annunciator()
+    # INSTRUCTION-407 — split the former single control-fault annunciation into
+    # two conformance annunciations. A control key that does not resolve to a
+    # usable value (omitted from the payload, or present but null) is a cyclic-
+    # publish contract violation, reported separately from a present, non-null
+    # value that fails to parse. Latched per (topic, json_path); json_path is
+    # None for plain-scalar control topics (unique per topic — key still unique).
     ann.register(EventSpec(
-        name="MQTT.control_topic_invalid_payload",
+        name="MQTT.control_field_absent",
         kind=EventKind.LATCHED,
-        payload_fields=("topic", "payload_excerpt"),
-        latch_key=("topic",),
+        payload_fields=("topic", "json_path"),
+        latch_key=("topic", "json_path"),
+        default_level=logging.WARNING,
+    ))
+    ann.register(EventSpec(
+        name="MQTT.control_payload_invalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("topic", "json_path", "payload_excerpt"),
+        latch_key=("topic", "json_path"),
         default_level=logging.WARNING,
     ))
     ann.register(EventSpec(
@@ -546,29 +559,41 @@ class MQTTDriver:
             else:
                 candidate = raw_str
             if candidate is None:
+                # Control key does not resolve to a usable value: omitted from an
+                # otherwise-present payload, OR present but null (extract_json_value
+                # returns None for both — INSTRUCTION-407 classes both as ABSENT).
+                # Distinct from a present, non-null value that fails to parse. The
+                # value still falls back to internal below (behaviour unchanged).
                 typed = None
+                _absent = True
             else:
                 typed = validate(candidate) if validate is not None else candidate
+                _absent = False
             if typed is not None:
-                # Validator returned non-None — bad payload (if any) is
-                # resolved. Clear the latch for this topic. Per H5: only a
-                # positive validator-success exits the latch; cache-absent
-                # (handled below by the `entry is not None` gate) does NOT.
-                ann.exited("MQTT.control_topic_invalid_payload", topic=full_topic)
+                # Resolved — clear both fault latches for this (topic, json_path).
+                # Per H5: only a positive validator-success exits the latch;
+                # cache-absent (handled below by the `entry is not None` gate)
+                # does NOT.
+                ann.exited("MQTT.control_field_absent", topic=full_topic, json_path=json_path)
+                ann.exited("MQTT.control_payload_invalid", topic=full_topic, json_path=json_path)
                 return ResolvedValue(
                     value=typed,
                     source="external",
                     external_id=full_topic,
                     external_raw=raw_str,
                 )
+            elif _absent:
+                ann.entered("MQTT.control_field_absent", topic=full_topic, json_path=json_path)
+                ann.exited("MQTT.control_payload_invalid", topic=full_topic, json_path=json_path)
             else:
                 payload_excerpt = raw_str[:64] if raw_str else ""
                 ann.entered(
-                    "MQTT.control_topic_invalid_payload",
-                    topic=full_topic,
-                    payload_excerpt=payload_excerpt,
+                    "MQTT.control_payload_invalid",
+                    topic=full_topic, json_path=json_path, payload_excerpt=payload_excerpt,
                 )
-        # Cache empty or invalid — use internal value via deep_get.
+                ann.exited("MQTT.control_field_absent", topic=full_topic, json_path=json_path)
+        # Cache-absent, or key absent/invalid — fall through to internal fallback
+        # via deep_get (value resolution UNCHANGED; only annunciation split above).
         # NB: cache-absent intentionally does NOT exit any latch (H5):
         # "no information available" is not "known resolved".
         internal = deep_get(self._config, internal_key, default)
@@ -1191,10 +1216,11 @@ class MQTTDriver:
         fixed_rates = config.get("fixed_rates") or {}
         if fixed_rates:
             current_rate = fixed_rates.get("import_rate", 0.245)
-            export_rate = fixed_rates.get("export_rate", 0.15)
+            # INSTRUCTION-410 — export default demoted 0.15→0.0 (no phantom credit).
+            export_rate = fixed_rates.get("export_rate", 0.0)
         else:
             current_rate = fallback_rates.get("standard", 0.245)
-            export_rate = fallback_rates.get("export", 0.15)
+            export_rate = fallback_rates.get("export", 0.0)
 
         # ── Control topics via _resolve_mqtt_control (cache-first with internal fallback) ──
         away_rv = self._resolve_mqtt_control(

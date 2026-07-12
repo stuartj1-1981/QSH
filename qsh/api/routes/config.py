@@ -148,36 +148,70 @@ def read_modify_write(transform: Callable[[dict], dict]) -> dict:
 
 
 def _migrate_on_save_strip_legacy(persisted: dict, payload: dict) -> dict:
-    """V5 E-M5 / V3 150C-V2-M3. Strip legacy tariff keys when the wizard or
-    settings page writes the new-shape `energy.<fuel>.provider` keys.
+    """INSTRUCTION-411 (was 150C V5 E-M5 / V3 150C-V2-M3): COPY-FORWARD-THEN-STRIP
+    legacy tariff migration.
+
+    A legacy Octopus credential is MOVED into its new-shape home before the
+    legacy key is stripped (D1), so a Settings/wizard save never removes the last
+    on-disk copy of a credential still read by any fuel — the reported
+    persistence defect (S1). The transform reasons about the COMPLETE on-disk
+    energy section (D9 — `_apply_patch` preserves every unsubmitted `energy.*`
+    sub-block before this runs) but gates each branch on the SUBMITTED fuel set
+    carried in `payload["energy"]`, so a single-fuel save migrates only the fuel
+    it touched. Partial migration is INTENDED (V3 150C-V2-M4).
 
     PURE FUNCTIONAL — returns a NEW dict; does NOT mutate `persisted`.
     Caller pattern: `persisted = _migrate_on_save_strip_legacy(persisted, payload)`.
 
-    Partial migration is INTENDED (V3 150C-V2-M4): a user PATCHing only the
-    gas section keeps their legacy electricity keys until they touch the
-    electricity section too. Audit-friendly contract — distinguish "incomplete
-    migration" from "migration defect".
+    Phases:
+      1. FILL (copy-forward) — gap-fill the SUBMITTED fuel's new-shape block from
+         the legacy energy.octopus.* values (new-shape wins, D4).
+      2. DECLARE (D7) — an undeclared submitted block now carrying its fuel's full
+         Octopus credential set is stamped provider='octopus', preserving the
+         resolution the legacy synthesis path would have produced.
+      3. STRIP — submitted-branch-gated pop of the migrated legacy keys; a shared
+         credential (api_key / account_number) is popped only once NO fuel —
+         declared, undeclared, or blockless-by-synthesis — still reads it (D8/L7).
     """
     result = copy.deepcopy(persisted)
     energy_payload = payload.get("energy", {})
+    if not isinstance(energy_payload, dict):
+        energy_payload = {}
 
+    submitted_octopus_fuels = [
+        f for f in ("electricity", "gas") if f in energy_payload
+    ]
+
+    energy = result.get("energy")
+    if isinstance(energy, dict) and submitted_octopus_fuels:
+        # Phase 1 — FILL. Each submitted fuel's block is gap-filled from legacy:
+        # the shared credentials and the fuel's own keys, per the forward map.
+        for fuel in submitted_octopus_fuels:
+            block = energy.get(fuel)
+            if isinstance(block, dict):
+                _copy_forward(energy, block, fuel, _FUEL_FORWARD_NEW_KEYS[fuel])
+
+        # Phase 2 — DECLARE (D7, resolution-preserving).
+        from qsh.tariff import OCTOPUS_REQUIRED_CREDENTIALS
+
+        for fuel in submitted_octopus_fuels:
+            block = energy.get(fuel)
+            if isinstance(block, dict) and not block.get("provider"):
+                required = OCTOPUS_REQUIRED_CREDENTIALS.get(fuel, ())
+                if required and all(_is_real(block.get(k)) for k in required):
+                    block["provider"] = "octopus"
+
+    # Phase 3 — STRIP.
     if "electricity" in energy_payload:
         legacy_octopus = result.get("energy", {}).get("octopus", {})
-        for key in (
-            "api_key",
-            "account_number",
-            "electricity_tariff_code",
-            "rates_entity",
-        ):
+        for key in _ELECTRICITY_LEGACY_POP_KEYS:
             legacy_octopus.pop(key, None)
-        # 158B V2 (Finding 1 / parent Decision 8): when the new shape
-        # selects ha_entity AND carries an explicit rates_entity, the
-        # legacy octopus.rates nested dict is redundant. Strip it so the
-        # YAML has a single source of truth. Conditional on the new shape
-        # being well-formed — a malformed ha_entity save (provider set
-        # but rates_entity missing) does NOT remove the only working
-        # source.
+        # 158B V2 (Finding 1 / parent Decision 8): when the new shape selects
+        # ha_entity AND carries an explicit rates_entity, the legacy
+        # octopus.rates nested dict is redundant. Strip it so the YAML has a
+        # single source of truth. Conditional on the new shape being well-formed
+        # — a malformed ha_entity save (provider set but rates_entity missing)
+        # does NOT remove the only working source.
         elec = energy_payload.get("electricity", {})
         if (
             isinstance(elec, dict)
@@ -188,9 +222,24 @@ def _migrate_on_save_strip_legacy(persisted: dict, payload: dict) -> dict:
 
     if "gas" in energy_payload:
         legacy_octopus = result.get("energy", {}).get("octopus", {})
-        legacy_octopus.pop("gas_tariff_code", None)
+        for key in _GAS_LEGACY_POP_KEYS:
+            legacy_octopus.pop(key, None)
         legacy_tariff = result.get("tariff", {})
         legacy_tariff.pop("gas_price", None)
+
+    # Shared credentials — strip only once NO fuel still reads them (D8/L7).
+    # Evaluated AFTER the fuel-specific pops but BEFORE removing the shared keys,
+    # so the consumer gate sees the pre-strip legacy octopus state.
+    if submitted_octopus_fuels:
+        legacy_octopus = result.get("energy", {}).get("octopus", {})
+        if isinstance(legacy_octopus, dict):
+            unconsumed = [
+                key
+                for key in _SHARED_LEGACY_KEYS
+                if not _legacy_still_consumed(result, key)
+            ]
+            for key in unconsumed:
+                legacy_octopus.pop(key, None)
 
     if "lpg" in energy_payload:
         result.get("tariff", {}).pop("lpg_price", None)
@@ -280,6 +329,151 @@ _ENERGY_SENTINEL_LEGACY_BRIDGES = {
     ("gas", "octopus_account_number"):         ("octopus", "account_number"),
     ("gas", "octopus_tariff_code"):            ("octopus", "gas_tariff_code"),
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INSTRUCTION-411 — copy-forward-then-strip legacy tariff migration substrate
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Shared Octopus credentials — live under energy.octopus and are read by BOTH
+# the electricity and gas providers.
+_SHARED_LEGACY_KEYS: Tuple[str, ...] = ("api_key", "account_number")
+# New-shape home of each shared legacy key (identical for both fuels).
+_SHARED_LEGACY_TO_NEW: Dict[str, str] = {
+    "api_key": "octopus_api_key",
+    "account_number": "octopus_account_number",
+}
+# Electricity-only legacy keys under energy.octopus (popped on an electricity
+# save; the shared keys above are handled separately by the consumer gate).
+_ELECTRICITY_LEGACY_POP_KEYS: Tuple[str, ...] = ("electricity_tariff_code", "rates_entity")
+# Gas-only legacy key under energy.octopus.
+_GAS_LEGACY_POP_KEYS: Tuple[str, ...] = ("gas_tariff_code",)
+
+# D2 — the forward (copy-forward) twin of _ENERGY_SENTINEL_LEGACY_BRIDGES (the
+# restore direction) plus the electricity rates_entity key. Maps
+# (fuel, new_child) -> (legacy_parent, legacy_child) WITHIN the energy section.
+# Copy-forward reads the legacy value from energy.<legacy_parent>.<legacy_child>
+# and gap-fills it into the new-shape block's <new_child>.
+_LEGACY_FORWARD_MIGRATIONS: Dict[Tuple[str, str], Tuple[str, str]] = {
+    ("electricity", "octopus_api_key"):        ("octopus", "api_key"),
+    ("electricity", "octopus_account_number"): ("octopus", "account_number"),
+    ("electricity", "octopus_tariff_code"):    ("octopus", "electricity_tariff_code"),
+    ("electricity", "rates_entity"):           ("octopus", "rates_entity"),
+    ("gas", "octopus_api_key"):                ("octopus", "api_key"),
+    ("gas", "octopus_account_number"):         ("octopus", "account_number"),
+    ("gas", "octopus_tariff_code"):            ("octopus", "gas_tariff_code"),
+}
+
+# The new-shape keys copy-forward fills per fuel, DERIVED from the forward map so
+# the two cannot drift: shared credentials plus the fuel's own keys.
+_FUEL_FORWARD_NEW_KEYS: Dict[str, Tuple[str, ...]] = {
+    "electricity": tuple(nk for (f, nk) in _LEGACY_FORWARD_MIGRATIONS if f == "electricity"),
+    "gas": tuple(nk for (f, nk) in _LEGACY_FORWARD_MIGRATIONS if f == "gas"),
+}
+
+
+def _assert_legacy_forward_map_bidirectional() -> None:
+    """L6 module-load lockstep assert:
+      (1) every restore bridge (_ENERGY_SENTINEL_LEGACY_BRIDGES) appears in the
+          forward map with the same (legacy_parent, legacy_child) target; and
+      (2) every popped legacy key is represented as a forward-map legacy target,
+          so a key can never be stripped without a copy-forward home.
+    """
+    for new_path, legacy_path in _ENERGY_SENTINEL_LEGACY_BRIDGES.items():
+        assert _LEGACY_FORWARD_MIGRATIONS.get(new_path) == legacy_path, (
+            f"restore bridge {new_path}->{legacy_path} missing or mismatched in "
+            f"_LEGACY_FORWARD_MIGRATIONS"
+        )
+    map_legacy_children = {child for (_parent, child) in _LEGACY_FORWARD_MIGRATIONS.values()}
+    popped = set(_SHARED_LEGACY_KEYS) | set(_ELECTRICITY_LEGACY_POP_KEYS) | set(_GAS_LEGACY_POP_KEYS)
+    missing = popped - map_legacy_children
+    assert not missing, (
+        f"legacy pop keys not represented in _LEGACY_FORWARD_MIGRATIONS: {sorted(missing)}"
+    )
+
+
+_assert_legacy_forward_map_bidirectional()
+
+
+def _is_real(value: Any) -> bool:
+    """D4: a 'real' credential value is a non-empty string that is not the
+    redaction sentinel. None / empty / whitespace / REDACTED_SENTINEL are 'not
+    real' — a gap the copy-forward may fill, and a value that never counts as an
+    own-block copy for the consumer gate."""
+    return isinstance(value, str) and bool(value.strip()) and value != REDACTED_SENTINEL
+
+
+def _copy_forward(
+    energy: dict, block: dict, fuel: str, new_keys: Tuple[str, ...]
+) -> None:
+    """Gap-fill new-shape credential keys in `block` (mutated in place) from the
+    legacy energy.octopus.* values, per _LEGACY_FORWARD_MIGRATIONS. New-shape
+    wins (D4) — a key already carrying a real value is not overwritten. Only
+    eligible blocks (provider in {None, 'octopus'}) are filled; a fixed /
+    ha_entity / edf block is left untouched (its keys are irrelevant to it)."""
+    if not isinstance(block, dict) or block.get("provider") not in (None, "octopus"):
+        return
+    for new_key in new_keys:
+        if _is_real(block.get(new_key)):
+            continue
+        mapping = _LEGACY_FORWARD_MIGRATIONS.get((fuel, new_key))
+        if mapping is None:
+            continue
+        legacy_parent, legacy_child = mapping
+        legacy_section = energy.get(legacy_parent)
+        if not isinstance(legacy_section, dict):
+            continue
+        legacy_val = legacy_section.get(legacy_child)
+        if _is_real(legacy_val):
+            block[new_key] = legacy_val
+
+
+def _fuel_resolves_octopus(energy: dict, fuel: str) -> bool:
+    """Whether building `fuel`'s provider from `energy` resolves to Octopus —
+    declared (energy.<fuel>.provider == 'octopus') or synthesised from the legacy
+    energy.octopus.* keys per qsh.tariff._normalise_legacy_config (which also
+    covers the non-dict / scalar-garbage block edge, R12)."""
+    from qsh.tariff import _normalise_legacy_config
+
+    resolved = _normalise_legacy_config(energy, fuel)
+    return isinstance(resolved, dict) and resolved.get("provider") == "octopus"
+
+
+def _legacy_still_consumed(result: dict, legacy_key: str) -> bool:
+    """True iff some fuel still READS energy.octopus.<legacy_key> after the
+    new-shape blocks in `result` are considered (D8/R12). `legacy_key` is one of
+    _SHARED_LEGACY_KEYS.
+
+    Models each provider's ACTUAL read path (not an isinstance(dict)
+    approximation):
+      * electricity reads the legacy shared key ONLY via the synthesis path — a
+        block with no `provider`, so _normalise_legacy_config falls through to
+        the legacy octopus credentials. A DECLARED electricity block is returned
+        as-is by OctopusElectricityProvider._read_section (never merges legacy),
+        so it is not a legacy consumer.
+      * gas reads the legacy shared key for a declared OR synthesised octopus
+        block whenever its own new-shape key is absent — OctopusGasProvider.
+        _read_section merges the legacy credentials into a declared block.
+    """
+    energy = result.get("energy")
+    if not isinstance(energy, dict):
+        return False
+    new_key = _SHARED_LEGACY_TO_NEW[legacy_key]
+
+    # electricity — synthesis path only (no declared provider).
+    elec = energy.get("electricity")
+    elec_declared = isinstance(elec, dict) and elec.get("provider")
+    if not elec_declared and _fuel_resolves_octopus(energy, "electricity"):
+        return True
+
+    # gas — declared or synthesised octopus block lacking its own real copy.
+    if _fuel_resolves_octopus(energy, "gas"):
+        gas_block = energy.get("gas")
+        gas_block = gas_block if isinstance(gas_block, dict) else {}
+        if not _is_real(gas_block.get(new_key)):
+            return True
+
+    return False
 
 
 def _resolve_sentinel_with_legacy_bridge(
@@ -721,24 +915,29 @@ def patch_config_section(section: str, body=Body(...)):
 
     def _apply_patch(raw: dict) -> dict:
         existing_section = raw.get(section, {})
-        # 158A Task 2: preserve legacy energy.octopus sub-dict when the incoming
-        # tariff payload does not carry it. The frontend sends electricity/gas/
-        # fallback_rates only — without this, restore_redacted's full-section
-        # overwrite drops the octopus block, wiping hp_euid / account_number /
-        # rates.current_day along with it. _migrate_on_save_strip_legacy still
-        # runs after restore_redacted to perform its targeted strip.
+        # INSTRUCTION-411 D9: preserve EVERY unsubmitted energy.* sub-block, not
+        # just the legacy `octopus` block (which is what 158A Task 2 preserved).
+        # The frontend sends electricity/gas/fallback_rates only; an API caller
+        # may send a partial energy payload. Without this, restore_redacted_energy's
+        # full-section overwrite drops any on-disk sub-block absent from the
+        # incoming payload (the 378-class block-drop) — stranding another fuel's
+        # config and, upstream of the strip, defeating any strip-side recovery.
+        # Preserving all unsubmitted sub-blocks means restore_redacted_energy
+        # processes the fuller section unchanged and _migrate_on_save_strip_legacy
+        # reasons about the COMPLETE on-disk energy. Legacy `octopus` remains
+        # covered as the k == "octopus" case. (Block DELETION is out of band —
+        # delete_config_section handles that.)
         local_incoming = incoming
         if (
             section == "energy"
             and isinstance(local_incoming, dict)
-            and "octopus" not in local_incoming
             and isinstance(existing_section, dict)
-            and isinstance(existing_section.get("octopus"), dict)
         ):
-            local_incoming = {
-                **local_incoming,
-                "octopus": copy.deepcopy(existing_section["octopus"]),
-            }
+            preserved = dict(local_incoming)
+            for key, value in existing_section.items():
+                if key not in preserved:
+                    preserved[key] = copy.deepcopy(value)
+            local_incoming = preserved
         # Restore redacted fields so secrets aren't overwritten with the sentinel
         if section == "energy" and isinstance(existing_section, dict) and isinstance(local_incoming, dict):
             raw[section] = restore_redacted_energy(existing_section, local_incoming)
@@ -786,14 +985,14 @@ def patch_config_section(section: str, body=Body(...)):
             for key, value in list(raw[section].items()):
                 if isinstance(value, str) and (key.endswith("_entity") or key.endswith("_topic")):
                     raw[section][key] = value.strip()
-        # INSTRUCTION-150C V5 E-M5: when the incoming energy section writes a
-        # new-shape `energy.<fuel>.provider` key, strip the corresponding
-        # legacy keys (energy.octopus.* for electricity/gas, tariff.<fuel>_price
-        # for fixed-fuel) from the persisted YAML.
+        # INSTRUCTION-411 (was 150C V5 E-M5): copy-forward-then-strip legacy
+        # tariff migration. `raw` now carries the COMPLETE on-disk energy (D9
+        # preserve above), so the fill / declare / consumer-gate reason about all
+        # fuels; the gating payload is the SUBMITTED energy (`incoming`, not
+        # `raw["energy"]`) so a single-fuel save migrates only the fuel it
+        # touched (partial migration is intended — QG6).
         if section == "energy" and isinstance(raw.get("energy"), dict):
-            raw = _migrate_on_save_strip_legacy(
-                raw, {"energy": raw["energy"]}
-            )
+            raw = _migrate_on_save_strip_legacy(raw, {"energy": incoming})
         return raw
 
     read_modify_write(_apply_patch)

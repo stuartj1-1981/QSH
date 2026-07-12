@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
-from .integration import set_ha_service, fetch_ha_entity
+from .integration import set_ha_service, fetch_ha_entity, WriteOutcome
 from ...utils import safe_float
 
 # Warn-once sets (log once per room, then suppress)
@@ -294,17 +294,47 @@ def apply_direct_valve_control_type2(
                 logging.debug(f"Type2 {room} slew limited to {target_position}% (from {last_pos}%)")
 
     if dfan_control:
-        set_ha_service("number", "set_value", {"entity_id": closing_ids, "value": target_position})
-        set_ha_service("number", "set_value", {"entity_id": opening_ids, "value": target_position})
-
-        if control_state is not None:
-            control_state.last_valve_position[room] = target_position
-            control_state.last_valve_write_time[room] = time.time()
-
+        # INSTRUCTION-408 — outcome, not intent. The tracked commanded position
+        # is Type2's ONLY position source (no feedback); it must never assert a
+        # write the transport did not send. 2026-07-09: an open breaker dropped
+        # all 8 park writes while this block logged "AUTO ACTIVE ... 85%" and
+        # trackers (persisted) held 85 against physical 30/40/50.
+        r_closing = set_ha_service("number", "set_value", {"entity_id": closing_ids, "value": target_position})
+        r_opening = set_ha_service("number", "set_value", {"entity_id": opening_ids, "value": target_position})
         n = len(closing_ids)
-        logging.info(
-            f"{_mode_tag} ACTIVE: Set {room} Type2 valve to {target_position}% ({n} TRV{'s' if n > 1 else ''})"
-        )
+
+        if r_closing is WriteOutcome.SENT and r_opening is WriteOutcome.SENT:
+            if control_state is not None:
+                control_state.last_valve_position[room] = target_position
+                control_state.last_valve_write_time[room] = time.time()
+            logging.info(
+                f"{_mode_tag} ACTIVE: Set {room} Type2 valve to {target_position}% ({n} TRV{'s' if n > 1 else ''})"
+            )
+            return True
+
+        if r_closing is not r_opening:
+            # Partial send (e.g. closing landed, breaker tripped before opening —
+            # trip can occur between the two posts via record_failure elsewhere).
+            # Constraint pair now asymmetric on-device; tracker NOT updated, so
+            # the next eligible cycle re-commands BOTH degrees (absolute values,
+            # idempotent) and restores symmetry.
+            logging.error(
+                f"{_mode_tag} PARTIAL: {room} Type2 constraint pair disagrees "
+                f"(closing={r_closing.value}, opening={r_opening.value}) — tracker not updated; "
+                f"pair re-commanded next eligible cycle"
+            )
+        elif r_closing is WriteOutcome.SUPPRESSED_BREAKER_OPEN:
+            logging.warning(
+                f"{_mode_tag} SUPPRESSED: {room} Type2 valve write to {target_position}% dropped — "
+                f"HA circuit breaker open ({n} TRV{'s' if n > 1 else ''})"
+            )
+        else:
+            # FAILED / NO_TOKEN — transport already logged the specifics.
+            logging.warning(
+                f"{_mode_tag} NOT CONFIRMED: {room} Type2 valve write to {target_position}% "
+                f"({r_closing.value}) — tracker not updated"
+            )
+        return False
     else:
         n = len(closing_ids)
         logging.info(
@@ -398,17 +428,32 @@ def apply_direct_valve_control_type1(
                 logging.debug(f"Type1 {room} slew limited to {target_position}% ({target_hw}/{scale})")
 
     if dfan_control:
-        set_ha_service("number", "set_value", {"entity_id": type1_ids, "value": target_hw})
-
-        if control_state is not None:
-            control_state.last_valve_position[room] = target_position
-            control_state.last_valve_write_time[room] = time.time()
-
+        # INSTRUCTION-408 — outcome, not intent (see Type2 for the rationale).
+        result = set_ha_service("number", "set_value", {"entity_id": type1_ids, "value": target_hw})
         n = len(type1_ids)
-        logging.info(
-            f"{_mode_tag} ACTIVE: Set {room} Type1 valve to {target_position}% ({target_hw}/{scale}) "
-            f"({n} TRV{'s' if n > 1 else ''})"
-        )
+
+        if result is WriteOutcome.SENT:
+            if control_state is not None:
+                control_state.last_valve_position[room] = target_position
+                control_state.last_valve_write_time[room] = time.time()
+            logging.info(
+                f"{_mode_tag} ACTIVE: Set {room} Type1 valve to {target_position}% ({target_hw}/{scale}) "
+                f"({n} TRV{'s' if n > 1 else ''})"
+            )
+            return True
+
+        if result is WriteOutcome.SUPPRESSED_BREAKER_OPEN:
+            logging.warning(
+                f"{_mode_tag} SUPPRESSED: {room} Type1 valve write to {target_position}% ({target_hw}/{scale}) "
+                f"dropped — HA circuit breaker open ({n} TRV{'s' if n > 1 else ''})"
+            )
+        else:
+            # FAILED / NO_TOKEN — transport already logged the specifics.
+            logging.warning(
+                f"{_mode_tag} NOT CONFIRMED: {room} Type1 valve write to {target_position}% "
+                f"({result.value}) — tracker not updated"
+            )
+        return False
     else:
         n = len(type1_ids)
         logging.info(
@@ -452,12 +497,28 @@ def apply_direct_valve_control_generic(
             return True
 
     if dfan_control:
-        set_ha_service("number", "set_value", {"entity_id": valve_entity, "value": target_position})
+        # INSTRUCTION-408 — outcome, not intent (see Type2 for the rationale).
+        # Generic has no last_valve_write_time field today — gate only what exists.
+        result = set_ha_service("number", "set_value", {"entity_id": valve_entity, "value": target_position})
 
-        if control_state is not None:
-            control_state.last_valve_position[room] = target_position
+        if result is WriteOutcome.SENT:
+            if control_state is not None:
+                control_state.last_valve_position[room] = target_position
+            logging.info(f"{_mode_tag} ACTIVE: Set {room} generic valve to {target_position}%")
+            return True
 
-        logging.info(f"{_mode_tag} ACTIVE: Set {room} generic valve to {target_position}%")
+        if result is WriteOutcome.SUPPRESSED_BREAKER_OPEN:
+            logging.warning(
+                f"{_mode_tag} SUPPRESSED: {room} generic valve write to {target_position}% dropped — "
+                f"HA circuit breaker open"
+            )
+        else:
+            # FAILED / NO_TOKEN — transport already logged the specifics.
+            logging.warning(
+                f"{_mode_tag} NOT CONFIRMED: {room} generic valve write to {target_position}% "
+                f"({result.value}) — tracker not updated"
+            )
+        return False
     else:
         logging.info(f"{_mode_tag} SHADOW: Would set {room} generic valve to {target_position}%")
 
