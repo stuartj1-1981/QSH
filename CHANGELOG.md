@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [1.5.25] — 2026-07-15
+
+### Added
+- Heat source flow-temperature capability is now assertable per heat source
+  rather than fixed per appliance type. Every heat source card gains capability
+  inputs, so an appliance whose real flow range differs from its type default
+  can be described accurately.
+
+### Changed
+- Flow limits outside a heat source's capability are now rejected when you save,
+  in both Settings and the setup wizard, instead of being silently clamped or
+  reverted at runtime. The wizard now shows the reason a deploy was rejected
+  rather than failing without explanation.
+
+### Fixed
+- A momentary live COP reading can no longer re-price a heat source for a single
+  cycle. Live COP is admitted only when the source is confirmed firing and the
+  reading holds across a short quorum window; rejected readings are annunciated.
+- A boolean MQTT payload no longer produces a false COP or power reading.
+- Export surplus priced at import rates — because no live or operator-set export
+  price was available — is now annunciated instead of passing silently.
+
 ## [1.5.24] — 2026-07-12
 
 ### Added

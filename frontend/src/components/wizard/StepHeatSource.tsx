@@ -3,7 +3,8 @@ import { Flame, Droplets, Fuel, Plus, X, ChevronDown, ChevronUp } from 'lucide-r
 import { cn, formatInterval } from '../../lib/utils'
 import { MAX_HEAT_SOURCES } from '../../lib/constants'
 import { HelpTip } from '../HelpTip'
-import { SOURCE_SELECTION } from '../../lib/helpText'
+import { SOURCE_SELECTION, HEAT_SOURCE } from '../../lib/helpText'
+import { effectiveCapability } from '../../lib/heatSourceCapability'
 import type { HeatSourceYaml, MqttTopicInput, QshConfigYaml, SourceSelectionYaml } from '../../types/config'
 import { isHeatPumpType } from '../../lib/heat-source-types'
 import { TopicPicker } from './TopicPicker'
@@ -806,41 +807,63 @@ function SourceCard({
             </div>
           )}
 
-          {/* Flow temp range */}
-          {hs.type && (
+          {/* Flow temp range — INSTRUCTION-412 (D6/L5): the operating pair is
+              bounded by the EFFECTIVE capability envelope (mirror of the backend
+              resolution: asserted capability from a loaded config where present,
+              else the type registry default — NOT a hardcoded 25/55). Capability
+              itself is asserted in Settings → Heat Sources, not here (L5). */}
+          {hs.type && (() => {
+            const [wizFlowLo, wizFlowHi] = effectiveCapability(
+              hs.type,
+              hs.capability_flow_min,
+              hs.capability_flow_max,
+            )
+            return (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
                   htmlFor={`source-${index}-flow-min`}
-                  className="block text-sm font-medium text-[var(--text)] mb-1"
+                  className="flex items-center gap-1 text-sm font-medium text-[var(--text)] mb-1"
                 >
-                  Min Flow Temp
+                  Min Flow Temp{' '}
+                  <HelpTip text={HEAT_SOURCE.minFlowTemp} size={12} />
                 </label>
                 <input
                   id={`source-${index}-flow-min`}
                   type="number"
-                  value={hs.flow_min ?? 25}
-                  onChange={(e) => onUpdate({ flow_min: parseFloat(e.target.value) || 25 })}
+                  min={wizFlowLo}
+                  max={wizFlowHi}
+                  value={hs.flow_min ?? wizFlowLo}
+                  onChange={(e) => onUpdate({ flow_min: parseFloat(e.target.value) || wizFlowLo })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
               <div>
                 <label
                   htmlFor={`source-${index}-flow-max`}
-                  className="block text-sm font-medium text-[var(--text)] mb-1"
+                  className="flex items-center gap-1 text-sm font-medium text-[var(--text)] mb-1"
                 >
-                  Max Flow Temp
+                  Max Flow Temp{' '}
+                  <HelpTip text={HEAT_SOURCE.maxFlowTemp} size={12} />
                 </label>
                 <input
                   id={`source-${index}-flow-max`}
                   type="number"
-                  value={hs.flow_max ?? 55}
-                  onChange={(e) => onUpdate({ flow_max: parseFloat(e.target.value) || 55 })}
+                  min={wizFlowLo}
+                  max={wizFlowHi}
+                  value={hs.flow_max ?? wizFlowHi}
+                  onChange={(e) => onUpdate({ flow_max: parseFloat(e.target.value) || wizFlowHi })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
+              <p className="col-span-2 text-xs text-[var(--text-muted)]">
+                Bounded to this appliance's capability ({wizFlowLo}–{wizFlowHi} °C).
+                To run outside this range, set the appliance's rated capability in
+                Settings → Heat Sources after setup.
+              </p>
             </div>
-          )}
+            )
+          })()}
         </div>
       )}
     </div>

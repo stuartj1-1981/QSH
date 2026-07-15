@@ -15,6 +15,11 @@ import { TopicPicker } from '../wizard/TopicPicker'
 import { extractTopic, extractFormat, extractJsonPath } from '../../lib/mqttTopic'
 import { HelpTip } from '../HelpTip'
 import { HEAT_SOURCE, SOURCE_SELECTION } from '../../lib/helpText'
+import {
+  ABSOLUTE_FLOW_CAPABILITY,
+  effectiveCapability,
+  resolvedCapabilityInverts,
+} from '../../lib/heatSourceCapability'
 import type { HeatSourceYaml, MqttTopicInput, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
@@ -555,6 +560,46 @@ function SourceCard({
     (hs.response_timeout_s < RESPONSE_TIMEOUT_MIN ||
       hs.response_timeout_s > RESPONSE_TIMEOUT_MAX)
 
+  // INSTRUCTION-412 — per-source appliance flow CAPABILITY assertion. Both axes
+  // optional; the effective envelope is asserted-else-registry (mirror of the
+  // backend resolution). ALL validation below derives from the card's CURRENT
+  // (dirty) form state (L6), so the one-visit "assert capability + widen the
+  // operating value" flow never flags input the backend will accept. The backend
+  // 422 is authoritative and renders verbatim in the saveError banner; these
+  // client checks only pre-empt the round-trip.
+  const [ABS_CAP_LO, ABS_CAP_HI] = ABSOLUTE_FLOW_CAPABILITY
+  const capMinOutOfBand =
+    hs.capability_flow_min !== undefined &&
+    (hs.capability_flow_min < ABS_CAP_LO || hs.capability_flow_min > ABS_CAP_HI)
+  const capMaxOutOfBand =
+    hs.capability_flow_max !== undefined &&
+    (hs.capability_flow_max < ABS_CAP_LO || hs.capability_flow_max > ABS_CAP_HI)
+  // Resolved-pair coherence (R1): surface only when neither axis is individually
+  // out of band (an out-of-band axis is flagged by its own error, not double-flagged).
+  const capIncoherent =
+    !capMinOutOfBand &&
+    !capMaxOutOfBand &&
+    (hs.capability_flow_min !== undefined || hs.capability_flow_max !== undefined) &&
+    resolvedCapabilityInverts(hs.type, hs.capability_flow_min, hs.capability_flow_max)
+  const capMinError = capMinOutOfBand
+  const capMaxError = capMaxOutOfBand || capIncoherent
+  // Effective envelope the operating flow_min/flow_max must sit inside (L6 — from
+  // the card's current capability form state).
+  const [effCapLo, effCapHi] = effectiveCapability(
+    hs.type,
+    hs.capability_flow_min,
+    hs.capability_flow_max,
+  )
+  const flowMinOutOfCap =
+    hs.flow_min !== undefined && (hs.flow_min < effCapLo || hs.flow_min > effCapHi)
+  const flowMaxOutOfCap =
+    hs.flow_max !== undefined && (hs.flow_max < effCapLo || hs.flow_max > effCapHi)
+  // Strict inversion, mirroring the backend M2 rule (flow_min == flow_max is legal).
+  const flowPairInverted =
+    hs.flow_min !== undefined &&
+    hs.flow_max !== undefined &&
+    hs.flow_min > hs.flow_max
+
   const entityIds = useMemo(() => {
     if (driver === 'mqtt') {
       return [
@@ -878,10 +923,84 @@ function SourceCard({
             )}
           </div>
 
+          {/* Appliance flow capability — INSTRUCTION-412 (D6). Renders on EVERY
+              source card (all install shapes, D5): capability is equipment data.
+              Per-axis optional; a blank axis uses the type default. Bounded to the
+              absolute guard band [20, 90] and coherence-checked as a resolved pair,
+              client-side from dirty state (L6). The backend 422 is authoritative. */}
+          <div>
+            <label className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1">
+              Appliance flow capability (°C){' '}
+              <HelpTip text={HEAT_SOURCE.capabilityMax} size={12} />
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <input
+                  id={`source-${index}-capability-flow-min`}
+                  type="number"
+                  min={ABS_CAP_LO}
+                  max={ABS_CAP_HI}
+                  step={1}
+                  value={hs.capability_flow_min ?? ''}
+                  placeholder={`min (default ${effCapLo})`}
+                  aria-label="Appliance flow capability minimum (°C)"
+                  aria-invalid={capMinError}
+                  onChange={(e) =>
+                    onChange({
+                      capability_flow_min:
+                        e.target.value === ''
+                          ? undefined
+                          : parseFloat(e.target.value),
+                    })
+                  }
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                />
+              </div>
+              <div>
+                <input
+                  id={`source-${index}-capability-flow-max`}
+                  type="number"
+                  min={ABS_CAP_LO}
+                  max={ABS_CAP_HI}
+                  step={1}
+                  value={hs.capability_flow_max ?? ''}
+                  placeholder={`max (default ${effCapHi})`}
+                  aria-label="Appliance flow capability maximum (°C)"
+                  aria-invalid={capMaxError}
+                  onChange={(e) =>
+                    onChange({
+                      capability_flow_max:
+                        e.target.value === ''
+                          ? undefined
+                          : parseFloat(e.target.value),
+                    })
+                  }
+                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                />
+              </div>
+            </div>
+            {capMinOutOfBand || capMaxOutOfBand ? (
+              <p className="mt-1 text-xs text-red-500">
+                Capability must be between {ABS_CAP_LO} and {ABS_CAP_HI} °C.
+              </p>
+            ) : capIncoherent ? (
+              <p className="mt-1 text-xs text-red-500">
+                Minimum capability must be below maximum (effective {effCapLo}–
+                {effCapHi} °C uses the type default for a blank axis).
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Your appliance's rated flow range. Blank axes use the type default
+                ({effCapLo}–{effCapHi} °C). Operating limits below must sit inside this.
+              </p>
+            )}
+          </div>
+
           {/* Flow temp range — INSTRUCTION-377B (D-377-3): the per-source
-              "capability" Min/Max pair renders ONLY for multi-source installs.
+              operating Min/Max pair renders ONLY for multi-source installs.
               A single-source install shows exactly the index-0 operating-
-              setpoint pair below (Flow Min/Max Temperature). */}
+              setpoint pair below (Flow Min/Max Temperature). Bounded to the
+              effective capability above (INSTRUCTION-412 D6/L6). */}
           {sources.length > 1 && (
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -895,9 +1014,13 @@ function SourceCard({
                   id={`source-${index}-flow-min`}
                   type="number"
                   value={hs.flow_min ?? ''}
+                  aria-invalid={flowMinOutOfCap || flowPairInverted}
                   onChange={(e) =>
                     onChange({
-                      flow_min: parseFloat(e.target.value) || undefined,
+                      flow_min:
+                        e.target.value === ''
+                          ? undefined
+                          : parseFloat(e.target.value),
                     })
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
@@ -914,14 +1037,25 @@ function SourceCard({
                   id={`source-${index}-flow-max`}
                   type="number"
                   value={hs.flow_max ?? ''}
+                  aria-invalid={flowMaxOutOfCap || flowPairInverted}
                   onChange={(e) =>
                     onChange({
-                      flow_max: parseFloat(e.target.value) || undefined,
+                      flow_max:
+                        e.target.value === ''
+                          ? undefined
+                          : parseFloat(e.target.value),
                     })
                   }
                   className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
                 />
               </div>
+              {(flowMinOutOfCap || flowMaxOutOfCap || flowPairInverted) && (
+                <p className="col-span-2 mt-1 text-xs text-red-500">
+                  {flowPairInverted
+                    ? 'Flow Min must not exceed Flow Max.'
+                    : `Flow limits must sit inside the appliance capability ${effCapLo}–${effCapHi} °C. Widen the capability above, or bring these inside it.`}
+                </p>
+              )}
             </div>
           )}
 

@@ -769,3 +769,55 @@ describe('StepHeatSource — non-primary MQTT method stamp (INSTRUCTION-308)', (
     expect(payload[1].flow_control?.method).toBeUndefined()
   })
 })
+
+describe('StepHeatSource — flow capability bounds (INSTRUCTION-412)', () => {
+  it('boiler flow defaults come from the mirror (50/80), not 25/55', () => {
+    const { container } = render(
+      <StepHeatSource
+        config={{ heat_sources: [{ type: 'gas_boiler', name: 'B' }] }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    const min = container.querySelector('#source-0-flow-min') as HTMLInputElement
+    const max = container.querySelector('#source-0-flow-max') as HTMLInputElement
+    expect(min.value).toBe('50')
+    expect(max.value).toBe('80')
+    // Bounds attributes reflect the effective capability envelope.
+    expect(min).toHaveAttribute('min', '50')
+    expect(max).toHaveAttribute('max', '80')
+  })
+
+  it('re-run bounds use the loaded-config effective capability where present', () => {
+    const { container } = render(
+      <StepHeatSource
+        config={{
+          heat_sources: [
+            {
+              type: 'gas_boiler',
+              name: 'B',
+              capability_flow_min: 30,
+              capability_flow_max: 85,
+            },
+          ],
+        }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    const min = container.querySelector('#source-0-flow-min') as HTMLInputElement
+    const max = container.querySelector('#source-0-flow-max') as HTMLInputElement
+    expect(min).toHaveAttribute('min', '30')
+    expect(max).toHaveAttribute('max', '85')
+  })
+
+  it('helper text names the Settings remediation', () => {
+    render(
+      <StepHeatSource
+        config={{ heat_sources: [{ type: 'gas_boiler', name: 'B' }] }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    expect(
+      screen.getByText(/Settings → Heat Sources/),
+    ).toBeInTheDocument()
+  })
+})

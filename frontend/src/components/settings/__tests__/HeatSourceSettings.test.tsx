@@ -1464,3 +1464,119 @@ describe('HeatSourceSettings — implausible-efficiency hint (INSTRUCTION-385B)'
     expect(screen.queryByText(/Implausible for/)).toBeNull()
   })
 })
+
+// ── INSTRUCTION-412: appliance flow capability assertion ─────────────────
+describe('HeatSourceSettings — appliance flow capability (INSTRUCTION-412)', () => {
+  it('renders the capability inputs on a source card', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByText('Appliance flow capability (°C)')).toBeInTheDocument()
+    expect(
+      screen.getByLabelText('Appliance flow capability minimum (°C)'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByLabelText('Appliance flow capability maximum (°C)'),
+    ).toBeInTheDocument()
+  })
+
+  it('flags an out-of-band capability value client-side', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const capMin = screen.getByLabelText(
+      'Appliance flow capability minimum (°C)',
+    ) as HTMLInputElement
+    fireEvent.change(capMin, { target: { value: '15' } })
+    expect(capMin).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByText(/between 20 and 90/)).toBeInTheDocument()
+  })
+
+  it('flags a single-axis incoherent capability (gas boiler cap max below floor)', () => {
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler' }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    const capMax = screen.getByLabelText(
+      'Appliance flow capability maximum (°C)',
+    ) as HTMLInputElement
+    fireEvent.change(capMax, { target: { value: '45' } })
+    expect(capMax).toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.getByText(/Minimum capability must be below maximum/),
+    ).toBeInTheDocument()
+  })
+
+  it('an in-form capability value clears the operating input invalid state (L6)', () => {
+    // multi-source so the operating Flow Min/Max pair renders.
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[
+          { type: 'gas_boiler', name: 'Boiler', flow_min: 35 },
+          { type: 'heat_pump', name: 'HP' },
+        ]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // flow_min 35 is below the unasserted gas registry floor 50 → error shows.
+    expect(
+      screen.getByText(/must sit inside the appliance capability/i),
+    ).toBeInTheDocument()
+    // Assert capability floor 30 → effective [30, 80] now admits flow_min 35, so
+    // the operating error clears from dirty form state before any save (L6).
+    const capMin = screen.getByLabelText(
+      'Appliance flow capability minimum (°C)',
+    ) as HTMLInputElement
+    fireEvent.change(capMin, { target: { value: '30' } })
+    expect(
+      screen.queryByText(/must sit inside the appliance capability/i),
+    ).toBeNull()
+  })
+
+  it('renders a backend 422 detail verbatim in the saveError banner', async () => {
+    patch.mockResolvedValueOnce(null)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail:
+          "heat_sources[0] ('Boiler') flow_min=35.0 is outside the appliance flow capability [50.0, 80.0].",
+      }),
+    } as Response)
+
+    render(
+      <HeatSourceSettings
+        heatSource={baseHs}
+        heatSources={[{ type: 'gas_boiler', name: 'Boiler', flow_min: 35 }]}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    // Dirty the card so Save is enabled (Save is gated on dirty).
+    fireEvent.change(screen.getByLabelText('Source 1 name'), {
+      target: { value: 'Boiler-edit' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save source 1' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toMatch(
+        /outside the appliance flow capability \[50.0, 80.0\]/,
+      )
+    })
+  })
+})

@@ -253,6 +253,13 @@ def parse_payload(payload_str: str, fmt: str = "plain", json_path: Optional[str]
             obj = json.loads(payload_str)
             for key in json_path.split("."):
                 obj = obj[key]
+            # INSTRUCTION-413 D6 — a boolean JSON leaf is not a number. Without
+            # this guard `float(True)` == 1.0 and `float(False)` == 0.0, minting
+            # a fake numeric reading (the closed hole behind the observed live-COP
+            # 1.0, and equally a fake power reading feeding the firing gate). The
+            # string leg (`float("true")`) already fails; only JSON needs this.
+            if isinstance(obj, bool):
+                return None
             return float(obj)
         except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
             return None
