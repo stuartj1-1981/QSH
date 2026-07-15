@@ -2197,6 +2197,24 @@ def deploy_config(req: WizardDeployRequest):
     # Strip them here so the on-disk YAML stays clean.
     _strip_empty_entity_list_entries(req.config)
 
+    # ── INSTRUCTION-412 D7/R2: shared heat_sources boundary guard ──
+    # The SAME per-entry validator the settings PATCH surface calls (element shape,
+    # duplicate topics, response-timeout band, capability band + resolved-pair
+    # coherence, operating-vs-effective-capability, operating-pair inversion). Pinned
+    # HERE — after _strip_empty_entity_list_entries (the last transform that mutates
+    # req.config) and before the 192 pre-write snapshot below — so the validated
+    # array is byte-identical to the written array by position (R2). Newly enforces
+    # the duplicate-topic and response-timeout checks on the wizard surface, closing
+    # the pre-existing sibling bypass (D7). Structural shape → 400, value → 422:
+    # a save the runtime would clamp/revert/ignore is rejected here, visibly (R5).
+    _hs_guard = req.config.get("heat_sources")
+    if isinstance(_hs_guard, list):
+        from qsh.api.heat_source_validation import validate_heat_sources_list
+
+        _hs_err = validate_heat_sources_list(_hs_guard)
+        if _hs_err is not None:
+            raise HTTPException(status_code=_hs_err[0], detail=_hs_err[1])
+
     # INSTRUCTION-192: pre-write snapshot. First-boot deploys (no
     # pre-existing qsh.yaml) raise SourceMissingError, which is caught
     # and logged but does not abort — there is nothing to snapshot.

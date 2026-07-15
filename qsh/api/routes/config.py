@@ -37,60 +37,14 @@ YAML_SEARCH_PATHS = [
 REDACTED_SENTINEL = "***REDACTED***"
 
 
-def _validate_no_duplicate_heat_source_topics(
-    sources: List[Dict[str, Any]],
-) -> Optional[str]:
-    """Return an error string if any sensor topic appears under two sources.
-
-    INSTRUCTION-241C §D-6: silent data fusion is the failure mode this guard
-    exists to prevent. After 241A lands, two sources subscribed to the same
-    MQTT topic produce a corrupted SensorData.heat_sources dict with one
-    entry overwriting the other on each payload. Hard reject at PATCH time.
-
-    Returns None if validation passes; an error message string if duplicates
-    detected. Error names the conflicting (source, slot) pair so the operator
-    can resolve unambiguously.
-
-    Note: same topic on DIFFERENT slots WITHIN a single source is allowed —
-    only one source claims it, so no fusion. Cross-source slot collision IS
-    rejected regardless of slot name (silently-fused source attribution).
-    """
-    seen: Dict[str, Tuple[str, str]] = {}  # topic -> (source_name, slot)
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        name = source.get("name", "<unnamed>")
-        sensors = source.get("sensors", {}) or {}
-        if not isinstance(sensors, dict):
-            continue
-        # Track topics added in THIS source's pass — same-source intra-slot
-        # duplication is allowed and must not poison the seen dict for the
-        # next source.
-        this_source_topics: Dict[str, str] = {}
-        for slot, value in sensors.items():
-            topic: Optional[str] = None
-            if isinstance(value, str):
-                topic = value.strip()
-            elif isinstance(value, dict):
-                raw_topic = value.get("topic", "")
-                topic = raw_topic.strip() if isinstance(raw_topic, str) else None
-            if not topic:
-                continue
-            if topic in seen:
-                other_name, other_slot = seen[topic]
-                return (
-                    f"Duplicate sensor topic '{topic}' assigned to both "
-                    f"({other_name}, {other_slot}) and ({name}, {slot}). "
-                    f"Per INSTRUCTION-241C §D-6 the same topic may not feed "
-                    f"two heat sources — silent data fusion."
-                )
-            this_source_topics[topic] = slot
-        # Merge this source's topics into the cross-source seen index AFTER
-        # the loop, so intra-source same-topic across slots is allowed but
-        # subsequent sources still get checked against this source's set.
-        for topic, slot in this_source_topics.items():
-            seen[topic] = (name, slot)
-    return None
+# INSTRUCTION-412 — the duplicate-topic guard was relocated to the shared
+# qsh.api.heat_source_validation module so both interactive write surfaces (this
+# PATCH route and the wizard deploy route) call one implementation. Re-exported
+# here under the historical leading-underscore name so
+# test_heat_sources_duplicate_topic_guard.py's import path is preserved.
+from qsh.api.heat_source_validation import (  # noqa: E402
+    validate_no_duplicate_heat_source_topics as _validate_no_duplicate_heat_source_topics,
+)
 
 
 def _find_yaml_path() -> str:
@@ -630,70 +584,21 @@ def patch_config_section(section: str, body=Body(...)):
     if section not in VALID_PATCH_SECTIONS:
         raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
 
-    # INSTRUCTION-237A Task 1b: heat_sources element-level guard. Element
-    # shape and bounds checks before the snapshot fires, so malformed PATCHes
-    # are rejected cheaply and the snapshot is not wasted.
+    # INSTRUCTION-237A/241C/339C/412 — heat_sources element-level guard. All
+    # per-entry checks (element shape/count/type, duplicate-topic, response-timeout
+    # band, capability band + resolved-pair coherence, operating-vs-effective-
+    # capability, operating-pair inversion) now live in the shared
+    # qsh.api.heat_source_validation module so this PATCH surface and the wizard
+    # deploy route cannot drift (INSTRUCTION-412 D7). Runs before the snapshot fires
+    # so malformed PATCHes are rejected cheaply and the snapshot is not wasted.
+    # 400/422 mapping preserved: structural shape → 400, out-of-band value → 422.
     if section == "heat_sources":
-        from qsh.heat_source_limits import MIN_HEAT_SOURCES, MAX_HEAT_SOURCES
+        from qsh.api.heat_source_validation import validate_heat_sources_list
 
         guard_incoming = body.get("data", body) if isinstance(body, dict) else body
-        if not isinstance(guard_incoming, list):
-            raise HTTPException(
-                status_code=400,
-                detail="heat_sources PATCH body must be a list of source objects",
-            )
-        if not (MIN_HEAT_SOURCES <= len(guard_incoming) <= MAX_HEAT_SOURCES):
-            raise HTTPException(
-                status_code=400,
-                detail=f"heat_sources must contain {MIN_HEAT_SOURCES}..{MAX_HEAT_SOURCES} entries",
-            )
-        if not all(isinstance(x, dict) for x in guard_incoming):
-            raise HTTPException(
-                status_code=400,
-                detail="heat_sources entries must all be objects (dicts)",
-            )
-        if not all(isinstance(x.get("type"), str) for x in guard_incoming):
-            raise HTTPException(
-                status_code=400,
-                detail="heat_sources[*].type is required and must be a string",
-            )
-
-        # INSTRUCTION-241C Task 4: duplicate-topic guard. §D-6 silent data
-        # fusion — two sources subscribed to the same MQTT topic produce
-        # a corrupted SensorData.heat_sources dict; reject hard at PATCH
-        # time before persistence.
-        _dup_err = _validate_no_duplicate_heat_source_topics(guard_incoming)
-        if _dup_err is not None:
-            raise HTTPException(status_code=400, detail=_dup_err)
-
-        # INSTRUCTION-339C — per-element response_timeout_s range parity. Mirrors
-        # the backend config-load band [30, 900] s (config.py heat_sources loop)
-        # so an out-of-range value is rejected at PATCH with a clean 422 rather
-        # than deferred to a config-load SystemExit on the next restart. Coerces
-        # like the loader's safe_float so a numeric string is accepted; absent
-        # key is fine (resolves to the per-source-type default at runtime).
-        for _idx, _src in enumerate(guard_incoming):
-            if not isinstance(_src, dict) or "response_timeout_s" not in _src:
-                continue
-            _rt_raw = _src["response_timeout_s"]
-            try:
-                _rt = float(_rt_raw)
-            except (TypeError, ValueError):
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"heat_sources[{_idx}].response_timeout_s must be a number, "
-                        f"got {_rt_raw!r}"
-                    ),
-                )
-            if not (30.0 <= _rt <= 900.0):
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"heat_sources[{_idx}].response_timeout_s={_rt}s is outside "
-                        "safe range [30, 900]"
-                    ),
-                )
+        _guard_err = validate_heat_sources_list(guard_incoming)
+        if _guard_err is not None:
+            raise HTTPException(status_code=_guard_err[0], detail=_guard_err[1])
 
     # INSTRUCTION-373A Task 1: battery_devices element-level guard. Mirrors the
     # heat_sources element-shape checks above. The list serialises the per-device

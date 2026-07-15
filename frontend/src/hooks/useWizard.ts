@@ -5,6 +5,7 @@ import type {
   DeployResponse,
   DestructiveDeployError,
   AckOutstandingError,
+  DeployValidationError,
   WizardWarning,
   QshConfigYaml,
   HeatSourceYaml,
@@ -245,7 +246,13 @@ export function useWizard() {
   const _post = useCallback(
     async (
       force: boolean
-    ): Promise<DeployResponse | DestructiveDeployError | AckOutstandingError | null> => {
+    ): Promise<
+      | DeployResponse
+      | DestructiveDeployError
+      | AckOutstandingError
+      | DeployValidationError
+      | null
+    > => {
       setState((prev) => ({ ...prev, isDeploying: true }))
       try {
         const resp = await fetch(apiUrl('api/wizard/deploy'), {
@@ -275,6 +282,29 @@ export function useWizard() {
             existing_sections: (detail.existing_sections as string[]) ?? [],
             incoming_sections: (detail.incoming_sections as string[]) ?? [],
           }
+        }
+        // INSTRUCTION-412 (R5) — capture any other non-OK status (notably the 422
+        // the heat_sources boundary guard and validate_config raise) into a typed
+        // error carrying the backend detail prose. Before 412 this body was cast to
+        // DeployResponse uninspected and StepReview rendered only the success
+        // branch, so a failed deploy's detail was silently swallowed.
+        if (!resp.ok) {
+          let detail = `Deploy failed (HTTP ${resp.status}).`
+          try {
+            const body = await resp.json()
+            const d = body?.detail
+            if (typeof d === 'string') {
+              detail = d
+            } else if (d && typeof d === 'object') {
+              // validate_config's 422 shape: { message, errors: string[] }.
+              const msg = typeof d.message === 'string' ? d.message : ''
+              const errs = Array.isArray(d.errors) ? d.errors.join('; ') : ''
+              detail = [msg, errs].filter(Boolean).join(': ') || detail
+            }
+          } catch {
+            // body not JSON — keep the HTTP status fallback.
+          }
+          return { kind: 'validation', status: resp.status, detail }
         }
         return (await resp.json()) as DeployResponse
       } catch {

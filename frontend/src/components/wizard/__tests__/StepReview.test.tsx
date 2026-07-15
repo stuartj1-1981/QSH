@@ -274,3 +274,44 @@ describe('useWizard acknowledgement threading (INSTRUCTION-324)', () => {
     expect(result.current.acknowledgedRuleIds).toEqual(['b:2'])
   })
 })
+
+// ── INSTRUCTION-412 (R5): deploy validation error renders verbatim ───────
+describe('StepReview deploy validation error (INSTRUCTION-412)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders the backend 422 detail verbatim in a red banner', async () => {
+    const detail =
+      "heat_sources[0] ('Boiler') flow_min=35.0 is outside the appliance flow capability [50.0, 80.0]."
+    const onDeploy = vi.fn().mockResolvedValue({
+      kind: 'validation',
+      status: 422,
+      detail,
+    })
+
+    render(
+      <StepReview
+        config={baseConfig}
+        validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={vi.fn()}
+        isDeploying={false}
+        onDeploy={onDeploy}
+        onForceDeploy={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByText('Deploy Configuration'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Deploy rejected')).toBeDefined()
+    })
+    expect(screen.getByTestId('deploy-error-banner').textContent).toContain(detail)
+    // Success screen must NOT show.
+    expect(screen.queryByText('Configuration Deployed!')).toBeNull()
+  })
+})

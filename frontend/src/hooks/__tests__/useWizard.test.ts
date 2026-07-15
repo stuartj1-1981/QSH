@@ -201,3 +201,53 @@ describe('useWizard review-entry full validation (INSTRUCTION-324)', () => {
     ])
   })
 })
+
+// ── INSTRUCTION-412 (R5): deploy 422 is captured, not swallowed ──────────
+describe('useWizard deploy validation error (INSTRUCTION-412)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('captures a non-409 deploy error into a typed validation result with the detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail:
+          "heat_sources[0] ('Boiler') flow_min=35.0 is outside the appliance flow capability [50.0, 80.0].",
+      }),
+    } as Response)
+
+    const { result } = renderHook(() => useWizard())
+    let outcome: unknown
+    await act(async () => {
+      outcome = await result.current.deploy()
+    })
+    expect(outcome).toMatchObject({
+      kind: 'validation',
+      status: 422,
+    })
+    expect((outcome as { detail: string }).detail).toMatch(
+      /outside the appliance flow capability \[50.0, 80.0\]/,
+    )
+  })
+
+  it('flattens the validate_config 422 message+errors shape', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail: { message: 'Config validation failed', errors: ['bad thing'] },
+      }),
+    } as Response)
+
+    const { result } = renderHook(() => useWizard())
+    let outcome: unknown
+    await act(async () => {
+      outcome = await result.current.deploy()
+    })
+    expect((outcome as { detail: string }).detail).toMatch(
+      /Config validation failed: bad thing/,
+    )
+  })
+})

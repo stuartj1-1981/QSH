@@ -2,15 +2,17 @@ export const TARIFF = {
   hpEuid: 'The unique identifier for your heat pump on the Octopus network. Found on the heat pump sticker or in Octopus account settings.',
   importRate: 'The price you pay per kWh of electricity imported from the grid.',
   exportRate: 'The price you receive per kWh of electricity exported to the grid.',
-  fallbackRates: 'Backup rates used when live tariff data is temporarily unavailable. Set these to your typical rates.',
+  fallbackRates: 'Backup rates used when live tariff data is temporarily unavailable. Set these to your typical rates. Export blank = no export credit assumed; solar surplus is priced at the import rate and solar-adjusted pricing stays off. (Advanced: set energy.electricity.octopus_export_tariff_code in YAML to decode a live export rate instead — requires your Octopus API key and export tariff code.)',
   weatherComp: 'Adjusts flow temperature based on outdoor temperature. Improves efficiency in milder weather by lowering the flow temp automatically.',
   fixedFlowTemp: 'The constant flow temperature used when weather compensation is turned off. Higher values heat faster but use more energy.',
 } as const
 
 export const HEAT_SOURCE = {
   hpModel: 'Select your heat pump model so QSH can use the correct performance curves and limits.',
-  maxFlowTemp: 'The highest water temperature your heat pump can produce. Check your heat pump manual for this limit.',
-  minFlowTemp: 'The lowest water temperature your heat pump will use. Lower values improve efficiency but may slow heating.',
+  maxFlowTemp: 'The highest water temperature this source runs to in normal operation. Must sit inside the appliance flow capability below.',
+  minFlowTemp: 'The lowest water temperature this source runs to. Lower values improve efficiency but may slow heating. Must sit inside the appliance flow capability.',
+  capabilityMin: 'The lowest flow temperature your appliance can physically produce. Leave blank to use the type default. A modern condensing gas boiler often runs 30–40 °C weather-compensated flow — assert that here to unlock it.',
+  capabilityMax: 'The highest flow temperature your appliance can physically produce (its rated maximum). Leave blank to use the type default. Many condensing gas boilers top out around 82–85 °C.',
 } as const
 
 export const HOT_WATER = {

@@ -172,6 +172,12 @@ export interface HeatSourceYaml {
   response_timeout_s?: number
   flow_min?: number
   flow_max?: number
+  // INSTRUCTION-412: operator-asserted appliance flow-temperature capability (°C).
+  // Per-axis optional; each axis defaults to the type's registry envelope when
+  // unset. Bounded to the absolute guard band [20, 90] and coherence-checked as a
+  // resolved pair at the PATCH/deploy boundary and at config load.
+  capability_flow_min?: number
+  capability_flow_max?: number
   flow_min_entity?: string
   flow_max_entity?: string
   fuel_cost_per_kwh?: number
@@ -598,7 +604,12 @@ export interface DestructiveDeployError {
 }
 
 export function isDestructiveDeployError(
-  v: DeployResponse | DestructiveDeployError | AckOutstandingError | null
+  v:
+    | DeployResponse
+    | DestructiveDeployError
+    | AckOutstandingError
+    | DeployValidationError
+    | null
 ): v is DestructiveDeployError {
   return !!v && (v as DestructiveDeployError).kind === 'destructive'
 }
@@ -612,9 +623,37 @@ export interface AckOutstandingError {
 }
 
 export function isAckOutstandingError(
-  v: DeployResponse | DestructiveDeployError | AckOutstandingError | null
+  v:
+    | DeployResponse
+    | DestructiveDeployError
+    | AckOutstandingError
+    | DeployValidationError
+    | null
 ): v is AckOutstandingError {
   return !!v && (v as AckOutstandingError).kind === 'ack_outstanding'
+}
+
+/** INSTRUCTION-412 (R5) — a non-409 deploy error (e.g. the 422 the heat_sources
+ *  boundary guard raises, or validate_config's 422). Before 412 the wizard cast
+ *  every non-409 body to DeployResponse uninspected, so a failed deploy's detail
+ *  was silently swallowed. `detail` carries the backend prose verbatim so
+ *  StepReview can render it — the wizard-surface counterpart of the panel's
+ *  241C saveError banner. */
+export interface DeployValidationError {
+  kind: 'validation'
+  status: number
+  detail: string
+}
+
+export function isDeployValidationError(
+  v:
+    | DeployResponse
+    | DestructiveDeployError
+    | AckOutstandingError
+    | DeployValidationError
+    | null
+): v is DeployValidationError {
+  return !!v && (v as DeployValidationError).kind === 'validation'
 }
 
 /** Response from POST /api/wizard/test-octopus (INSTRUCTION-90E direction filter). */

@@ -4,6 +4,7 @@ import type {
   AckOutstandingError,
   DeployResponse,
   DestructiveDeployError,
+  DeployValidationError,
   QshConfigYaml,
   RoomConfigYaml,
   WizardWarning,
@@ -11,12 +12,14 @@ import type {
 import {
   isAckOutstandingError,
   isDestructiveDeployError,
+  isDeployValidationError,
 } from '../../types/config'
 
 type DeployOutcome =
   | DeployResponse
   | DestructiveDeployError
   | AckOutstandingError
+  | DeployValidationError
   | null
 
 interface StepReviewProps {
@@ -44,6 +47,12 @@ export function StepReview({
     null
   )
   const [ackOutstanding, setAckOutstanding] = useState<AckOutstandingError | null>(
+    null
+  )
+  // INSTRUCTION-412 (R5) — a non-409 deploy error (heat_sources boundary-guard
+  // 422, validate_config 422). Before 412 this was swallowed and the operator saw
+  // nothing; now the backend detail renders verbatim below.
+  const [deployError, setDeployError] = useState<DeployValidationError | null>(
     null
   )
 
@@ -88,7 +97,12 @@ export function StepReview({
       setDestructive(result)
       return
     }
+    if (isDeployValidationError(result)) {
+      setDeployError(result)
+      return
+    }
     setAckOutstanding(null)
+    setDeployError(null)
     if (result) setDeployResult(result)
   }
 
@@ -102,8 +116,13 @@ export function StepReview({
       setDestructive(result)
       return
     }
+    if (isDeployValidationError(result)) {
+      setDeployError(result)
+      return
+    }
     setDestructive(null)
     setAckOutstanding(null)
+    setDeployError(null)
     if (result) setDeployResult(result)
   }
 
@@ -345,6 +364,26 @@ export function StepReview({
             wizard if the configuration changed, or tick the confirmations
             above.
           </p>
+        </div>
+      )}
+
+      {/* INSTRUCTION-412 (R5) — deploy validation-error banner. Renders the
+          backend 422 detail verbatim (heat_sources boundary guard / validate_config)
+          so a rejected deploy is VISIBLE — the wizard-surface counterpart of the
+          panel's 241C saveError banner. Before 412 this detail was swallowed. */}
+      {deployError && (
+        <div
+          className="p-4 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/40"
+          role="alert"
+          data-testid="deploy-error-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--red)]" />
+            <p className="text-sm font-medium text-[var(--red)]">
+              Deploy rejected
+            </p>
+          </div>
+          <p className="text-sm text-[var(--text)]">{deployError.detail}</p>
         </div>
       )}
 

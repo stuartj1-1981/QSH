@@ -475,13 +475,20 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
                   })
                 }
                 placeholder={
-                  tier === 'cheap' ? '0.15' : tier === 'standard' ? '0.30' : tier === 'peak' ? '0.46' : '0.15'
+                  // INSTRUCTION-413 D9 — export has NO placeholder: it must not
+                  // hint at a default that never applies (410 removed the phantom
+                  // 0.15). Blank export = no credit assumed, priced at import.
+                  tier === 'cheap' ? '0.15' : tier === 'standard' ? '0.30' : tier === 'peak' ? '0.46' : undefined
                 }
                 className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
               />
             </div>
           ))}
         </div>
+        <p className="text-xs text-[var(--text-muted)] mt-2">
+          Export blank = no export credit assumed; solar surplus is priced at the
+          import rate and solar-adjusted pricing stays off.
+        </p>
       </div>
     </div>
   )
