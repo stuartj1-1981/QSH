@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.5.26] — 2026-07-16
+
+### Changed
+- The setup wizard now has a single Deploy button, and every reason a deploy can't go ahead — validation errors, config-safety checks, outstanding acknowledgements, or a network failure — is shown right at the button instead of being silently swallowed. Previously the button only reported success.
+
 ## [1.5.25] — 2026-07-15
 
 ### Added

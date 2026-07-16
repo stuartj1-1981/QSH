@@ -593,6 +593,22 @@ export interface DeployResponse {
   warnings: WizardWarning[]
 }
 
+/** INSTRUCTION-414 (D7) — the network-failure outcome. Before 414 `_post`'s
+ *  catch returned `null` and BOTH deploy affordances swallowed it silently; now
+ *  a request that never completes joins the typed outcome union and renders as
+ *  an amber banner (the config may be fine and the deploy may even have landed —
+ *  the copy says so). */
+export interface DeployNetworkError {
+  kind: 'network'
+  detail: string
+}
+
+export function isDeployNetworkError(
+  v: DeployOutcome | null
+): v is DeployNetworkError {
+  return !!v && (v as DeployNetworkError).kind === 'network'
+}
+
 /** 409 destructive-deploy refusal — wizard config would remove top-level
  *  sections from the on-disk YAML. Surface a Force Deploy affordance.
  *  See INSTRUCTION-137 Task 3. */
@@ -604,12 +620,7 @@ export interface DestructiveDeployError {
 }
 
 export function isDestructiveDeployError(
-  v:
-    | DeployResponse
-    | DestructiveDeployError
-    | AckOutstandingError
-    | DeployValidationError
-    | null
+  v: DeployOutcome | null
 ): v is DestructiveDeployError {
   return !!v && (v as DestructiveDeployError).kind === 'destructive'
 }
@@ -623,12 +634,7 @@ export interface AckOutstandingError {
 }
 
 export function isAckOutstandingError(
-  v:
-    | DeployResponse
-    | DestructiveDeployError
-    | AckOutstandingError
-    | DeployValidationError
-    | null
+  v: DeployOutcome | null
 ): v is AckOutstandingError {
   return !!v && (v as AckOutstandingError).kind === 'ack_outstanding'
 }
@@ -646,14 +652,37 @@ export interface DeployValidationError {
 }
 
 export function isDeployValidationError(
-  v:
-    | DeployResponse
-    | DestructiveDeployError
-    | AckOutstandingError
-    | DeployValidationError
-    | null
+  v: DeployOutcome | null
 ): v is DeployValidationError {
   return !!v && (v as DeployValidationError).kind === 'validation'
+}
+
+/** INSTRUCTION-414 (D3/T1) — the closed, `null`-free deploy-outcome union.
+ *  Single-homed here (formerly declared locally in StepReview). `null` lives
+ *  only in `WizardState.deployOutcome`, meaning "no attempt outstanding"; every
+ *  actual outcome is one of these five members and every member has a rendered
+ *  branch in StepReview, enforced at compile time by the `assertNever` floor. */
+export type DeployOutcome =
+  | DeployResponse
+  | DestructiveDeployError
+  | AckOutstandingError
+  | DeployValidationError
+  | DeployNetworkError
+
+/** Success-shape guard (INSTRUCTION-414 M2). The wire shapes carry no shared
+ *  discriminant — DeployResponse is keyed by `deployed`, the errors by `kind` —
+ *  so a literal switch cannot type-check the union; this guard is the first link
+ *  in the guard-chain that narrows to the `assertNever` floor. */
+export function isDeployResponse(v: DeployOutcome | null): v is DeployResponse {
+  return !!v && typeof (v as DeployResponse).deployed === 'boolean'
+}
+
+/** Compile-time totality floor (INSTRUCTION-414 M2). Reaching it means the
+ *  guard-chain narrowed the outcome to `never`; a future sixth variant added
+ *  without a render branch fails type-check HERE rather than falling silently
+ *  into whichever guard its shape happens to satisfy. */
+export function assertNever(x: never): never {
+  throw new Error(`Unhandled deploy outcome variant: ${JSON.stringify(x)}`)
 }
 
 /** Response from POST /api/wizard/test-octopus (INSTRUCTION-90E direction filter). */

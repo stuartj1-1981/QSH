@@ -1,11 +1,9 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { apiUrl } from '../lib/api'
 import type {
   ValidationResponse,
+  DeployOutcome,
   DeployResponse,
-  DestructiveDeployError,
-  AckOutstandingError,
-  DeployValidationError,
   WizardWarning,
   QshConfigYaml,
   HeatSourceYaml,
@@ -114,6 +112,12 @@ export interface WizardState {
    *  acknowledged-class warning is missing from this list. */
   acknowledgedRuleIds: string[]
   isDeploying: boolean
+  /** INSTRUCTION-414 (D2) — the single home for the last deploy attempt's
+   *  typed outcome. `null` means "no attempt outstanding". Cleared on any
+   *  submission-changing mutation (config edit, acknowledgement toggle) and
+   *  on navigation; a normal deploy clears it at entry, a force deploy retains
+   *  the destructive refusal it escalates until its own result replaces it. */
+  deployOutcome: DeployOutcome | null
 }
 
 export function useWizard() {
@@ -125,7 +129,14 @@ export function useWizard() {
     validationWarnings: [],
     acknowledgedRuleIds: [],
     isDeploying: false,
+    deployOutcome: null,
   })
+
+  // INSTRUCTION-414 (R2/L5) — re-entrancy guard held on a ref, set/cleared
+  // SYNCHRONOUSLY around a _post flight. A same-tick double call no-ops on the
+  // ref where an `isDeploying` state-read would have raced the flush; the
+  // `isDeploying` STATE below is retained for rendering only.
+  const inFlightRef = useRef(false)
 
   const isMqtt = state.config.driver === 'mqtt'
   const steps = isMqtt ? MQTT_STEPS : HA_STEPS
@@ -136,14 +147,17 @@ export function useWizard() {
 
   const updateConfig = useCallback((section: string, data: unknown) => {
     setState((prev) => {
+      // INSTRUCTION-414 (D2/L1) — a config edit changes what a redeploy would
+      // submit; a shown deploy outcome must not outlive it.
       if (data === undefined) {
         const next = { ...prev.config }
         delete (next as Record<string, unknown>)[section]
-        return { ...prev, config: next }
+        return { ...prev, config: next, deployOutcome: null }
       }
       return {
         ...prev,
         config: { ...prev.config, [section]: data } as Partial<QshConfigYaml>,
+        deployOutcome: null,
       }
     })
   }, [])
@@ -152,7 +166,9 @@ export function useWizard() {
     // INSTRUCTION-241B Task 4b — migrate legacy mqtt.inputs.hp_* to
     // heat_sources[0].sensors.* on config load. Idempotent.
     const migrated = migrateLegacyMqttInputsToPerSource(config)
-    setState((prev) => ({ ...prev, config: migrated }))
+    // INSTRUCTION-414 (D2/R4) — wholesale config load is a submission-changing
+    // mutation; clear any shown outcome.
+    setState((prev) => ({ ...prev, config: migrated, deployOutcome: null }))
   }, [])
 
   const validateStep = useCallback(
@@ -178,7 +194,10 @@ export function useWizard() {
       const current = new Set(prev.acknowledgedRuleIds)
       if (on) current.add(ruleId)
       else current.delete(ruleId)
-      return { ...prev, acknowledgedRuleIds: [...current] }
+      // INSTRUCTION-414 (D2/L1) — acknowledgements are submitted in the deploy
+      // body, so a tick changes the submission; a shown ack-outstanding banner
+      // self-heals on the first tick by clearing the outcome here.
+      return { ...prev, acknowledgedRuleIds: [...current], deployOutcome: null }
     })
   }, [])
 
@@ -232,6 +251,8 @@ export function useWizard() {
       ...prev,
       currentStep: Math.max(0, prev.currentStep - 1),
       validationErrors: [],
+      // INSTRUCTION-414 (D2) — navigating away from review clears the outcome.
+      deployOutcome: null,
     }))
   }, [])
 
@@ -240,20 +261,28 @@ export function useWizard() {
       ...prev,
       currentStep: Math.max(0, Math.min(step, steps.length - 1)),
       validationErrors: [],
+      // INSTRUCTION-414 (D2) — hygiene for future callers (no UI trigger today).
+      deployOutcome: null,
     }))
   }, [steps.length])
 
   const _post = useCallback(
-    async (
-      force: boolean
-    ): Promise<
-      | DeployResponse
-      | DestructiveDeployError
-      | AckOutstandingError
-      | DeployValidationError
-      | null
-    > => {
-      setState((prev) => ({ ...prev, isDeploying: true }))
+    async (force: boolean): Promise<DeployOutcome | null> => {
+      // INSTRUCTION-414 (R2/L5) — re-entrancy early-return on the ref. A
+      // same-tick double call (or an event-separated one that beats the
+      // disabled-attribute flush) no-ops here, so exactly one fetch is issued.
+      if (inFlightRef.current) return null
+      inFlightRef.current = true
+      // A NORMAL deploy clears any prior outcome at entry (fresh attempt); a
+      // FORCE deploy RETAINS the destructive refusal it escalates until its own
+      // result replaces it, so the explanation of what forcing overwrites stays
+      // on screen for the flight (INSTRUCTION-414 D2/L2).
+      setState((prev) => ({
+        ...prev,
+        isDeploying: true,
+        deployOutcome: force ? prev.deployOutcome : null,
+      }))
+      let outcome: DeployOutcome
       try {
         const resp = await fetch(apiUrl('api/wizard/deploy'), {
           method: 'POST',
@@ -271,24 +300,24 @@ export function useWizard() {
           // carries `outstanding`, the section-preservation refusal carries
           // `removed_sections`.
           if (Array.isArray(detail.outstanding)) {
-            return {
+            outcome = {
               kind: 'ack_outstanding',
               outstanding: detail.outstanding as string[],
             }
+          } else {
+            outcome = {
+              kind: 'destructive',
+              removed_sections: (detail.removed_sections as string[]) ?? [],
+              existing_sections: (detail.existing_sections as string[]) ?? [],
+              incoming_sections: (detail.incoming_sections as string[]) ?? [],
+            }
           }
-          return {
-            kind: 'destructive',
-            removed_sections: (detail.removed_sections as string[]) ?? [],
-            existing_sections: (detail.existing_sections as string[]) ?? [],
-            incoming_sections: (detail.incoming_sections as string[]) ?? [],
-          }
-        }
-        // INSTRUCTION-412 (R5) — capture any other non-OK status (notably the 422
-        // the heat_sources boundary guard and validate_config raise) into a typed
-        // error carrying the backend detail prose. Before 412 this body was cast to
-        // DeployResponse uninspected and StepReview rendered only the success
-        // branch, so a failed deploy's detail was silently swallowed.
-        if (!resp.ok) {
+        } else if (!resp.ok) {
+          // INSTRUCTION-412 (R5) — capture any other non-OK status (notably the
+          // 422 the heat_sources boundary guard and validate_config raise) into
+          // a typed error carrying the backend detail prose. Before 412 this
+          // body was cast to DeployResponse uninspected and StepReview rendered
+          // only the success branch, so a failed deploy's detail was swallowed.
           let detail = `Deploy failed (HTTP ${resp.status}).`
           try {
             const body = await resp.json()
@@ -304,14 +333,25 @@ export function useWizard() {
           } catch {
             // body not JSON — keep the HTTP status fallback.
           }
-          return { kind: 'validation', status: resp.status, detail }
+          outcome = { kind: 'validation', status: resp.status, detail }
+        } else {
+          outcome = (await resp.json()) as DeployResponse
         }
-        return (await resp.json()) as DeployResponse
       } catch {
-        return null
+        // INSTRUCTION-414 (D7) — the network path joins the typed union instead
+        // of returning `null`. The config may be fine and the deploy may even
+        // have landed, so the copy is advisory, not a validation verdict.
+        outcome = {
+          kind: 'network',
+          detail:
+            'Deploy request did not complete — the add-on may be unreachable ' +
+            'or already restarting. Check the add-on log before retrying.',
+        }
       } finally {
-        setState((prev) => ({ ...prev, isDeploying: false }))
+        inFlightRef.current = false
       }
+      setState((prev) => ({ ...prev, isDeploying: false, deployOutcome: outcome }))
+      return outcome
     },
     [state.config, state.acknowledgedRuleIds]
   )

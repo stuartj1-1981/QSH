@@ -43,6 +43,15 @@ class MemoryStorage {
   }
 }
 
+// jsdom does not implement Element.prototype.scrollIntoView. INSTRUCTION-414
+// (D8) scrolls the deploy-outcome region into view on a refusal; without this
+// stub the effect would throw "scrollIntoView is not a function". Tests that
+// assert the scroll behaviour spy on this via vi.spyOn(Element.prototype,
+// 'scrollIntoView').
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {}
+}
+
 for (const name of ['localStorage', 'sessionStorage'] as const) {
   const storage = new MemoryStorage()
   Object.defineProperty(globalThis, name, {

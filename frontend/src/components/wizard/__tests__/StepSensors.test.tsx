@@ -90,7 +90,7 @@ describe('StepReview — flow_rate summary row', () => {
         acknowledgedRuleIds={[]}
         onAcknowledge={() => {}}
         isDeploying={false}
-        onDeploy={async () => null}
+        deployOutcome={null}
         onForceDeploy={async () => null}
       />,
     )
@@ -114,7 +114,7 @@ describe('StepReview — flow_rate summary row', () => {
         acknowledgedRuleIds={[]}
         onAcknowledge={() => {}}
         isDeploying={false}
-        onDeploy={async () => null}
+        deployOutcome={null}
         onForceDeploy={async () => null}
       />,
     )
@@ -135,7 +135,7 @@ describe('StepReview — flow_rate summary row', () => {
         acknowledgedRuleIds={[]}
         onAcknowledge={() => {}}
         isDeploying={false}
-        onDeploy={async () => null}
+        deployOutcome={null}
         onForceDeploy={async () => null}
       />,
     )
