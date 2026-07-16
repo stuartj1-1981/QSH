@@ -15,6 +15,13 @@ interface WizardShellProps {
   /** INSTRUCTION-324 — disables the footer Next/Deploy button while
    *  acknowledged-class warnings remain unticked on the review step. */
   nextDisabled?: boolean
+  /** INSTRUCTION-414 (D5) — why the footer button is disabled, surfaced as its
+   *  `title`. Carries 324's "N warning(s) awaiting confirmation" string that
+   *  the removed inline button used to own. */
+  nextDisabledReason?: string
+  /** INSTRUCTION-414 (D6) — seals the Back egress channel during a deploy
+   *  flight and after a success. */
+  backDisabled?: boolean
   validationErrors: string[]
   onExit?: () => void
 }
@@ -30,6 +37,8 @@ export function WizardShell({
   isLastStep,
   isDeploying,
   nextDisabled,
+  nextDisabledReason,
+  backDisabled,
   validationErrors,
   onExit,
 }: WizardShellProps) {
@@ -118,10 +127,10 @@ export function WizardShell({
         <div className="max-w-4xl mx-auto flex justify-between">
           <button
             onClick={onBack}
-            disabled={isFirstStep}
+            disabled={isFirstStep || backDisabled}
             className={cn(
               'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium',
-              isFirstStep
+              isFirstStep || backDisabled
                 ? 'text-[var(--text-muted)] cursor-not-allowed'
                 : 'text-[var(--text)] hover:bg-[var(--bg)] border border-[var(--border)]'
             )}
@@ -132,6 +141,7 @@ export function WizardShell({
           <button
             onClick={onNext}
             disabled={isDeploying || nextDisabled}
+            title={nextDisabledReason}
             className="flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-medium bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50"
           >
             {isDeploying ? (

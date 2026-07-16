@@ -1,26 +1,19 @@
-import { useState } from 'react'
-import { Download, AlertTriangle, Check, Loader2 } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Download, AlertTriangle, Check } from 'lucide-react'
 import type {
-  AckOutstandingError,
-  DeployResponse,
-  DestructiveDeployError,
-  DeployValidationError,
+  DeployOutcome,
   QshConfigYaml,
   RoomConfigYaml,
   WizardWarning,
 } from '../../types/config'
 import {
+  assertNever,
   isAckOutstandingError,
+  isDeployNetworkError,
+  isDeployResponse,
   isDestructiveDeployError,
   isDeployValidationError,
 } from '../../types/config'
-
-type DeployOutcome =
-  | DeployResponse
-  | DestructiveDeployError
-  | AckOutstandingError
-  | DeployValidationError
-  | null
 
 interface StepReviewProps {
   config: Partial<QshConfigYaml>
@@ -29,8 +22,11 @@ interface StepReviewProps {
   acknowledgedRuleIds: string[]
   onAcknowledge: (ruleId: string, on: boolean) => void
   isDeploying: boolean
-  onDeploy: () => Promise<DeployOutcome>
-  onForceDeploy: () => Promise<DeployOutcome>
+  /** INSTRUCTION-414 (D3) — the single deploy-outcome home, owned by
+   *  useWizard. StepReview is a pure renderer over it; the deploy trigger is
+   *  the footer button (WizardShell), not this component. */
+  deployOutcome: DeployOutcome | null
+  onForceDeploy: () => Promise<DeployOutcome | null>
 }
 
 export function StepReview({
@@ -39,23 +35,9 @@ export function StepReview({
   acknowledgedRuleIds,
   onAcknowledge,
   isDeploying,
-  onDeploy,
+  deployOutcome,
   onForceDeploy,
 }: StepReviewProps) {
-  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null)
-  const [destructive, setDestructive] = useState<DestructiveDeployError | null>(
-    null
-  )
-  const [ackOutstanding, setAckOutstanding] = useState<AckOutstandingError | null>(
-    null
-  )
-  // INSTRUCTION-412 (R5) — a non-409 deploy error (heat_sources boundary-guard
-  // 422, validate_config 422). Before 412 this was swallowed and the operator saw
-  // nothing; now the backend detail renders verbatim below.
-  const [deployError, setDeployError] = useState<DeployValidationError | null>(
-    null
-  )
-
   // INSTRUCTION-324 — acknowledged-class warnings (rule_id non-null) gate
   // the deploy button; legacy informational warnings (rule_id null) render
   // in the plain amber list as before.
@@ -67,6 +49,18 @@ export function StepReview({
   const unacknowledgedCount = ackWarnings.filter(
     (w) => !acked.has(w.rule_id)
   ).length
+
+  // INSTRUCTION-414 (D8/M3) — the deploy trigger lives in permanently-visible
+  // chrome (the footer), but the outcome banners live inside the review page's
+  // scroll pane. On a refusal, bring the outcome region to the operator's
+  // viewport at the click site. Success replaces the page body (early return
+  // below) and never scrolls; clearing (deployOutcome → null) never scrolls.
+  const outcomeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!deployOutcome) return
+    if (isDeployResponse(deployOutcome) && deployOutcome.deployed) return
+    outcomeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [deployOutcome])
 
   const rooms = config.rooms ?? {}
   const hs = config.heat_source
@@ -87,46 +81,122 @@ export function StepReview({
     URL.revokeObjectURL(url)
   }
 
-  const handleDeploy = async () => {
-    const result = await onDeploy()
-    if (isAckOutstandingError(result)) {
-      setAckOutstanding(result)
-      return
+  // INSTRUCTION-414 (D3/M2) — render exactly one refusal banner from the typed
+  // outcome via guard-chain narrowing, terminating in `assertNever`. The wire
+  // shapes share no discriminant, so a literal switch cannot type-check; a
+  // future sixth variant added without a branch fails the build at the floor.
+  const renderOutcomeBanner = (outcome: DeployOutcome) => {
+    if (isDeployResponse(outcome)) {
+      // Success is a full-page replacement (early return above); a non-deployed
+      // response has no banner.
+      return null
     }
-    if (isDestructiveDeployError(result)) {
-      setDestructive(result)
-      return
+    if (isAckOutstandingError(outcome)) {
+      // Acknowledgement refusal banner (INSTRUCTION-324). Normally unreachable —
+      // the footer button is disabled until every item is ticked — but rendered
+      // defensively for the race where warnings changed server-side between
+      // validate and deploy. Ticking a confirmation self-heals it (D2/L1).
+      return (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          data-testid="ack-outstanding-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Deploy blocked — unacknowledged warnings
+            </p>
+          </div>
+          <p className="text-sm text-[var(--amber)]">
+            The server requires explicit acknowledgement of:{' '}
+            {outcome.outstanding.join(', ')}. Go back through the wizard if the
+            configuration changed, or tick the confirmations above.
+          </p>
+        </div>
+      )
     }
-    if (isDeployValidationError(result)) {
-      setDeployError(result)
-      return
+    if (isDeployValidationError(outcome)) {
+      // INSTRUCTION-412 (R5) — deploy validation-error banner. Renders the
+      // backend 422 detail verbatim (heat_sources boundary guard /
+      // validate_config) so a rejected deploy is VISIBLE. Before 412 this
+      // detail was swallowed; before 414 it rendered only on the inline button.
+      return (
+        <div
+          className="p-4 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/40"
+          data-testid="deploy-error-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--red)]" />
+            <p className="text-sm font-medium text-[var(--red)]">
+              Deploy rejected
+            </p>
+          </div>
+          <p className="text-sm text-[var(--text)]">{outcome.detail}</p>
+        </div>
+      )
     }
-    setAckOutstanding(null)
-    setDeployError(null)
-    if (result) setDeployResult(result)
+    if (isDestructiveDeployError(outcome)) {
+      // Destructive-deploy refusal banner (INSTRUCTION-137 Task 3). Force Deploy
+      // lives INSIDE this banner (INSTRUCTION-414 D4) — an escalation adjacent
+      // to the explanation of what forcing overwrites, not a sibling start
+      // button. The banner and its disabled Force button persist through the
+      // force flight (D2/L2).
+      return (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          data-testid="destructive-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Destructive deploy refused
+            </p>
+          </div>
+          <p className="text-sm text-[var(--amber)] mb-3">
+            This deploy would remove sections from your existing configuration.
+            Removed sections: {outcome.removed_sections.join(', ')}. Click Back
+            to load your existing config via Welcome → Edit Existing, or Force
+            Deploy to overwrite.
+          </p>
+          <button
+            onClick={() => {
+              void onForceDeploy()
+            }}
+            disabled={isDeploying || unacknowledgedCount > 0}
+            title={
+              unacknowledgedCount > 0
+                ? `${unacknowledgedCount} warning${unacknowledgedCount === 1 ? '' : 's'} awaiting confirmation`
+                : undefined
+            }
+            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--amber)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+          >
+            Force Deploy
+          </button>
+        </div>
+      )
+    }
+    if (isDeployNetworkError(outcome)) {
+      // INSTRUCTION-414 (D7) — the network-failure banner. Amber, not red: the
+      // config may be fine and the deploy may even have landed. Advisory copy.
+      return (
+        <div
+          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
+          data-testid="deploy-network-banner"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={16} className="text-[var(--amber)]" />
+            <p className="text-sm font-medium text-[var(--amber)]">
+              Deploy did not complete
+            </p>
+          </div>
+          <p className="text-sm text-[var(--amber)]">{outcome.detail}</p>
+        </div>
+      )
+    }
+    return assertNever(outcome)
   }
 
-  const handleForceDeploy = async () => {
-    const result = await onForceDeploy()
-    if (isAckOutstandingError(result)) {
-      setAckOutstanding(result)
-      return
-    }
-    if (isDestructiveDeployError(result)) {
-      setDestructive(result)
-      return
-    }
-    if (isDeployValidationError(result)) {
-      setDeployError(result)
-      return
-    }
-    setDestructive(null)
-    setAckOutstanding(null)
-    setDeployError(null)
-    if (result) setDeployResult(result)
-  }
-
-  if (deployResult?.deployed) {
+  if (isDeployResponse(deployOutcome) && deployOutcome.deployed) {
     return (
       <div className="text-center space-y-6 py-12">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--green)]/10">
@@ -136,13 +206,13 @@ export function StepReview({
           Configuration Deployed!
         </h2>
         <p className="text-[var(--text-muted)] max-w-md mx-auto">
-          {deployResult.message}
+          {deployOutcome.message}
         </p>
-        {deployResult.warnings.length > 0 && (
+        {deployOutcome.warnings.length > 0 && (
           <div className="max-w-md mx-auto p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30 text-left">
             <p className="text-sm font-medium text-[var(--amber)] mb-2">Warnings:</p>
             <ul className="text-sm text-[var(--amber)] space-y-1">
-              {deployResult.warnings.map((w, i) => (
+              {deployOutcome.warnings.map((w, i) => (
                 <li key={i}>- {w.message}</li>
               ))}
             </ul>
@@ -181,7 +251,11 @@ export function StepReview({
 
       {/* INSTRUCTION-324 — acknowledged-class warnings. Each item must be
           explicitly confirmed before deploy is enabled; the acknowledgement
-          set is stamped into the deployed YAML as an audit trail. */}
+          set is stamped into the deployed YAML as an audit trail. The tick
+          controls are inert while a deploy/force flight is in progress
+          (INSTRUCTION-414 R1 tick-seal) — no submission-changing mutation is
+          reachable mid-flight, which is what makes the outcome always coherent
+          with the submission it was computed against. */}
       {ackWarnings.length > 0 && (
         <div
           className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
@@ -206,6 +280,7 @@ export function StepReview({
                     type="checkbox"
                     className="mt-0.5"
                     checked={acked.has(w.rule_id)}
+                    disabled={isDeploying}
                     onChange={(e) => onAcknowledge(w.rule_id, e.target.checked)}
                   />
                   <span>
@@ -261,7 +336,7 @@ export function StepReview({
             <SummaryItem
               key={name}
               label={name.replace(/_/g, ' ')}
-              value={`${room.area_m2}m\u00b2 | ${room.facing || 'interior'}${room.trv_entity ? ' | TRV' : ''}`}
+              value={`${room.area_m2}m² | ${room.facing || 'interior'}${room.trv_entity ? ' | TRV' : ''}`}
             />
           ))}
           {Object.keys(rooms).length === 0 && (
@@ -333,82 +408,28 @@ export function StepReview({
           />
           <SummaryItem
             label="Design Temp"
-            value={`${thermal?.peak_external_temp ?? -3.0}\u00b0C`}
+            value={`${thermal?.peak_external_temp ?? -3.0}°C`}
           />
           <SummaryItem
             label="Thermal Mass"
-            value={`${thermal?.thermal_mass_per_m2 ?? 0.03} kWh/m\u00b2/K`}
+            value={`${thermal?.thermal_mass_per_m2 ?? 0.03} kWh/m²/K`}
           />
         </SummarySection>
       </div>
 
-      {/* Acknowledgement refusal banner (INSTRUCTION-324). Normally
-          unreachable — the deploy button is disabled until every item is
-          ticked — but rendered defensively for the race where warnings
-          changed server-side between validate and deploy. */}
-      {ackOutstanding && (
-        <div
-          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
-          role="alert"
-          data-testid="ack-outstanding-banner"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={16} className="text-[var(--amber)]" />
-            <p className="text-sm font-medium text-[var(--amber)]">
-              Deploy blocked — unacknowledged warnings
-            </p>
-          </div>
-          <p className="text-sm text-[var(--amber)]">
-            The server requires explicit acknowledgement of:{' '}
-            {ackOutstanding.outstanding.join(', ')}. Go back through the
-            wizard if the configuration changed, or tick the confirmations
-            above.
-          </p>
+      {/* INSTRUCTION-414 (D8/R3) — the single deploy-outcome region. One
+          `role="alert"` home (alone — the role's implicit assertive live-region
+          is the intended urgency for a refusal the operator just triggered and
+          is waiting on). The scroll-into-view effect above brings it to the
+          click site. Renders exactly one refusal banner via the guard chain. */}
+      {deployOutcome && (
+        <div ref={outcomeRef} role="alert" data-testid="deploy-outcome-region">
+          {renderOutcomeBanner(deployOutcome)}
         </div>
       )}
 
-      {/* INSTRUCTION-412 (R5) — deploy validation-error banner. Renders the
-          backend 422 detail verbatim (heat_sources boundary guard / validate_config)
-          so a rejected deploy is VISIBLE — the wizard-surface counterpart of the
-          panel's 241C saveError banner. Before 412 this detail was swallowed. */}
-      {deployError && (
-        <div
-          className="p-4 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/40"
-          role="alert"
-          data-testid="deploy-error-banner"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={16} className="text-[var(--red)]" />
-            <p className="text-sm font-medium text-[var(--red)]">
-              Deploy rejected
-            </p>
-          </div>
-          <p className="text-sm text-[var(--text)]">{deployError.detail}</p>
-        </div>
-      )}
-
-      {/* Destructive-deploy refusal banner (INSTRUCTION-137 Task 3) */}
-      {destructive && (
-        <div
-          className="p-4 rounded-lg bg-[var(--amber)]/10 border border-[var(--amber)]/30"
-          role="alert"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={16} className="text-[var(--amber)]" />
-            <p className="text-sm font-medium text-[var(--amber)]">
-              Destructive deploy refused
-            </p>
-          </div>
-          <p className="text-sm text-[var(--amber)]">
-            This deploy would remove sections from your existing configuration.
-            Removed sections: {destructive.removed_sections.join(', ')}. Click
-            Back to load your existing config via Welcome → Edit Existing, or
-            click Force Deploy to overwrite.
-          </p>
-        </div>
-      )}
-
-      {/* Actions */}
+      {/* Actions — Download Config only. The sole deploy trigger is the footer
+          primary action (WizardShell), per INSTRUCTION-414 D1. */}
       <div className="flex items-center gap-3 pt-4 border-t border-[var(--border)]">
         <button
           onClick={downloadYaml}
@@ -417,34 +438,6 @@ export function StepReview({
           <Download size={16} />
           Download Config
         </button>
-        <button
-          onClick={handleDeploy}
-          disabled={isDeploying || unacknowledgedCount > 0}
-          title={
-            unacknowledgedCount > 0
-              ? `${unacknowledgedCount} warning${unacknowledgedCount === 1 ? '' : 's'} awaiting confirmation`
-              : undefined
-          }
-          className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
-        >
-          {isDeploying ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              Deploying...
-            </>
-          ) : (
-            'Deploy Configuration'
-          )}
-        </button>
-        {destructive && (
-          <button
-            onClick={handleForceDeploy}
-            disabled={isDeploying || unacknowledgedCount > 0}
-            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[var(--amber)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
-          >
-            Force Deploy
-          </button>
-        )}
       </div>
     </div>
   )

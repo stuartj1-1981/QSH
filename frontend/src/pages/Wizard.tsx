@@ -1,4 +1,6 @@
+import { useEffect, useRef } from 'react'
 import { useWizard } from '../hooks/useWizard'
+import { isDeployResponse } from '../types/config'
 import { WizardShell } from '../components/wizard/WizardShell'
 import { StepRestoreBackup } from '../components/wizard/StepRestoreBackup'
 import { StepWelcome } from '../components/wizard/StepWelcome'
@@ -26,21 +28,41 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
   const wizard = useWizard()
 
   // INSTRUCTION-324 — fired acknowledged-class warnings (rule_id non-null)
-  // not yet ticked. Gates BOTH deploy affordances (the shell footer button
-  // and StepReview's own button) so the server-side 409 is never the first
-  // line of defence the user meets.
+  // not yet ticked. Gates the footer Deploy button (INSTRUCTION-414 D1 — now
+  // the sole deploy affordance) so the server-side 409 is never the first line
+  // of defence the user meets.
   const ackedIds = new Set(wizard.acknowledgedRuleIds)
-  const hasUnacknowledged = wizard.validationWarnings.some(
+  const unacknowledgedCount = wizard.validationWarnings.filter(
     (w) => w.rule_id !== null && !ackedIds.has(w.rule_id)
-  )
+  ).length
+  const hasUnacknowledged = unacknowledgedCount > 0
+
+  // INSTRUCTION-414 (D6) — a successful deploy seals the egress channels and
+  // schedules the redirect. Watch the single outcome home for the success
+  // shape rather than inspecting the deploy() return in handleNext.
+  const deploySucceeded =
+    isDeployResponse(wizard.deployOutcome) && wizard.deployOutcome.deployed
+
+  // INSTRUCTION-414 (D6) — the redirect fires 3 s after a success. A ref keeps
+  // the callback current without re-arming the timer on every parent re-render
+  // (App re-renders on WebSocket ticks; a bare dep would reset the countdown).
+  const onCompleteRef = useRef(onComplete)
+  useEffect(() => {
+    onCompleteRef.current = onComplete
+  }, [onComplete])
+  useEffect(() => {
+    if (!deploySucceeded) return
+    const t = setTimeout(() => onCompleteRef.current(), 3000)
+    return () => clearTimeout(t)
+  }, [deploySucceeded])
 
   const handleNext = async () => {
     if (wizard.stepName === 'review') {
-      const result = await wizard.deploy()
-      if (result && 'deployed' in result && result.deployed) {
-        // Redirect to home after a brief delay to show success
-        setTimeout(() => onComplete(), 3000)
-      }
+      // INSTRUCTION-414 (D1/D3) — the footer button is the sole deploy trigger.
+      // The outcome is single-homed in useWizard and rendered by StepReview;
+      // handleNext does not inspect the result (the success effect above owns
+      // the redirect).
+      await wizard.deploy()
       return
     }
     await wizard.next()
@@ -160,7 +182,7 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
             acknowledgedRuleIds={wizard.acknowledgedRuleIds}
             onAcknowledge={wizard.toggleAcknowledgement}
             isDeploying={wizard.isDeploying}
-            onDeploy={wizard.deploy}
+            deployOutcome={wizard.deployOutcome}
             onForceDeploy={wizard.forceDeploy}
           />
         )
@@ -177,9 +199,22 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
       isFirstStep={wizard.currentStep === 0}
       isLastStep={wizard.stepName === 'review'}
       isDeploying={wizard.isDeploying}
-      nextDisabled={wizard.stepName === 'review' && hasUnacknowledged}
+      // INSTRUCTION-414 (D6) — the footer primary stays inert after a success
+      // (as well as while acknowledgements are outstanding on the review step);
+      // Back is inert during a flight and after success; Exit is withheld the
+      // same way. All three egress channels are sealed, so an outcome can only
+      // ever exist while the review step is mounted.
+      nextDisabled={
+        (wizard.stepName === 'review' && hasUnacknowledged) || deploySucceeded
+      }
+      nextDisabledReason={
+        wizard.stepName === 'review' && hasUnacknowledged
+          ? `${unacknowledgedCount} warning${unacknowledgedCount === 1 ? '' : 's'} awaiting confirmation`
+          : undefined
+      }
+      backDisabled={wizard.isDeploying || deploySucceeded}
       validationErrors={wizard.validationErrors}
-      onExit={onExit}
+      onExit={wizard.isDeploying || deploySucceeded ? undefined : onExit}
     >
       {renderStep()}
     </WizardShell>

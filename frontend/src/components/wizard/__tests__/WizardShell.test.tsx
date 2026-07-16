@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { WizardShell } from '../WizardShell'
 
 const baseProps = {
@@ -92,5 +92,45 @@ describe('WizardShell progress bar / label alignment', () => {
       expect(progressContainer!.className).not.toMatch(/\bmax-w-4xl\b/)
       unmount()
     }
+  })
+})
+
+// ── INSTRUCTION-414: footer disabled-reason title + Back seal ────────────
+describe('WizardShell footer controls (INSTRUCTION-414)', () => {
+  const shellProps = {
+    ...baseProps,
+    totalSteps: 3,
+    stepLabels: ['a', 'b', 'c'],
+  }
+
+  it('renders nextDisabledReason as the primary button title (D5 tooltip migration)', () => {
+    render(
+      <WizardShell
+        {...shellProps}
+        isLastStep
+        nextDisabled
+        nextDisabledReason="2 warnings awaiting confirmation"
+      />
+    )
+    const btn = screen.getByRole('button', { name: /deploy/i })
+    expect(btn.getAttribute('title')).toBe('2 warnings awaiting confirmation')
+  })
+
+  it('leaves the primary button title unset when no reason is given', () => {
+    render(<WizardShell {...shellProps} isLastStep />)
+    const btn = screen.getByRole('button', { name: /deploy/i })
+    expect(btn.getAttribute('title')).toBeNull()
+  })
+
+  it('disables Back when backDisabled is set even though it is not the first step (D6 seal)', () => {
+    render(<WizardShell {...shellProps} backDisabled />)
+    const back = screen.getByRole('button', { name: /back/i }) as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+  })
+
+  it('leaves Back enabled when backDisabled is unset and not the first step', () => {
+    render(<WizardShell {...shellProps} />)
+    const back = screen.getByRole('button', { name: /back/i }) as HTMLButtonElement
+    expect(back.disabled).toBe(false)
   })
 })

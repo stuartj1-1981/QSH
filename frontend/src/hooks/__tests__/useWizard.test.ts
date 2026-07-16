@@ -251,3 +251,263 @@ describe('useWizard deploy validation error (INSTRUCTION-412)', () => {
     )
   })
 })
+
+// ── INSTRUCTION-414: deploy-outcome state lifecycle + re-entrancy ─────────
+describe('useWizard deploy outcome lifecycle (INSTRUCTION-414)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const mock422 = () =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ detail: 'flow limits out of range' }),
+    } as Response)
+
+  it('stores a 422 outcome in deployOutcome (single home)', async () => {
+    mock422()
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    expect(result.current.deployOutcome).toMatchObject({
+      kind: 'validation',
+      status: 422,
+    })
+  })
+
+  it('clears deployOutcome on back()', async () => {
+    mock422()
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    expect(result.current.deployOutcome).not.toBeNull()
+    act(() => {
+      result.current.back()
+    })
+    expect(result.current.deployOutcome).toBeNull()
+  })
+
+  it('clears deployOutcome on updateConfig (a submission-changing edit)', async () => {
+    mock422()
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    act(() => {
+      result.current.updateConfig('thermal', { peak_loss_kw: 6 })
+    })
+    expect(result.current.deployOutcome).toBeNull()
+  })
+
+  it('clears deployOutcome on setConfig (wholesale config load — R4)', async () => {
+    mock422()
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    act(() => {
+      result.current.setConfig({ driver: 'ha', rooms: {} })
+    })
+    expect(result.current.deployOutcome).toBeNull()
+  })
+
+  it('clears deployOutcome on toggleAcknowledgement (ack banner self-heal — L1)', async () => {
+    mock422()
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    act(() => {
+      result.current.toggleAcknowledgement('emitter_kw_defaulted:lounge', true)
+    })
+    expect(result.current.deployOutcome).toBeNull()
+  })
+
+  it('captures a network failure as a typed outcome, never null (D7)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unreachable'))
+    const { result } = renderHook(() => useWizard())
+    let outcome: unknown
+    await act(async () => {
+      outcome = await result.current.deploy()
+    })
+    expect(outcome).toMatchObject({ kind: 'network' })
+    expect(result.current.deployOutcome).toMatchObject({ kind: 'network' })
+  })
+
+  it('retains the destructive outcome through the force flight (does not clear at entry — L2)', async () => {
+    let resolveForce: (v: unknown) => void = () => {}
+    const mockFetch = vi
+      .fn()
+      // First call: a normal deploy that 409s destructive.
+      .mockResolvedValueOnce({
+        status: 409,
+        json: async () => ({ detail: { removed_sections: ['energy'] } }),
+      })
+      // Second call: the force flight — pending until we resolve it.
+      .mockImplementationOnce(
+        () => new Promise((r) => { resolveForce = r as (v: unknown) => void })
+      )
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.deploy()
+    })
+    expect(result.current.deployOutcome).toMatchObject({ kind: 'destructive' })
+
+    // Start the force flight without resolving.
+    let forcePromise: Promise<unknown> = Promise.resolve()
+    act(() => {
+      forcePromise = result.current.forceDeploy() as Promise<unknown>
+    })
+    // Mid-flight: the destructive refusal is RETAINED, not cleared.
+    expect(result.current.deployOutcome).toMatchObject({ kind: 'destructive' })
+    expect(result.current.isDeploying).toBe(true)
+
+    // Resolve to success; the outcome flips to the deployed response.
+    await act(async () => {
+      resolveForce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          deployed: true,
+          yaml_path: '/config/qsh.yaml',
+          message: 'ok',
+          warnings: [],
+        }),
+      })
+      await forcePromise
+    })
+    expect(result.current.deployOutcome).toMatchObject({ deployed: true })
+  })
+
+  it('re-entrancy: two deploy() calls in one act issue exactly one fetch (ref guard — R2)', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        deployed: true,
+        yaml_path: '/config/qsh.yaml',
+        message: 'ok',
+        warnings: [],
+      }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      const p1 = result.current.deploy()
+      const p2 = result.current.deploy()
+      await Promise.all([p1, p2])
+    })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── INSTRUCTION-414: hook deploy 409 / acknowledgement threading ─────────
+// (relocated from StepReview.test.tsx, which is now purely a prop-driven
+//  renderer suite.)
+describe('useWizard deploy 409 + acknowledgement threading', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('translates a 409 destructive response into a kind:destructive object; posts force=false', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 409,
+      json: () =>
+        Promise.resolve({
+          detail: {
+            message: 'Refusing destructive deploy',
+            removed_sections: ['energy', 'mqtt'],
+            existing_sections: ['rooms', 'heat_source', 'energy', 'mqtt'],
+            incoming_sections: ['rooms', 'heat_source'],
+          },
+        }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    let deployResult: unknown
+    await act(async () => {
+      deployResult = await result.current.deploy()
+    })
+
+    expect(deployResult).toEqual({
+      kind: 'destructive',
+      removed_sections: ['energy', 'mqtt'],
+      existing_sections: ['rooms', 'heat_source', 'energy', 'mqtt'],
+      incoming_sections: ['rooms', 'heat_source'],
+    })
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.force).toBe(false)
+  })
+
+  it('forceDeploy posts force=true', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          deployed: true,
+          yaml_path: '/config/qsh.yaml',
+          message: 'ok',
+          warnings: [],
+        }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    await act(async () => {
+      await result.current.forceDeploy()
+    })
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.force).toBe(true)
+  })
+
+  it('deploy posts acknowledged_rule_ids and translates the ack 409', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 409,
+      json: () =>
+        Promise.resolve({
+          detail: {
+            message: 'Deploy blocked',
+            outstanding: ['emitter_kw_defaulted:lounge'],
+          },
+        }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { result } = renderHook(() => useWizard())
+    act(() => {
+      result.current.toggleAcknowledgement('solar_block_no_entity', true)
+    })
+    let deployResult: unknown
+    await act(async () => {
+      deployResult = await result.current.deploy()
+    })
+
+    expect(deployResult).toEqual({
+      kind: 'ack_outstanding',
+      outstanding: ['emitter_kw_defaulted:lounge'],
+    })
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.acknowledged_rule_ids).toEqual(['solar_block_no_entity'])
+  })
+
+  it('toggleAcknowledgement adds and removes rule ids', () => {
+    const { result } = renderHook(() => useWizard())
+    act(() => {
+      result.current.toggleAcknowledgement('a:1', true)
+      result.current.toggleAcknowledgement('b:2', true)
+    })
+    expect(result.current.acknowledgedRuleIds.sort()).toEqual(['a:1', 'b:2'])
+    act(() => {
+      result.current.toggleAcknowledgement('a:1', false)
+    })
+    expect(result.current.acknowledgedRuleIds).toEqual(['b:2'])
+  })
+})
