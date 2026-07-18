@@ -53,12 +53,48 @@ const MOCK_SYSID = {
       pc_fits: 12,
       solar_gain: 0.012,
       confidence: 'medium',
+      // INSTRUCTION-420 — sensor-cadence classification struct.
+      sensor_cadence: {
+        class: 'blocked',
+        median_step_c: 0.5,
+        median_interval_s: 600,
+        admissible_fraction: 0,
+        event_count: 20,
+        window_span_s: 12000,
+      },
     },
   },
 }
 
+// INSTRUCTION-415/422 — the room-detail expansion fetches /api/sysid/{room}
+// via useSysidRoom and resets via resetSysidRoom; both mocked module-wide.
+const MOCK_ROOM_DETAIL = {
+  room: 'lounge',
+  u_kw_per_c: 0.234,
+  c_kwh_per_c: 1.42,
+  u_observations: 3,
+  c_observations: 4,
+  c_source: 'PC',
+  pc_fits: 2,
+  solar_gain: 0.012,
+  confidence: 'low',
+  gate_stats: {
+    room_u_qualified: 3,
+    room_u_rejected_rate: 41,
+    room_u_rejected_delta_ext: 5,
+    room_u_rejected_no_c: 0,
+    room_u_flat: 12,
+    room_u_rejected_sign: 2,
+    room_u_rejected_outlier: 1,
+  },
+}
+
+const mockResetSysidRoom = vi.fn()
+
 vi.mock('../../hooks/useSysid', () => ({
   useSysid: () => ({ data: MOCK_SYSID, error: null }),
+  useSysidRoom: () => ({ data: MOCK_ROOM_DETAIL, error: null }),
+  resetSysidRoom: (room: string) => mockResetSysidRoom(room),
 }))
 
 vi.mock('../../hooks/useConfig', () => ({
@@ -92,19 +128,19 @@ describe('Engineering page tooltips', () => {
     expect(within(heading).getByLabelText('Help')).toBeInTheDocument()
   })
 
-  it('SysID column header row contains exactly nine Help buttons (one per column)', () => {
+  it('SysID column header row contains exactly ten Help buttons (one per column)', () => {
     // The tight count is intentional. Adding a column without a tooltip
     // SHOULD fail this test — that is the assertion's job.
     render(<Engineering />)
     const headers = screen.getAllByRole('columnheader')
-    expect(headers).toHaveLength(9)
+    expect(headers).toHaveLength(10)
     const buttons = headers.flatMap((h) => within(h).getAllByLabelText('Help'))
-    expect(buttons).toHaveLength(9)
+    expect(buttons).toHaveLength(10)
   })
 
   // Column index map (matches the order of <th> elements in SysidTable):
   // 0 Room, 1 U (kW/°C), 2 C (kWh/°C), 3 U obs, 4 C obs, 5 C source,
-  // 6 PC fits, 7 Solar, 8 Confidence
+  // 6 PC fits, 7 Solar, 8 Confidence, 9 Sensor (INSTRUCTION-420)
   const highRiskCases = [
     {
       label: 'U (kW/°C)',
@@ -112,9 +148,10 @@ describe('Engineering page tooltips', () => {
       substr: 'NOT a room-by-room heat-loss survey',
     },
     {
+      // INSTRUCTION-416 — pc_fits is per-room now; the tooltip must say so.
       label: 'PC fits',
       headerIdx: 6,
-      substr: 'same number is shown in every row',
+      substr: 'for this room',
     },
     {
       label: 'Solar',
@@ -122,9 +159,11 @@ describe('Engineering page tooltips', () => {
       substr: 'that is expected, not a fault',
     },
     {
+      // INSTRUCTION-416 D4 — the badge is a per-room U-evidence indicator;
+      // C maturity moved to its own column.
       label: 'Confidence',
       headerIdx: 8,
-      substr: 'C and Solar observations are NOT inputs',
+      substr: 'C maturity is shown in its own column',
     },
   ]
 
@@ -139,17 +178,29 @@ describe('Engineering page tooltips', () => {
     },
   )
 
-  it('U obs tooltip embeds current MIN_OBS_FOR_USE and CONFIDENCE_FULL_AT thresholds', async () => {
-    // Bounded patterns are deliberate. Bare substring `"10"` is also a substring
-    // of `"100"`, so a naive assertion would pass trivially when the second value
-    // is present. Anchor each numeric on its surrounding prose so the two
-    // assertions remain independent.
+  it('U obs tooltip embeds MIN_OBS_FOR_USE and the 323 precision truth', async () => {
+    // INSTRUCTION-418 D2 — the pre-323 "reaches 1.0 at 100 observations"
+    // count-ratio claim is gone; the tooltip now states the evidence-ramp ×
+    // precision model in operator language.
     render(<Engineering />)
     const headers = screen.getAllByRole('columnheader')
     fireEvent.click(within(headers[3]).getByLabelText('Help'))
     const tooltip = await screen.findByRole('tooltip')
     expect(tooltip).toHaveTextContent(/Below\s+10\s/)
-    expect(tooltip).toHaveTextContent(/at\s+100\s+observations/)
+    expect(tooltip).toHaveTextContent(/precision, not just count/)
+  })
+
+  it('Confidence badge tooltip embeds both band thresholds', async () => {
+    // Bounded patterns are deliberate. Bare substring `"10"` is also a substring
+    // of `"100"`, so a naive assertion would pass trivially when the second value
+    // is present. Anchor each numeric on its surrounding prose so the two
+    // assertions remain independent (INSTRUCTION-416 D4 bands).
+    render(<Engineering />)
+    const headers = screen.getAllByRole('columnheader')
+    fireEvent.click(within(headers[8]).getByLabelText('Help'))
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip).toHaveTextContent(/fewer than\s+10\s+accepted/)
+    expect(tooltip).toHaveTextContent(/High\s+=\s+100\+/)
   })
 
   it('PC fits tooltip embeds current PC_FIT_R_SQUARED_MIN threshold', async () => {
@@ -188,5 +239,96 @@ describe('Engineering page tooltips', () => {
     expect(screen.getByText('Flow Comparison')).toBeInTheDocument()
     expect(screen.queryByText(/\(48h\)/)).toBeNull()
     expect(screen.queryByText(/\(7d\)/)).toBeNull()
+  })
+})
+
+// ── INSTRUCTION-420 — Sensor column ─────────────────────────────────────────
+describe('Engineering sensor-cadence column (INSTRUCTION-420)', () => {
+  it('renders the cadence badge from the API class value', () => {
+    render(<Engineering />)
+    const badge = screen.getByTestId('cadence-badge')
+    expect(badge).toHaveTextContent('Blocked')
+  })
+
+  it('Sensor header tooltip names the fix mechanisms and the advisory stance', async () => {
+    render(<Engineering />)
+    const headers = screen.getAllByRole('columnheader')
+    fireEvent.click(within(headers[9]).getByLabelText('Help'))
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip).toHaveTextContent(/reporting deadband/)
+    expect(tooltip).toHaveTextContent(/cannot learn at current settings/i)
+    expect(tooltip).toHaveTextContent(/never blocks anything/i)
+  })
+})
+
+// ── INSTRUCTION-415/422 — room detail: rejection ledger + reset flow ───────
+describe('Engineering room detail (INSTRUCTION-415 ledger + INSTRUCTION-422 reset)', () => {
+  const expandRow = () => {
+    render(<Engineering />)
+    fireEvent.click(screen.getByTestId('sysid-row-lounge'))
+  }
+
+  it('row click expands the detail with the U rejection ledger, dominant class emphasised', () => {
+    expandRow()
+    const ledger = screen.getByTestId('u-rejection-ledger')
+    // All seven classes render with their counts.
+    expect(ledger).toHaveTextContent('qualified 3')
+    expect(ledger).toHaveTextContent('rate 41')
+    expect(ledger).toHaveTextContent('flat 12')
+    expect(ledger).toHaveTextContent('Δext 5')
+    // Starved room (3 obs < 10) + rate-dominant → the mechanism copy names
+    // the sensor-step fix (INSTRUCTION-415 D4).
+    expect(screen.getByTestId('u-ledger-mechanism')).toHaveTextContent(
+      /steps too large/,
+    )
+    expect(screen.getByTestId('u-ledger-mechanism')).toHaveTextContent(
+      /deadband/,
+    )
+  })
+
+  it('reset flow: confirm states what is discarded; success outcome renders (422)', async () => {
+    mockResetSysidRoom.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        room: 'lounge',
+        was: { u_observations: 3, c_observations: 4, solar_observations: 0,
+               pc_fits: 2, u: 0.19, c: 0.9 },
+        now: { u_prior: 0.4615, c_prior: 0.462 },
+      },
+    })
+    expandRow()
+    fireEvent.click(screen.getByTestId('sysid-reset-request'))
+    const confirm = screen.getByTestId('sysid-reset-confirm')
+    // The confirm names exactly what is discarded, this room only.
+    expect(confirm).toHaveTextContent(/3 U observations/)
+    expect(confirm).toHaveTextContent(/This room only/)
+    fireEvent.click(screen.getByTestId('sysid-reset-confirm-btn'))
+    const outcome = await screen.findByTestId('sysid-reset-outcome')
+    expect(outcome).toHaveTextContent(/Room reset to config priors/)
+    expect(outcome).toHaveTextContent(/discarded 3 U/)
+    expect(outcome).toHaveTextContent(/U 0\.4615/)
+    expect(mockResetSysidRoom).toHaveBeenCalledWith('lounge')
+  })
+
+  it('reset flow: failure outcome renders — no silent failure (414 law)', async () => {
+    mockResetSysidRoom.mockResolvedValueOnce({
+      ok: false,
+      error: 'HTTP 503 — SysID not initialised',
+    })
+    expandRow()
+    fireEvent.click(screen.getByTestId('sysid-reset-request'))
+    fireEvent.click(screen.getByTestId('sysid-reset-confirm-btn'))
+    const outcome = await screen.findByTestId('sysid-reset-outcome')
+    expect(outcome).toHaveTextContent(/Reset failed/)
+    expect(outcome).toHaveTextContent(/503/)
+  })
+
+  it('cancel closes the confirm without calling the API', () => {
+    mockResetSysidRoom.mockClear()
+    expandRow()
+    fireEvent.click(screen.getByTestId('sysid-reset-request'))
+    fireEvent.click(screen.getByText('Cancel'))
+    expect(screen.queryByTestId('sysid-reset-confirm')).toBeNull()
+    expect(mockResetSysidRoom).not.toHaveBeenCalled()
   })
 })

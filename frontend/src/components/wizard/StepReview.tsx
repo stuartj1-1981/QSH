@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Download, AlertTriangle, Check } from 'lucide-react'
+import { useSysid } from '../../hooks/useSysid'
+import { cadenceCopy, cadenceLabel } from '../../lib/sensorCadence'
 import type {
   DeployOutcome,
   QshConfigYaml,
@@ -415,6 +417,14 @@ export function StepReview({
             value={`${thermal?.thermal_mass_per_m2 ?? 0.03} kWh/m²/K`}
           />
         </SummarySection>
+
+        {/* INSTRUCTION-420 D2 — sensor reporting ADVISORY. Informational by
+            construction: it renders measured classes where the running
+            system already has data, degrades honestly to a measuring note
+            otherwise, and shares no code with deploy gating — it can never
+            block a deploy, join the acknowledged-warning set, or create a
+            refusal. */}
+        <SensorCadenceAdvisory />
       </div>
 
       {/* INSTRUCTION-414 (D8/R3) — the single deploy-outcome region. One
@@ -439,6 +449,60 @@ export function StepReview({
           Download Config
         </button>
       </div>
+    </div>
+  )
+}
+
+// INSTRUCTION-420 T5 — per-room sensor reporting classes at the review
+// step, where data exists; else the honest measuring state (a wizard scan
+// window is usually too short for meaningful step statistics in a warm
+// house — the classification accrues on the Engineering page instead).
+function SensorCadenceAdvisory() {
+  const { data } = useSysid()
+  const rooms = data?.rooms ?? {}
+  const classified = Object.entries(rooms).filter(
+    ([, r]) =>
+      r.sensor_cadence != null && r.sensor_cadence.class !== 'insufficient'
+  )
+
+  return (
+    <div
+      data-testid="sensor-cadence-advisory"
+      className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]"
+    >
+      <h3 className="text-sm font-medium text-[var(--text)] mb-3">
+        Sensor reporting (advisory)
+      </h3>
+      {classified.length > 0 ? (
+        <div className="space-y-2">
+          {classified.map(([name, r]) => (
+            <div key={name} className="text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--text-muted)] capitalize">
+                  {name.replace(/_/g, ' ')}
+                </span>
+                <span className="text-[var(--text)] font-mono text-xs">
+                  {cadenceLabel(r.sensor_cadence!.class)}
+                </span>
+              </div>
+              {r.sensor_cadence!.class !== 'ok' && (
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                  {cadenceCopy(r.sensor_cadence!)}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-[var(--text-muted)]">
+          Measuring — sensor reporting statistics accrue while QSH runs.
+          Check the Engineering page after the first night.
+        </p>
+      )}
+      <p className="text-xs text-[var(--text-muted)] mt-3">
+        Informational only — a coarse sensor yields a slower-learning system,
+        not an unsafe one. This never blocks deployment.
+      </p>
     </div>
   )
 }

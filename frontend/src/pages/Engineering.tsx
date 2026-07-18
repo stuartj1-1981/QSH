@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useLive } from '../hooks/useLive'
-import { useSysid } from '../hooks/useSysid'
+import { useSysid, useSysidRoom, resetSysidRoom } from '../hooks/useSysid'
 import { useHistory } from '../hooks/useHistory'
 import { useRawConfig } from '../hooks/useConfig'
 import { TrendChart } from '../components/TrendChart'
@@ -8,7 +8,8 @@ import { HardwareTelemetry } from '../components/HardwareTelemetry'
 import { HelpTip } from '../components/HelpTip'
 import { cn } from '../lib/utils'
 import { MIN_OBS_FOR_USE, CONFIDENCE_FULL_AT, PC_FIT_R_SQUARED_MIN } from '../lib/sysidConstants'
-import type { SysidRoom } from '../types/api'
+import { EMPTY_CADENCE, cadenceCopy, cadenceLabel } from '../lib/sensorCadence'
+import type { SensorCadence, SysidRoom } from '../types/api'
 
 export function Engineering() {
   const { data: live } = useLive()
@@ -128,12 +129,15 @@ function PipelineState({
 }
 
 function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
+  // INSTRUCTION-415 — one room expandable at a time; the detail row hosts
+  // the per-room U rejection ledger (fetched lazily from /api/sysid/{room}).
+  const [expanded, setExpanded] = useState<string | null>(null)
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 overflow-x-auto">
       <h2 className="text-sm font-semibold text-[var(--accent)] mb-3 flex items-center gap-1.5">
         SYSTEM ID
         <HelpTip
-          text={`Per-room thermal parameters learned from passive observation. U is heat loss, C is thermal mass. Both start at a config-derived prior and migrate toward the learned value as observations accumulate. Confidence reaches full at ${CONFIDENCE_FULL_AT} observations.`}
+          text={`Per-room thermal parameters learned from passive observation. U is heat loss, C is thermal mass. Both start at a config-derived prior and migrate toward the learned value as observations accumulate. Confidence = evidence ramp (first ${MIN_OBS_FOR_USE} observations) × precision (how consistent recent observations are) — a room can hold hundreds of observations at moderate confidence if its readings scatter.`}
           size={12}
         />
       </h2>
@@ -168,7 +172,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 U obs
                 <HelpTip
-                  text={`Number of accepted U observations. Below ${MIN_OBS_FOR_USE} the value shown is essentially the prior. Confidence reaches 1.0 (fully learned) at ${CONFIDENCE_FULL_AT} observations.`}
+                  text={`Number of accepted U observations. Below ${MIN_OBS_FOR_USE} the value shown is the prior. More observations raise confidence only insofar as they agree — precision, not just count.`}
                   size={12}
                 />
               </span>
@@ -195,7 +199,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 PC fits
                 <HelpTip
-                  text={`System-wide count of successful passive-cooling window fits — the same number is shown in every row. Each fit is an extended HP-off period where the cooling curve was clean enough (R² ≥ ${PC_FIT_R_SQUARED_MIN}) to extract a time constant. The primary mechanism by which C converges in real installations.`}
+                  text={`Number of successful passive-cooling window fits for this room. Each fit is an extended HP-off period where the cooling curve was clean enough (R² ≥ ${PC_FIT_R_SQUARED_MIN}) to extract a time constant. The primary mechanism by which C converges in real installations.`}
                   size={12}
                 />
               </span>
@@ -209,11 +213,20 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
                 />
               </span>
             </th>
-            <th className="pb-2">
+            <th className="pb-2 pr-1 sm:pr-3">
               <span className="inline-flex items-center gap-1">
                 Confidence
                 <HelpTip
-                  text="Overall maturity badge. Derived from U observations and the system-wide passive-cooling fit count only — ‘high’ requires substantial U history AND multiple PC fits, ‘medium’ requires moderate U history OR some PC fits, ‘low’ otherwise. C and Solar observations are NOT inputs to this badge; treat the badge as a coarse U/PC maturity indicator, not a holistic learning summary."
+                  text={`Maturity of this room's heat-loss (U) evidence: Low = fewer than ${MIN_OBS_FOR_USE} accepted observations (value shown is the prior), Medium = learned value in use, High = ${CONFIDENCE_FULL_AT}+. C maturity is shown in its own column.`}
+                  size={12}
+                />
+              </span>
+            </th>
+            <th className="pb-2">
+              <span className="inline-flex items-center gap-1">
+                Sensor
+                <HelpTip
+                  text="Measured reporting behaviour of this room's temperature sensor: the step size and cadence actually observed on the wire, classified against what the estimator can admit. OK = compatible with learning; Coarse = learns at reduced rate; Blocked = cannot learn at current settings (check the device's reporting deadband, minimum-report interval, or device class); Measuring = too few updates observed yet to classify. Advisory only — never blocks anything."
                   size={12}
                 />
               </span>
@@ -222,23 +235,253 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
         </thead>
         <tbody>
           {Object.entries(rooms).map(([name, r]) => (
-            <tr key={name} className="border-b border-[var(--border)]/50">
-              <td className="py-1.5 pr-1 sm:pr-3 font-medium capitalize">{name.replace(/_/g, ' ')}</td>
-              <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.u_kw_per_c?.toFixed(4)}</td>
-              <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.c_kwh_per_c?.toFixed(4)}</td>
-              <td className="py-1.5 pr-1 sm:pr-3">{r.u_observations}</td>
-              <td className="py-1.5 pr-1 sm:pr-3">{r.c_observations}</td>
-              <td className="py-1.5 pr-1 sm:pr-3">{r.c_source}</td>
-              <td className="py-1.5 pr-1 sm:pr-3">{r.pc_fits}</td>
-              <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.solar_gain?.toFixed(3)}</td>
-              <td className="py-1.5">
-                <ConfidenceBadge level={r.confidence} />
-              </td>
-            </tr>
+            <Fragment key={name}>
+              <tr
+                data-testid={`sysid-row-${name}`}
+                className="border-b border-[var(--border)]/50 cursor-pointer hover:bg-[var(--bg)]/60"
+                onClick={() => setExpanded(expanded === name ? null : name)}
+                aria-expanded={expanded === name}
+              >
+                <td className="py-1.5 pr-1 sm:pr-3 font-medium capitalize">{name.replace(/_/g, ' ')}</td>
+                <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.u_kw_per_c?.toFixed(4)}</td>
+                <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.c_kwh_per_c?.toFixed(4)}</td>
+                <td className="py-1.5 pr-1 sm:pr-3">{r.u_observations}</td>
+                <td className="py-1.5 pr-1 sm:pr-3">{r.c_observations}</td>
+                <td className="py-1.5 pr-1 sm:pr-3">{r.c_source}</td>
+                <td className="py-1.5 pr-1 sm:pr-3">{r.pc_fits}</td>
+                <td className="py-1.5 pr-1 sm:pr-3 font-mono">{r.solar_gain?.toFixed(3)}</td>
+                <td className="py-1.5 pr-1 sm:pr-3">
+                  <ConfidenceBadge level={r.confidence} />
+                </td>
+                <td className="py-1.5">
+                  <CadenceBadge cadence={r.sensor_cadence} />
+                </td>
+              </tr>
+              {expanded === name && (
+                <tr className="border-b border-[var(--border)]/50">
+                  <td colSpan={10} className="py-2 pl-2">
+                    <SysidRoomDetailPanel room={name} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>
     </div>
+  )
+}
+
+// INSTRUCTION-415 — per-room U-candidate rejection ledger (D4). A starved
+// room becomes diagnosable in one glance: the dominant rejection class names
+// the mechanism. The ledger is total — the seven classes sum to the room's
+// U-candidate count.
+const U_LEDGER_CLASSES: { key: string; label: string }[] = [
+  { key: 'room_u_qualified', label: 'qualified' },
+  { key: 'room_u_flat', label: 'flat' },
+  { key: 'room_u_rejected_rate', label: 'rate' },
+  { key: 'room_u_rejected_sign', label: 'sign' },
+  { key: 'room_u_rejected_delta_ext', label: 'Δext' },
+  { key: 'room_u_rejected_no_c', label: 'no-C' },
+  { key: 'room_u_rejected_outlier', label: 'outlier' },
+]
+
+const U_LEDGER_MECHANISM_COPY: Record<string, string> = {
+  room_u_rejected_rate:
+    'This sensor publishes in steps too large for the estimator (>0.1 °C per 30 s cycle) — check the device’s reporting deadband or minimum-report throttle.',
+  room_u_rejected_no_c:
+    'This room has no usable thermal-mass prior — check its area and facing in the configuration.',
+}
+
+function SysidRoomDetailPanel({ room }: { room: string }) {
+  const [refreshKey, setRefreshKey] = useState(0)
+  const { data, error } = useSysidRoom(room, refreshKey)
+  // INSTRUCTION-422 — reset flow state: confirm-at-the-action (137/324
+  // idiom) with the outcome rendered on BOTH arms (the 414 law).
+  const [confirming, setConfirming] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const handleReset = async () => {
+    setResetting(true)
+    const res = await resetSysidRoom(room)
+    setResetting(false)
+    setConfirming(false)
+    if (res.ok) {
+      const w = res.result.was
+      const n = res.result.now
+      // persisted === false: the estimator's config/state-mismatch guard is
+      // suppressing saves — the reset holds in memory only. Say so.
+      const persistenceNote =
+        res.result.persisted === false
+          ? ' Warning: state persistence is currently suspended (config/state mismatch) — this reset will not survive a restart.'
+          : ''
+      setOutcome({
+        ok: true,
+        text: `Room reset to config priors — discarded ${w.u_observations} U, ${w.c_observations} C and ${w.solar_observations} solar observations (${w.pc_fits} passive-cooling fits). New priors: U ${n.u_prior.toFixed(4)} kW/°C, C ${n.c_prior.toFixed(3)} kWh/°C.${persistenceNote}`,
+      })
+      setRefreshKey((k) => k + 1)
+    } else {
+      setOutcome({ ok: false, text: `Reset failed: ${res.error}` })
+    }
+  }
+
+  if (error) {
+    return <div className="text-xs text-[var(--red,#ef4444)]">Failed to load room detail: {error}</div>
+  }
+  if (!data) {
+    return <div className="text-xs text-[var(--text-muted)]">Loading room detail…</div>
+  }
+
+  const gs = data.gate_stats ?? {}
+  const counts = U_LEDGER_CLASSES.map(({ key, label }) => ({
+    key,
+    label,
+    count: gs[key] ?? 0,
+  }))
+  const candidates = counts.reduce((s, c) => s + c.count, 0)
+  const rejections = counts.filter((c) => c.key !== 'room_u_qualified')
+  const dominant = rejections.reduce(
+    (best, c) => (c.count > best.count ? c : best),
+    rejections[0],
+  )
+  // Starvation judged on the DETAIL fetch (fresh), not the list-row
+  // snapshot: the dominant class is emphasised only when the room is
+  // below the learned-value floor and candidates exist (INSTRUCTION-415 D4).
+  const starved = data.u_observations < MIN_OBS_FOR_USE && candidates > 0
+  const emphasise = starved && dominant.count > 0
+
+  return (
+    <div data-testid="u-rejection-ledger" className="space-y-1.5 text-xs">
+      <div className="flex items-center gap-1 font-medium text-[var(--text-muted)]">
+        U observation ledger
+        <HelpTip
+          text="Every 30 s cycle where this room was eligible for a heat-loss (U) observation resolved to exactly one class below. ‘qualified’ = accepted; the rest name why the cycle was discarded: ‘flat’ = no temperature change, ‘rate’ = step too large for the glitch gate, ‘sign’ = warming while the source was off, ‘Δext’ = room too close to outdoor temperature, ‘no-C’ = no usable thermal-mass prior, ‘outlier’ = implausible computed U."
+          size={12}
+        />
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono">
+        {counts.map(({ key, label, count }) => (
+          <span
+            key={key}
+            className={cn(
+              emphasise && key === dominant.key
+                ? 'text-[var(--red,#ef4444)] font-semibold'
+                : key === 'room_u_qualified'
+                  ? 'text-[var(--text)]'
+                  : 'text-[var(--text-muted)]',
+            )}
+          >
+            {label} {count}
+          </span>
+        ))}
+      </div>
+      {emphasise && U_LEDGER_MECHANISM_COPY[dominant.key] && (
+        <p data-testid="u-ledger-mechanism" className="text-[var(--text-muted)] max-w-prose">
+          {U_LEDGER_MECHANISM_COPY[dominant.key]}
+        </p>
+      )}
+
+      {/* INSTRUCTION-422 — per-room reset: confirm states exactly what is
+          discarded; the outcome renders on BOTH arms (no silent success,
+          no silent failure). Learned state is evidence — reset after a
+          sensor fix or geometry correction, not as routine maintenance. */}
+      <div className="pt-1.5 space-y-1.5">
+        {!confirming ? (
+          <button
+            data-testid="sysid-reset-request"
+            onClick={(e) => {
+              e.stopPropagation()
+              setOutcome(null)
+              setConfirming(true)
+            }}
+            className="px-2 py-1 rounded border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--red,#ef4444)] hover:border-[var(--red,#ef4444)]"
+          >
+            Reset room learning…
+          </button>
+        ) : (
+          <div
+            data-testid="sysid-reset-confirm"
+            className="rounded border border-[var(--red,#ef4444)]/40 p-2 space-y-1.5"
+          >
+            <p className="max-w-prose">
+              Discard this room&apos;s learned thermal state —{' '}
+              {data.u_observations} U observations, {data.c_observations} C
+              observations, {data.pc_fits} passive-cooling fits. This room
+              only; priors are re-derived from the current configuration.
+            </p>
+            <div className="flex gap-2">
+              <button
+                data-testid="sysid-reset-confirm-btn"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handleReset()
+                }}
+                disabled={resetting}
+                className="px-2 py-1 rounded bg-[var(--red,#ef4444)]/15 border border-[var(--red,#ef4444)]/50 text-xs font-medium text-[var(--red,#ef4444)] disabled:opacity-50"
+              >
+                {resetting ? 'Resetting…' : 'Discard & reset'}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setConfirming(false)
+                }}
+                disabled={resetting}
+                className="px-2 py-1 rounded border border-[var(--border)] text-xs text-[var(--text-muted)]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {outcome && (
+          <p
+            data-testid="sysid-reset-outcome"
+            className={cn(
+              'max-w-prose',
+              outcome.ok
+                ? 'text-[var(--green,#22c55e)]'
+                : 'text-[var(--red,#ef4444)]',
+            )}
+          >
+            {outcome.text}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// INSTRUCTION-420 — the Sensor column badge. Label/copy helpers live in
+// lib/sensorCadence.ts (shared with the wizard review advisory).
+function CadenceBadge({ cadence }: { cadence?: SensorCadence | null }) {
+  const colors: Record<string, string> = {
+    ok: 'bg-green-500/20 text-green-600',
+    coarse: 'bg-amber-500/20 text-amber-600',
+    blocked: 'bg-red-500/20 text-red-600',
+    insufficient: 'bg-gray-500/20 text-gray-500',
+  }
+  const cls = cadence?.class ?? 'insufficient'
+  return (
+    // stopPropagation: this badge (and its HelpTip) sits inside the
+    // clickable SysID row — opening the tooltip must not also toggle the
+    // row expansion (which would fire the detail fetch as a side effect).
+    <span
+      className="inline-flex items-center gap-1"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span
+        data-testid="cadence-badge"
+        className={cn(
+          'px-2 py-0.5 rounded-full text-xs font-medium',
+          colors[cls] ?? colors.insufficient,
+        )}
+      >
+        {cadenceLabel(cls)}
+      </span>
+      <HelpTip text={cadenceCopy(cadence ?? EMPTY_CADENCE)} size={12} />
+    </span>
   )
 }
 

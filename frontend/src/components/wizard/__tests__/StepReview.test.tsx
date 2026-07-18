@@ -10,6 +10,15 @@ import type {
   DeployValidationError,
   WizardWarning,
 } from '../../../types/config'
+import type { SysidResponse } from '../../../types/api'
+
+// INSTRUCTION-420 — the review page hosts a sensor-cadence ADVISORY fed by
+// useSysid. Mocked module-wide so no test performs a real fetch; individual
+// tests swap the payload via mockSysidData.
+let mockSysidData: SysidResponse | null = null
+vi.mock('../../../hooks/useSysid', () => ({
+  useSysid: () => ({ data: mockSysidData, error: null }),
+}))
 
 // Minimum config that makes StepReview render without runtime errors.
 const baseConfig = {
@@ -233,5 +242,77 @@ describe('StepReview acknowledgement controls (INSTRUCTION-324 + 414 tick-seal)'
     for (const cb of screen.getAllByRole('checkbox')) {
       expect((cb as HTMLInputElement).disabled).toBe(false)
     }
+  })
+})
+
+// ── INSTRUCTION-420 — sensor reporting advisory (never blocking) ──────────
+describe('StepReview sensor-cadence advisory (INSTRUCTION-420)', () => {
+  afterEach(() => {
+    mockSysidData = null
+  })
+
+  it('renders the honest measuring state when no cadence data exists', () => {
+    mockSysidData = null
+    renderReview()
+    const advisory = screen.getByTestId('sensor-cadence-advisory')
+    expect(advisory).toHaveTextContent(/Measuring/)
+    expect(advisory).toHaveTextContent(/Engineering page after the first night/)
+  })
+
+  it('renders per-room classes where data exists, with Blocked copy naming the fix', () => {
+    mockSysidData = {
+      rooms: {
+        living_room: {
+          u_kw_per_c: 0.2, c_kwh_per_c: 1.0, u_observations: 3,
+          c_observations: 0, c_source: 'Prior', pc_fits: 0, solar_gain: 0,
+          confidence: 'low',
+          sensor_cadence: {
+            class: 'blocked', median_step_c: 0.5, median_interval_s: 600,
+            admissible_fraction: 0, event_count: 20, window_span_s: 12000,
+          },
+        },
+        kitchen: {
+          u_kw_per_c: 0.1, c_kwh_per_c: 0.8, u_observations: 200,
+          c_observations: 30, c_source: 'PC', pc_fits: 4, solar_gain: 0.1,
+          confidence: 'high',
+          sensor_cadence: {
+            class: 'ok', median_step_c: 0.01, median_interval_s: 60,
+            admissible_fraction: 1, event_count: 50, window_span_s: 3000,
+          },
+        },
+      },
+    }
+    renderReview()
+    const advisory = screen.getByTestId('sensor-cadence-advisory')
+    expect(advisory).toHaveTextContent(/living room/i)
+    expect(advisory).toHaveTextContent('Blocked')
+    // QG5 — the Blocked copy names the mechanism knobs.
+    expect(advisory).toHaveTextContent(/reporting deadband/)
+    expect(advisory).toHaveTextContent(/minimum-report-interval/)
+    expect(advisory).toHaveTextContent(/device class/)
+    expect(advisory).toHaveTextContent('OK')
+  })
+
+  it('advisory is informational — no deploy gating text, no ack entries', () => {
+    mockSysidData = {
+      rooms: {
+        living_room: {
+          u_kw_per_c: 0.2, c_kwh_per_c: 1.0, u_observations: 3,
+          c_observations: 0, c_source: 'Prior', pc_fits: 0, solar_gain: 0,
+          confidence: 'low',
+          sensor_cadence: {
+            class: 'blocked', median_step_c: 0.5, median_interval_s: 600,
+            admissible_fraction: 0, event_count: 20, window_span_s: 12000,
+          },
+        },
+      },
+    }
+    renderReview()
+    // A Blocked room adds NO acknowledgement checkbox and NO outcome banner.
+    expect(screen.queryByTestId('ack-outstanding-banner')).toBeNull()
+    expect(screen.queryByTestId('deploy-outcome-region')).toBeNull()
+    expect(
+      screen.getByTestId('sensor-cadence-advisory')
+    ).toHaveTextContent(/never blocks deployment/i)
   })
 })
