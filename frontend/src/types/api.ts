@@ -453,6 +453,19 @@ export interface ManualEntry {
   hardware_type: string
 }
 
+/** INSTRUCTION-420 — per-room sensor reporting step/cadence classification.
+ *  `class` values: "ok" | "coarse" | "blocked" | "insufficient" (match on
+ *  the API value, not the display label). Advisory only — never gates
+ *  deploy or control. */
+export interface SensorCadence {
+  class: string
+  median_step_c: number | null
+  median_interval_s: number | null
+  admissible_fraction: number | null
+  event_count: number
+  window_span_s: number | null
+}
+
 export interface SysidRoom {
   u_kw_per_c: number
   c_kwh_per_c: number
@@ -466,6 +479,41 @@ export interface SysidRoom {
    *  Null/undefined when the room follows global comfort. Surfaced for the
    *  RoomDetail "(fixed)" target annotation and any diagnostic readouts. */
   fixed_setpoint?: number | null
+  /** INSTRUCTION-420 — optional because backends pre-dating 420 omit it. */
+  sensor_cadence?: SensorCadence | null
+}
+
+/** INSTRUCTION-415 — detailed per-room SysID state from `/api/sysid/{room}`.
+ *  `gate_stats` carries the process-scope counters plus the per-room
+ *  U-candidate ledger under `room_`-prefixed keys (room_u_qualified,
+ *  room_u_rejected_rate, room_u_rejected_delta_ext, room_u_rejected_no_c,
+ *  room_u_flat, room_u_rejected_sign, room_u_rejected_outlier). The ledger
+ *  is total: the seven classes sum to the room's U-candidate count. */
+export interface SysidRoomDetail extends SysidRoom {
+  room: string
+  gate_stats: Record<string, number>
+}
+
+/** INSTRUCTION-422 — response of POST /api/sysid/{room}/reset: the
+ *  discarded state (`was`) and freshly-derived priors (`now`).
+ *  `persisted` is false when the estimator's config/state-mismatch guard
+ *  is suppressing saves — the in-memory reset stands but will not survive
+ *  a restart (optional: absent on pre-fix backends, treat as true). */
+export interface SysidResetResult {
+  room: string
+  was: {
+    u_observations: number
+    c_observations: number
+    solar_observations: number
+    pc_fits: number
+    u: number
+    c: number
+  }
+  now: {
+    u_prior: number
+    c_prior: number
+  }
+  persisted?: boolean
 }
 
 // INSTRUCTION-227C Task 8 — observed solar production envelope from

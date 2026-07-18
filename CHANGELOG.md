@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [1.5.27] — 2026-07-18
+
+### Added
+- Per-room learning diagnostics on the Engineering page: a room that is not
+  learning now shows why, with per-room rejection counters covering every
+  heat-loss observation candidate.
+- Sensor cadence check: QSH measures each room sensor's reporting step and
+  update rate, and tells you at setup (and continuously on the Engineering
+  page) if a sensor cannot feed room learning as configured. Advisory only —
+  it never blocks a deploy.
+- Per-room learning reset on the Engineering page: re-seed a single room's
+  learned parameters from its configured priors — after fixing a sensor or
+  correcting room geometry — without touching any other room.
+- Learned parameters in telemetry now carry a provenance marker
+  distinguishing config-derived priors from genuinely learned values.
+- Groundwork for event-driven room heat-loss learning (observe-only in this
+  release; no behaviour change).
+
+### Changed
+- Per-room confidence badges now reflect that room's own accepted
+  observations. Rooms that had never produced an observation previously
+  showed Medium confidence; they now correctly show Low.
+
+### Fixed
+- Temperature steps of exactly 0.1 °C were rejected roughly half the time due
+  to floating-point representation; rooms with 0.1 °C-resolution sensors now
+  learn about twice as fast.
+- Engineering-page confidence tooltips described a formula removed in an
+  earlier release; they now describe the current model.
+
 ## [1.5.26] — 2026-07-16
 
 ### Changed
