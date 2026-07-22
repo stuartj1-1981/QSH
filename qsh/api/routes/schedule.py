@@ -1,7 +1,7 @@
 """Schedule CRUD — read/write native schedule store for occupancy."""
 
 import logging
-from typing import Dict, List
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 

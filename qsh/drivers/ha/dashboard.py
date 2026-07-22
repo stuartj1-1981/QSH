@@ -391,9 +391,8 @@ def _view_home(config: Dict) -> dict:
         {"type": "markdown", "content": "💰 {{ states('input_number.qsh_hp_cost_today_p') | round(0) }}p"},
         {"type": "markdown", "content": "⚡ {{ states('input_number.qsh_hp_energy_today') | round(1) }} kWh"},
     ]
-    if entities.get("predicted_saving") or True:
-        # input_number.qsh_predicted_saving is a core entity, always present
-        summary_cards.append({"type": "markdown", "content": "📉 {{ states('input_number.qsh_predicted_saving') | round(0) }}p"})
+    # input_number.qsh_predicted_saving is a core entity, always present
+    summary_cards.append({"type": "markdown", "content": "📉 {{ states('input_number.qsh_predicted_saving') | round(0) }}p"})
     summary_cards.append({"type": "markdown", "content": "📊 {{ states('input_number.qsh_hp_cost_yesterday') | round(0) }}p"})
     cards.append({"type": "grid", "columns": 3, "cards": summary_cards})
 

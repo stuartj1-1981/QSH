@@ -36,7 +36,6 @@ from .topic_map import (
     extract_json_value,
     get_control_topics,
     parse_payload,
-    parse_payload_str,
     parse_payload_string,
     parse_timestamp,
     _prefixed,
@@ -47,6 +46,22 @@ logger = logging.getLogger(__name__)
 # INSTRUCTION-322B Task 7 — sentinel distinguishing "never published" from a
 # legitimate None/absent banner, so the first cycle always publishes.
 _UNSET = object()
+
+# INSTRUCTION-427 D3 — a retained-message sensor resurrection sustained across
+# this many consecutive IN-PROCESS cycles annunciates (log-only). At the ~30 s
+# cycle period this sits above a legitimate reconnect storm and below the
+# multi-hour resurrection-harm horizon. The cross-restart nightly-recurrence
+# pattern is out of scope (427 F4). Field-tuned (AC5).
+RETAINED_RESURRECTION_ALARM_CYCLES = 20
+
+# INSTRUCTION-427 D7 — the PINNED occupancy shadow category (observe-only). An
+# on-change occupancy publisher legitimately falls silent for hours; the live
+# `default` 90/300 category false-stales it. The shadow ages it as
+# valid-until-contradicted: fresh for an hour, unavailable only after a day.
+# This is the SHADOW rule only — the live category and grade are unchanged; F1
+# owns any live recategorisation.
+_OCCUPANCY_SHADOW_FRESH_S = 3600
+_OCCUPANCY_SHADOW_UNAVAILABLE_S = 86400
 
 
 # INSTRUCTION-221C — register MQTT events. Idempotent for identical specs;
@@ -366,6 +381,22 @@ class MQTTDriver:
         # (Task 5 runs on clocks a + c). Cycle-sampled; <= one-cycle lag, immaterial
         # vs minute-scale thresholds. Instance-scoped; naturally isolated per test.
         self._field_last_present_ts: Dict[Tuple[str, Optional[str]], float] = {}
+
+        # INSTRUCTION-427 D3 — retained-resurrection observability (process-scope,
+        # in-process; ING-1). Per-sq_key run of consecutive cycles where the live
+        # grade is "good" while the retained-aware shadow grade is stale/unavail;
+        # the annunciation latch fires once per sustained run. Last freshness
+        # record per sq_key is the process-scope observable.
+        self._retained_bypass_run: Dict[str, int] = {}
+        self._retained_resurrection_annunciated: set = set()
+        self._last_retained_freshness: Dict[str, dict] = {}
+        # INSTRUCTION-427 D4/D7/D6 — sibling observe-only streams (process-scope).
+        # availability-age shadow (D4), occupancy arrival-age shadow (D7), and the
+        # per-cycle capability-stale count (D6, MQTT-only). None changes a returned
+        # grade, occupancy mode, or has_live_* flag.
+        self._last_availability_freshness: Dict[str, dict] = {}
+        self._last_occupancy_freshness: Dict[str, dict] = {}
+        self._last_capability_stale_basis: dict = {}
 
         # INSTRUCTION-329 D1 — last-published value for the retained
         # status/active_source annunciation topic. None → first cycle always
@@ -733,6 +764,134 @@ class MQTTDriver:
         )
         self._previous_signal_quality[sq_key] = new_quality
 
+    def _observe_retained_shadow(
+        self, mapping, sq_key, live_grade, staleness_defaults, now,
+    ) -> None:
+        """INSTRUCTION-427 D3 — compute the retained-aware shadow grade and
+        maintain the in-process resurrection run + annunciation. Observe-only:
+        NEVER changes the returned signal-quality grade. Ages on the last
+        GENUINE (retain==False) publish rather than the retained-replay arrival.
+        """
+        try:
+            genuine_ts = (
+                self._mqtt.last_genuine_ts(mapping.topic) if self._mqtt else None
+            )
+            retained_origin = (
+                self._mqtt.last_delivery_retained(mapping.topic)
+                if self._mqtt else False
+            )
+            thresholds = staleness_defaults.get(
+                mapping.category, staleness_defaults["default"]
+            )
+            if genuine_ts is None:
+                # No age basis in-process → shadow follows the live grade.
+                shadow_grade = live_grade
+                genuine_age = None
+            else:
+                genuine_age = now - genuine_ts
+                if genuine_age > thresholds["unavailable"]:
+                    shadow_grade = "unavailable"
+                elif genuine_age > thresholds["fresh"]:
+                    shadow_grade = "stale"
+                else:
+                    shadow_grade = "good"
+            self._last_retained_freshness[sq_key] = {
+                "live_grade": live_grade,
+                "shadow_grade": shadow_grade,
+                "age_basis_s": genuine_age,
+                "retained_origin": retained_origin,
+            }
+            if live_grade == "good" and shadow_grade in ("stale", "unavailable"):
+                run = self._retained_bypass_run.get(sq_key, 0) + 1
+                self._retained_bypass_run[sq_key] = run
+                if (run > RETAINED_RESURRECTION_ALARM_CYCLES
+                        and sq_key not in self._retained_resurrection_annunciated):
+                    logger.warning(
+                        "MQTT INSTRUCTION-427: '%s' reads 'good' via a RETAINED "
+                        "replay while its last genuine publish is %.0fs old "
+                        "(in-process reconnect resurrection) — the grade is "
+                        "masking a dead sensor (observe-only)",
+                        sq_key, genuine_age or 0.0,
+                    )
+                    self._retained_resurrection_annunciated.add(sq_key)
+            else:
+                # A genuine/fresh reading resets the run and the annunciation latch.
+                self._retained_bypass_run[sq_key] = 0
+                self._retained_resurrection_annunciated.discard(sq_key)
+        except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+            pass
+
+    def _observe_availability_age_shadow(
+        self, mapping, sq_key, live_grade, staleness_defaults, now, cache,
+    ) -> None:
+        """INSTRUCTION-427 D4 — availability-age shadow (observe-only). When the
+        publisher asserts online (Step 1 short-circuits to 'good' with NO age
+        check), compute what the grade WOULD be if the availability assertion
+        itself were aged against the category unavailable threshold. Emits
+        availability_freshness unconditionally for every mapping carrying an
+        availability topic. NEVER changes the returned Step-1 grade. Reuses the
+        pre-existing category threshold (no new constant)."""
+        try:
+            avail = getattr(mapping, "availability", None)
+            if avail is None:
+                return
+            avail_entry = cache.get(avail.topic)
+            thresholds = staleness_defaults.get(
+                mapping.category, staleness_defaults["default"]
+            )
+            if avail_entry is None:
+                assertion_age = None
+                shadow_grade = live_grade
+            else:
+                assertion_age = now - avail_entry[1]
+                if assertion_age > thresholds["unavailable"]:
+                    shadow_grade = "unavailable"
+                elif assertion_age > thresholds["fresh"]:
+                    shadow_grade = "stale"
+                else:
+                    shadow_grade = live_grade
+            self._last_availability_freshness[sq_key] = {
+                "live_grade": live_grade,
+                "shadow_grade": shadow_grade,
+                "age_basis_s": assertion_age,
+                "assertion_age_s": assertion_age,
+            }
+        except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+            pass
+
+    def _observe_occupancy_arrival_age_shadow(
+        self, mapping, sq_key, live_grade, now, cache,
+    ) -> None:
+        """INSTRUCTION-427 D7 — occupancy arrival-age shadow (observe-only). An
+        on-change occupancy publisher false-stales under the live `default`
+        90/300 category after any quiet spell. Under a PINNED observe-only shadow
+        category (fresh 3600 / unavailable 86400, valid-until-contradicted) the
+        last-known boolean is still fresh. Emits occupancy_freshness with
+        quiet_time_s and the grade pair. NEVER changes the live category,
+        occupancy_sensor_states, or _room_fallback."""
+        try:
+            if mapping.field != "occupancy_sensor":
+                return
+            entry = cache.get(mapping.topic)
+            if entry is None:
+                quiet_time = None
+                shadow_grade = live_grade
+            else:
+                quiet_time = now - entry[1]
+                # Pinned shadow category — valid-until-contradicted.
+                if quiet_time > _OCCUPANCY_SHADOW_UNAVAILABLE_S:
+                    shadow_grade = "unavailable"
+                else:
+                    shadow_grade = "good"
+            self._last_occupancy_freshness[sq_key] = {
+                "live_grade": live_grade,
+                "shadow_grade": shadow_grade,
+                "age_basis_s": quiet_time,
+                "quiet_time_s": quiet_time,
+            }
+        except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+            pass
+
     def read_inputs(self, config: Dict) -> InputBlock:
         """Build InputBlock from MQTT topic cache."""
         now = time.time()
@@ -751,6 +910,15 @@ class MQTTDriver:
         valve_positions_per_emitter: Dict[str, Dict[str, float]] = {}
         occupancy_sensor_states: Dict[str, str] = {}
         signal_quality: Dict[str, str] = {}
+        # INSTRUCTION-427 D1/D6 — per-key freshness provenance carried onto the
+        # InputBlock this cycle (live_grade/shadow_grade/age_basis_s/
+        # retained_origin). Populated in the mapping loop from the D3 retained
+        # shadow; read at the estimator boundary by ThermalController (D6).
+        signal_freshness: Dict[str, dict] = {}
+        # INSTRUCTION-427 D6 — per-cycle set of capability flags held True on a
+        # shadow-stale contributor (MQTT-only). Finalised into
+        # self._last_capability_stale_basis after the mapping loop.
+        _capability_stale_flags: set = set()
         capabilities: Dict[str, bool] = {}
 
         # Normalise boolean-ish MQTT payloads to "on"/"off"
@@ -828,6 +996,40 @@ class MQTTDriver:
                         (mapping.topic, mapping.json_path)
                     ),
                 )
+
+                # INSTRUCTION-427 D3 — retained-aware shadow grade + resurrection
+                # observability. The returned `quality` is byte-identical; this
+                # only ages on the last GENUINE publish and counts/annunciates a
+                # sustained in-process retained resurrection (ING-1).
+                self._observe_retained_shadow(
+                    mapping, sq_key, quality, staleness_defaults, now,
+                )
+                # INSTRUCTION-427 D4/D7 — availability-age + occupancy arrival-age
+                # shadows (observe-only; returned grade byte-identical).
+                self._observe_availability_age_shadow(
+                    mapping, sq_key, quality, staleness_defaults, now, cache,
+                )
+                self._observe_occupancy_arrival_age_shadow(
+                    mapping, sq_key, quality, now, cache,
+                )
+                # INSTRUCTION-427 D1 — carry this mapping's freshness record onto
+                # the InputBlock (the D3 retained shadow is the categorical
+                # source; availability supersedes when it is the stale one).
+                # Wrapped so observe can never fail ingestion.
+                try:
+                    _fresh_rec = self._last_retained_freshness.get(sq_key)
+                    _avail_rec = self._last_availability_freshness.get(sq_key)
+                    if _avail_rec and _avail_rec.get("shadow_grade") in ("stale", "unavailable"):
+                        _fresh_rec = _avail_rec
+                    if _fresh_rec is not None:
+                        signal_freshness[sq_key] = {
+                            "live_grade": _fresh_rec.get("live_grade", quality),
+                            "shadow_grade": _fresh_rec.get("shadow_grade", quality),
+                            "age_basis_s": _fresh_rec.get("age_basis_s"),
+                            "retained_origin": _fresh_rec.get("retained_origin", False),
+                        }
+                except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+                    pass
 
                 # Only accumulate sq for fields tracked before (room or system).
                 tracked = (
@@ -962,6 +1164,14 @@ class MQTTDriver:
                     ib_field = SYSTEM_INPUT_FIELDS.get(config_key)
                     if mapping.field == ib_field and value is not None:
                         capabilities[cap_flag] = True
+                        # INSTRUCTION-427 D6 — capability_stale_basis (observe-only,
+                        # MQTT-only). The cap above is set True from any non-None
+                        # value REGARDLESS of quality; count when the contributing
+                        # mapping's retained-aware shadow_grade is stale. The cap
+                        # VALUE is unchanged — this only records the leak.
+                        _rec = self._last_retained_freshness.get(sq_key)
+                        if _rec and _rec.get("shadow_grade") in ("stale", "unavailable"):
+                            _capability_stale_flags.add(cap_flag)
 
             # Pass 2 — resolve best-of per sq_key / room / system field.
             # Tie-breaker on equal quality: first candidate in
@@ -1007,6 +1217,22 @@ class MQTTDriver:
                 )
                 room_temps[room] = best_value
                 independent_sensors[room] = best_value
+                # INSTRUCTION-427 D1/D6 — align the carried freshness record for
+                # this room to the WINNING candidate's mapping, so the estimator-
+                # boundary shadow (D6) reads the grade of the value actually used.
+                # Wrapped so observe can never fail ingestion.
+                try:
+                    _win_key = _sq_key_for(_best_m)
+                    _win_rec = self._last_retained_freshness.get(_win_key)
+                    if _win_rec is not None:
+                        signal_freshness[f"room_temps.{room}"] = {
+                            "live_grade": _win_rec.get("live_grade", _best_q),
+                            "shadow_grade": _win_rec.get("shadow_grade", _best_q),
+                            "age_basis_s": _win_rec.get("age_basis_s"),
+                            "retained_origin": _win_rec.get("retained_origin", False),
+                        }
+                except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+                    pass
 
             for field_name, candidates in _system_value_candidates.items():
                 best_value, _best_q, _best_m = min(
@@ -1595,6 +1821,12 @@ class MQTTDriver:
             )
             _oat_ann.exited("MQTT.outdoor_stale_passthrough")
 
+        # INSTRUCTION-427 D6 — finalise the per-cycle capability-stale count.
+        self._last_capability_stale_basis = {
+            "capability_stale_held": len(_capability_stale_flags),
+            "flags": sorted(_capability_stale_flags),
+        }
+
         return InputBlock(
             room_temps=room_temps,
             independent_sensors=independent_sensors,
@@ -1635,6 +1867,7 @@ class MQTTDriver:
             flow_min=flow_min_rv.value,
             flow_max=flow_max_rv.value,
             signal_quality=signal_quality,
+            signal_freshness=signal_freshness,
             has_live_cop=capabilities.get("has_live_cop", False),
             has_live_power=capabilities.get("has_live_power", False),
             has_live_flow=has_live_flow,
@@ -2084,6 +2317,29 @@ class MQTTDriver:
             "flow/pressure limits). This is equivalent to QSH-not-installed state.",
             max_retries,
         )
+
+    def get_resolved_controls(self) -> List[Dict[str, Any]]:
+        """INSTRUCTION-438 D8 (36C Task 4) — ControlSource-shaped provenance
+        for each resolved control key.
+
+        Read-only conversion of self._last_resolved (written every
+        read_inputs, so same-cycle fresh when called after the pipeline run).
+        None → "" is the declared wire encoding of absence (D8a): the
+        three-state truth table (internal / external-connected /
+        external-configured-but-unavailable) is preserved exactly under the
+        coercion. Empty dict ⇒ [] — absence is reportable, fabrication
+        forbidden.
+        """
+        out: List[Dict[str, Any]] = []
+        for key, rv in self._last_resolved.items():
+            out.append({
+                "key": key,
+                "value": rv.value,
+                "source": rv.source,
+                "external_id": rv.external_id if rv.external_id is not None else "",
+                "external_raw": rv.external_raw if rv.external_raw is not None else "",
+            })
+        return out
 
     def get_forecast_provider(self):
         """Return MQTTForecastProvider when mqtt.inputs.forecast.topic is

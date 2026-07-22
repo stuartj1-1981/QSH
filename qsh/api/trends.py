@@ -280,7 +280,7 @@ def _parse_influx_time(time_str: Optional[str]) -> Optional[float]:
     if not time_str:
         return None
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # InfluxDB returns ISO format like "2024-01-15T10:30:00Z"
         dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))

@@ -11,8 +11,8 @@ from typing import Any, Dict, Optional, Set, Tuple
 from . import octopus_hp_control
 from .integration import fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
-from ...sensors import SensorData, SensorHealthTracker, sensor_health, UNAVAILABLE_STATES
-from ..resolve import resolve_value, deep_get
+from ...sensors import SensorData, sensor_health
+from ..resolve import resolve_value
 from ..hot_water_payloads import (
     classify_hot_water_payload,
     resolve_hot_water_active,
@@ -64,6 +64,17 @@ def _register_events() -> None:
         kind=EventKind.LATCHED,
         payload_fields=("temp",),
         default_level=logging.INFO,
+    ))
+    # INSTRUCTION-437 D4d — the last silent outdoor arm: no outdoor_temp entity
+    # configured, so the driver holds last-valid or falls back to synthetic 5.0
+    # with has_outdoor=False. WARNING because no outdoor sensor is wired. Name-
+    # and payload-parity with MQTT.outdoor_no_mapping_fallback (driver.py:155-
+    # 160). Singleton latch (no latch_key); payload diagnostic only (T-33).
+    ann.register(EventSpec(
+        name="HA.outdoor_no_entity_fallback",
+        kind=EventKind.LATCHED,
+        payload_fields=("value", "from_last_valid"),
+        default_level=logging.WARNING,
     ))
     # INSTRUCTION-301 — hot_water_active last-valid hold across HW-source comms
     # loss. LATCHED on held_value; age_s is diagnostic context only (latch_key
@@ -173,6 +184,65 @@ def _get_power_divisor(entity_id: str) -> float:
     return divisor
 
 
+# INSTRUCTION-427 D5(b) — process-scope HA last_updated age-shadow sink, keyed
+# by entity_id: {live_is_fresh, shadow_stale, ha_age_s, last_updated}. Populated
+# by _observe_ha_age_shadow on every _fetch_with_staleness call; read by the
+# ha_age_freshness observability stream. Non-cumulative (overwritten per fetch).
+HA_AGE_SHADOWS: Dict[str, dict] = {}
+
+# Per-category "unavailable" age threshold (s) for the shadow grade. HA's
+# state-only freshness never ages on time; these mirror the intent of the MQTT
+# BUILTIN_STALENESS_DEFAULTS. Observe-only — the live grade is unchanged.
+_HA_AGE_SHADOW_THRESHOLDS_S: Dict[str, int] = {
+    "temperature": 14400,
+    "heat_source": 3600,
+    "outdoor": 3600,
+    "power": 600,
+    "energy": 900,
+    "default": 3600,
+}
+
+
+def _parse_ha_ts(raw: Optional[str]) -> Optional[float]:
+    """Parse an HA ISO-8601 last_updated string to an epoch float, or None."""
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _observe_ha_age_shadow(entity_id: str, category: str, full: dict) -> None:
+    """INSTRUCTION-427 D5(b) — record the last_updated age shadow (observe-only).
+    Never raises; never changes the caller's return. shadow_stale is True when
+    the entity's last_updated is older than its category unavailable threshold
+    even though its state is available ('good')."""
+    try:
+        last_updated_raw = full.get("last_updated")
+        ts = _parse_ha_ts(last_updated_raw)
+        threshold = _HA_AGE_SHADOW_THRESHOLDS_S.get(
+            category, _HA_AGE_SHADOW_THRESHOLDS_S["default"]
+        )
+        if ts is None:
+            # No age basis → shadow follows the live grade (age_basis None).
+            HA_AGE_SHADOWS[entity_id] = {
+                "ha_age_s": None,
+                "shadow_stale": False,
+                "last_updated": last_updated_raw,
+            }
+            return
+        age = time.time() - ts
+        HA_AGE_SHADOWS[entity_id] = {
+            "ha_age_s": age,
+            "shadow_stale": age > threshold,
+            "last_updated": last_updated_raw,
+        }
+    except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+        pass
+
+
 def _fetch_with_staleness(entity_id: str, category: str, default=None, attr: str = None):
     """
     Fetch a HA entity with staleness tracking.
@@ -184,6 +254,14 @@ def _fetch_with_staleness(entity_id: str, category: str, default=None, attr: str
     full = fetch_ha_entity_full(entity_id)
     if full is None:
         return default, False
+
+    # INSTRUCTION-427 D5(b) — last_updated age shadow (observe-only; ING-10).
+    # sensor_health.check below grades on STATE ONLY (not-unavailable) and never
+    # ages on time — a HA cloud-integration freeze reads 'good' indefinitely.
+    # Record what the grade WOULD be if aged on last_updated vs the category
+    # threshold. This NEVER changes the returned (value, is_fresh); the
+    # correction is 427 F1.
+    _observe_ha_age_shadow(entity_id, category, full)
 
     is_fresh = sensor_health.check(entity_id, full.get("state"), category)
 
@@ -819,12 +897,17 @@ def _fetch_heat_source_status_for(
         "has_live_power": False,
         "has_live_return_temp": False,
         "has_live_flow_rate": False,
+        # INSTRUCTION-430 D8 — flow-temperature liveness (False ⇒ fabricated
+        # default). Set True only when a live flow entity reads fresh below.
+        "has_live_flow": False,
     }
 
     flow_entity = sensors_block.get("flow_temp")
     if flow_entity:
         val_raw, is_fresh = _fetch_with_staleness(flow_entity, "heat_source", default=default_flow_temp)
         result["flow_temp"] = safe_float(val_raw, default_flow_temp)
+        # INSTRUCTION-430 D8 — a present flow entity reading fresh is live flow.
+        result["has_live_flow"] = bool(is_fresh)
         if not is_fresh:
             logging.debug(f"Flow temp sensor stale  -  using last known {result['flow_temp']:.1f}C")
 
@@ -938,12 +1021,17 @@ def fetch_heat_source_status(config: Dict) -> Dict:
         "has_live_power": False,
         "has_live_return_temp": False,
         "has_live_flow_rate": False,
+        # INSTRUCTION-430 D8 — flow-temperature liveness (False ⇒ fabricated
+        # default). Set True only when a live flow entity reads fresh below.
+        "has_live_flow": False,
     }
 
     flow_entity = entities.get("hp_flow_temp")
     if flow_entity:
         val_raw, is_fresh = _fetch_with_staleness(flow_entity, "heat_source", default=35.0)
         result["flow_temp"] = safe_float(val_raw, 35.0)
+        # INSTRUCTION-430 D8 — a present flow entity reading fresh is live flow.
+        result["has_live_flow"] = bool(is_fresh)
         if not is_fresh:
             logging.debug(f"Flow temp sensor stale  -  using last known {result['flow_temp']:.1f}C")
 
@@ -1243,6 +1331,15 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     else:
         data.outdoor_temp = _last_valid_outdoor_temp if _last_valid_outdoor_temp is not None else 5.0
         data.has_outdoor = False
+        # INSTRUCTION-437 D4d — annunciate the previously-silent no-entity arm
+        # (control unchanged; the antifrost has_outdoor consumer is untouched).
+        # Singleton LATCHED WARNING → emits once per process on the rising edge.
+        _register_events()
+        get_annunciator().entered(
+            "HA.outdoor_no_entity_fallback",
+            value=round(data.outdoor_temp, 1),
+            from_last_valid=_last_valid_outdoor_temp is not None,
+        )
 
     (
         data.heating_percs,
@@ -1263,6 +1360,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.flow_rate = hs_status.get("flow_rate", 0.0)
     data.has_live_return_temp = hs_status.get("has_live_return_temp", False)
     data.has_live_flow_rate = hs_status.get("has_live_flow_rate", False)
+    data.has_live_flow = hs_status.get("has_live_flow", True)  # INSTRUCTION-430 D8
 
     # INSTRUCTION-241A Task 3 — populate per-source dict alongside the legacy
     # flat slots. Selector reads sd.heat_sources[active] and overwrites the
@@ -1286,6 +1384,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
             has_live_return_temp=result["has_live_return_temp"],
             has_live_flow_rate=result["has_live_flow_rate"],
             has_live_delta_t=result["has_live_delta_t"],
+            has_live_flow=result.get("has_live_flow", True),  # INSTRUCTION-430 D8
         )
         for name, result in fetch_all_heat_source_statuses(config).items()
     }

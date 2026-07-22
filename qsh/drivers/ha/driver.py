@@ -71,6 +71,10 @@ class HADriver:
         # called each cycle after rates parse. Driver does not know what
         # consumes the rates and does not import the consumer's class.
         self._tariff_rate_consumer: Optional[Callable[[List], None]] = None
+        # INSTRUCTION-427 D5 — HA absent-room observable (process-scope,
+        # observe-only). Rooms configured but absent from room_temps post-fetch
+        # (dead sensor). The live signal_quality/stale_rooms are unchanged.
+        self._last_ha_room_absent: dict = {}
 
     def set_tariff_rate_consumer(
         self, consumer: Optional[Callable[[List], None]]
@@ -221,6 +225,22 @@ class HADriver:
 
     # ── Read ───────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _compute_room_absent(config: Dict, room_temps) -> dict:
+        """INSTRUCTION-427 D5(a) — configured rooms absent from room_temps
+        post-fetch (dead sensor produced no value; the grade loop never grades
+        it, so it defaults 'good' downstream — ING-3). The sole ungraded stream:
+        a room-cardinality in lieu of a grade pair. Observe-only — never fails
+        ingestion; the live signal_quality/stale_rooms are unchanged (F1 owns
+        any correction)."""
+        try:
+            configured = set((config or {}).get("rooms", {}) or {})
+            present = set(room_temps or {})
+            absent = sorted(configured - present)
+            return {"rooms": absent, "absent_count": len(absent)}
+        except Exception:  # noqa: BLE001 — observe-only, never fail ingestion
+            return {"rooms": [], "absent_count": 0}
+
     def read_inputs(self, config: Dict) -> InputBlock:
         """Fetch all external signals from Home Assistant."""
         from .integration import fetch_ha_entity
@@ -361,6 +381,16 @@ class HADriver:
         stale_sensors = sensor_data.stale_sensors if hasattr(sensor_data, "stale_sensors") else {}
         for sensor_name in stale_sensors:
             signal_quality[sensor_name] = "stale"
+
+        # INSTRUCTION-427 D5(a) — absent-room observable (observe-only). A
+        # configured room absent from room_temps post-fetch produced no value
+        # (dead sensor); the loop above never grades it, so it defaults 'good'
+        # downstream (ING-3). Record it as a cardinality — the sole ungraded
+        # stream (absent rooms have no live/shadow grade). The live
+        # signal_quality/stale_rooms are UNCHANGED; correction is 427 F1.
+        self._last_ha_room_absent = self._compute_room_absent(
+            config, sensor_data.room_temps
+        )
 
         # ── Fetch away mode state ─────────────────────────────────────────
         away_active = config.get("away_active_internal", False)

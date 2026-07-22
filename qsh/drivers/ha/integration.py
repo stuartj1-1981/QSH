@@ -1,6 +1,5 @@
 import requests
 import logging
-import json
 import os
 import enum
 import time as _time

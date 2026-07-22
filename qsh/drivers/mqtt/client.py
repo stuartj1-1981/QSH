@@ -21,12 +21,11 @@ fresh-window ledger does not replicate (see INSTRUCTION-374C).
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as paho
 
@@ -72,6 +71,15 @@ class MQTTClient:
         # observed. Guarded by the same self._lock as _cache.
         self._field_paths: Dict[str, List[Optional[str]]] = {}
         self._field_ledger: Dict[Tuple[str, Optional[str]], Tuple[Optional[str], float]] = {}
+        # INSTRUCTION-427 D2 — retain capture (process-scope; ING-1). Records
+        # the arrival ts of the last GENUINE (retain==False) message per topic
+        # and whether the last delivery was retained. The cache tuple + per-field
+        # ledger stamps are UNCHANGED, so the resolver grades byte-identically;
+        # this state is read only by the D3 retained-aware shadow grade. On a
+        # topic never seen live in-process, _last_genuine_ts is absent ⇒ the
+        # shadow falls to the live grade (no false alarm).
+        self._last_genuine_ts: Dict[str, float] = {}
+        self._last_delivery_retained: Dict[str, bool] = {}
         self._subscriptions: List[str] = []
         self._connected = threading.Event()
         self._client: Optional[paho.Client] = None
@@ -163,16 +171,17 @@ class MQTTClient:
         with self._lock:
             return dict(self._field_ledger)
 
-    def get_cached(self, topic: str) -> Optional[str]:
-        """Thread-safe lookup of cached payload for a single topic.
-
-        Returns the payload string if a message has been received for this
-        topic, or None if the topic has never been seen.  Used by
-        _resolve_mqtt_control() for per-key cache queries.
-        """
+    def last_genuine_ts(self, topic: str) -> Optional[float]:
+        """INSTRUCTION-427 D2 — arrival ts of the last GENUINE (retain==False)
+        message on this topic, or None if never seen live in-process."""
         with self._lock:
-            entry = self._cache.get(topic)
-        return entry[0] if entry is not None else None
+            return self._last_genuine_ts.get(topic)
+
+    def last_delivery_retained(self, topic: str) -> bool:
+        """INSTRUCTION-427 D2 — True iff the last delivery on this topic was a
+        broker-replayed retained message."""
+        with self._lock:
+            return self._last_delivery_retained.get(topic, False)
 
     def disconnect(self) -> None:
         """Clean disconnect — publish offline status, stop loop."""
@@ -254,7 +263,15 @@ class MQTTClient:
         try:
             payload_str = msg.payload.decode("utf-8", errors="replace")
             now_ts = time.time()
+            # INSTRUCTION-427 D2 — capture retain provenance. msg.retain is True
+            # on a broker-replayed retained delivery (resubscribe/reconnect),
+            # False on a live publish. The cache/ledger stamps below are
+            # unchanged; only this side state is updated.
+            retained = bool(getattr(msg, "retain", False))
             with self._lock:
+                self._last_delivery_retained[msg.topic] = retained
+                if not retained:
+                    self._last_genuine_ts[msg.topic] = now_ts
                 self._cache[msg.topic] = (payload_str, now_ts)
                 # INSTRUCTION-374A — update the message-time per-field ledger for
                 # each registered path on this topic, reusing the single cache ts.

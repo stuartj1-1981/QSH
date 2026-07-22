@@ -148,7 +148,7 @@ class CycleHistory:
 
     def _query_and_build_entries(self, client: Any) -> List["HistoryEntry"]:
         """Query InfluxDB for system, room, and RL data; merge into HistoryEntry list."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _parse_ts(time_str):
             if not time_str:

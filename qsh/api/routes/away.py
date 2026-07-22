@@ -6,7 +6,6 @@ a persistent AwayStateStore is implemented (INSTRUCTION-BR03-AWAY).
 """
 
 import json
-import math
 import os
 import logging
 import time

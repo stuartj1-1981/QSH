@@ -14,15 +14,15 @@
 // a cited line, refresh the tag in the same change-set.
 
 /** Minimum observations before the learned value is used at all.
- *  @source qsh/sysid.py:128 */
+ *  @source qsh/sysid.py:154 */
 export const MIN_OBS_FOR_USE = 10
 
 /** Accepted-U-observation count at which the per-room confidence badge
  *  reaches High (and the historical full-confidence reference). Defined
  *  source-side in qsh/sysid.py as CONFIDENCE_FULL_AT (INSTRUCTION-416).
- *  @source qsh/sysid.py:135 */
+ *  @source qsh/sysid.py:191 */
 export const CONFIDENCE_FULL_AT = 100
 
 /** Minimum R² for a passive-cooling window fit to be accepted.
- *  @source qsh/sysid.py:177 */
+ *  @source qsh/sysid.py:233 */
 export const PC_FIT_R_SQUARED_MIN = 0.8

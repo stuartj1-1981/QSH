@@ -1,7 +1,6 @@
 """Thread-safe shared state between pipeline and API server."""
 
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -494,6 +493,10 @@ class SharedState:
         self._boost_controller = None  # Reference to BoostController (set after pipeline build)
         self._mqtt_client = None       # Reference to MQTTClient (set for MQTT driver, for API write-back)
         self._driver_ref = None        # INSTRUCTION-225C: IODriver, set by main.py post-create_driver
+        # INSTRUCTION-438 D8 (36C Task 4): driver's get_resolved_controls
+        # accessor, set by main.py post-setup. None for drivers without
+        # resolution (HA, mock) ⇒ control_sources stays [].
+        self._control_source_provider = None
         self._telemetry_ref = None     # INSTRUCTION-193 Task 4: TelemetryService for is_revoked()
         self._debouncer_ref = None     # Reference to ControlDebouncer (set after pipeline build)
         self._pending_writebacks: Dict[str, 'PendingWriteback'] = {}
@@ -709,9 +712,23 @@ class SharedState:
                 "hardware_type": hardware_map.get(r, "generic"),
             }
 
+        # INSTRUCTION-438 D8 (36C Task 4) — resolved-control provenance from
+        # the driver accessor. Same-cycle fresh: driver.read_inputs has
+        # already run this loop iteration (main.py read_inputs → update
+        # ordering). Absent provider or accessor error ⇒ [] — absence is
+        # reportable, fabrication forbidden (§7).
+        control_sources: List[ControlSource] = []
+        provider = self._control_source_provider
+        if provider is not None:
+            try:
+                control_sources = [ControlSource(**d) for d in (provider() or [])]
+            except Exception:
+                control_sources = []
+
         snap = CycleSnapshot(
             timestamp=ctx.timestamp,
             cycle_number=ctx.cycle_number,
+            control_sources=control_sources,
             operating_state=_resolve_operating_state(ctx),
             control_enabled=ctx.control_enabled,
             comfort_temp=ctx.target_temp if hasattr(ctx, 'target_temp') else 20.0,
@@ -1245,6 +1262,13 @@ class SharedState:
     def set_mqtt_client(self, client):
         with self._lock:
             self._mqtt_client = client
+
+    def set_control_source_provider(self, provider) -> None:
+        """INSTRUCTION-438 D8 (36C Task 4): register the driver's
+        get_resolved_controls accessor. Called once from main.py after driver
+        setup; None (or absent accessor) ⇒ control_sources stays []."""
+        with self._lock:
+            self._control_source_provider = provider
 
     def get_driver(self):
         """INSTRUCTION-225C: IODriver accessor for API write paths.

@@ -1,7 +1,7 @@
 """Historian API routes — InfluxDB query access for historical trend analysis."""
 
 from fastapi import APIRouter, Query
-from typing import List, Optional
+from typing import Optional
 
 from ...historian import get_historian
 
