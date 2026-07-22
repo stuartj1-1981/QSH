@@ -4,7 +4,7 @@ import copy
 import logging
 import os
 import yaml
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel

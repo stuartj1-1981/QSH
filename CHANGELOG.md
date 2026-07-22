@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [1.5.28] — 2026-07-22
+
+### Added
+- **Optimum start**: rooms scheduled to become occupied can now begin
+  recovering ahead of the transition, pre-warming to the target instead of
+  reacting after the schedule flips. A suppression threshold setting controls
+  how close to target a room must be to skip the early start.
+- MQTT installs now show whether min/max flow-temperature values are being
+  supplied by an external controller, including a clear indicator when the
+  external source is unavailable. Home Assistant installs are unchanged.
+- MQTT installs now run the same room and heat-source configuration validation
+  as Home Assistant installs, in warn-only mode: misconfigured topics, missing
+  room temperature feeds, implausible efficiencies, and silent value coercions
+  are reported at startup. No previously working configuration is rejected.
+- Room learning now handles auxiliary heaters more robustly: an enabled
+  auxiliary heater with no rated power no longer skews heat-loss learning, and
+  a continuously running one resets that room to design priors rather than
+  freezing a wrong estimate.
+- Learning diagnostics extended: per-room rejection counters now cover the
+  thermal-mass, solar, and emitter learning paths, and survive a restart.
+- Extensive internal instrumentation added across sensor ingestion, tariff
+  optimisation, and the learning system — signal freshness tracking,
+  heat-attribution provenance (including discriminating hot-water reheat from
+  space heating), and stale-data observability. All of it is record-only: no
+  heating behaviour, learned parameters, or comfort outcomes change.
+
+### Changed
+- Internal cleanup: removed dead code across the codebase, shrinking the
+  shipped image slightly. No functional impact.
+
 ## [1.5.27] — 2026-07-18
 
 ### Added

@@ -1,7 +1,7 @@
 """History API routes — serves trend data from the in-memory ring buffer."""
 
 from fastapi import APIRouter, Query
-from typing import List, Optional
+from typing import Optional
 
 from ..history import cycle_history
 

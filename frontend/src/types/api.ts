@@ -288,6 +288,10 @@ export interface StatusResponse {
   hp_capacity_kw: number
   min_load_pct: number
   heat_source: HeatSourceState
+  // INSTRUCTION-438 D8 (36C Task 4) — resolved-control provenance; [] when
+  // the driver offers no resolution (HA, mock). Optional for rollout
+  // tolerance against pre-438 backends.
+  control_sources?: ControlSource[]
   // INSTRUCTION-117E Task 3b: legacy shim; populated only when
   // heat_source.type === 'heat_pump'.
   hp: HpState | null

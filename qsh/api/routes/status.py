@@ -1,5 +1,6 @@
 """System status and per-room state endpoints."""
 
+from dataclasses import asdict
 from typing import Literal, Optional
 
 from fastapi import APIRouter
@@ -118,6 +119,9 @@ def get_status():
         "total_demand": round(snap.total_demand, 2),
         "outdoor_temp": round(snap.outdoor_temp, 1),
         "recovery_time_hours": snap.recovery_time_hours,
+        # INSTRUCTION-438 D8 (36C Task 4) — additive key: resolved-control
+        # provenance ([] when the driver offers no resolution).
+        "control_sources": [asdict(cs) for cs in snap.control_sources],
         "capacity_pct": snap.capacity_pct,
         "hp_capacity_kw": snap.hp_capacity_kw,
         "min_load_pct": snap.min_load_pct,

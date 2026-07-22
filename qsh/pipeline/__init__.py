@@ -12,7 +12,6 @@ Public API:
     build_pipeline — factory: create ordered list of all controllers
 """
 
-import os
 from pathlib import Path
 from typing import List, Tuple
 
@@ -494,6 +493,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             fixed_setpoints=kw.get("fixed_setpoints"),
             trv_offset_tracker=kw.get("trv_offset_tracker"),
             sysid=kw.get("sysid"),
+            balancing_detector=kw.get("balancing_detector"),
         ),
         # INSTRUCTION-241A — HeatSourceSensorSelector sits immediately after
         # SensorController (which populates ctx.sensor_data, including the

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Save, Loader2, ChevronDown, ChevronUp, Plus, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
+import { useStatus } from '../../hooks/useStatus'
 import { apiUrl } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { MAX_HEAT_SOURCES } from '../../lib/constants'
@@ -21,6 +22,7 @@ import {
   resolvedCapabilityInverts,
 } from '../../lib/heatSourceCapability'
 import type { HeatSourceYaml, MqttTopicInput, SourceSelectionYaml, QshConfigYaml, MqttConfig, Driver } from '../../types/config'
+import type { ControlSource } from '../../types/api'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
 import { WriteBudgetField } from './WriteBudgetField'
@@ -132,6 +134,13 @@ export function HeatSourceSettings({
   // any mqtt.inputs.* DHW field. HotWaterSettings is the sole edit surface
   // and the sole PATCH-write surface for hot_water_active / hot_water_boolean.
   void mqtt
+
+  // INSTRUCTION-438 D8 (36C Task 4) — resolved-control provenance from
+  // /api/status; [] / undefined when the driver offers no resolution, in
+  // which case ControlValueDisplay renders its internal-only state exactly
+  // as before the bridge landed.
+  const { data: statusData } = useStatus()
+  const controlSources = statusData?.control_sources
 
   const [sources, setSources] = useState<HeatSourceYaml[]>(() =>
     computeInitial(heatSource, heatSources),
@@ -428,6 +437,7 @@ export function HeatSourceSettings({
             saving={savingIndex === i}
             driver={driver}
             rootConfig={rootConfig}
+            controlSources={controlSources}
             onToggle={() =>
               setExpandedIndex(expandedIndex === i ? -1 : i)
             }
@@ -517,6 +527,10 @@ interface SourceCardProps {
   saving: boolean
   driver: Driver
   rootConfig?: QshConfigYaml
+  // INSTRUCTION-438 D8 — resolved-control provenance for the flow_min /
+  // flow_max ControlValueDisplay sites (undefined pre-fetch or without an
+  // MQTT resolution path).
+  controlSources?: ControlSource[]
   onToggle: () => void
   onChange: (changes: Partial<HeatSourceYaml>) => void
   onSensorChange: (key: string, value: string) => void
@@ -536,6 +550,7 @@ function SourceCard({
   saving,
   driver,
   rootConfig,
+  controlSources,
   onToggle,
   onChange,
   onSensorChange,
@@ -1069,7 +1084,7 @@ function SourceCard({
                 <>
                   <ControlValueDisplay
                     label="Flow Min Temperature"
-                    controlSource={undefined}
+                    controlSource={controlSources?.find((cs) => cs.key === 'flow_min')}
                     internalValue={
                       rootConfig?.flow_min_internal ?? hs.flow_min ?? 25
                     }
@@ -1089,7 +1104,7 @@ function SourceCard({
                   />
                   <ControlValueDisplay
                     label="Flow Max Temperature"
-                    controlSource={undefined}
+                    controlSource={controlSources?.find((cs) => cs.key === 'flow_max')}
                     internalValue={
                       rootConfig?.flow_max_internal ?? hs.flow_max ?? 50
                     }
@@ -1125,7 +1140,7 @@ function SourceCard({
                   ) : (
                     <ControlValueDisplay
                       label="Flow Min Temperature"
-                      controlSource={undefined}
+                      controlSource={controlSources?.find((cs) => cs.key === 'flow_min')}
                       internalValue={
                         rootConfig?.flow_min_internal ?? hs.flow_min ?? 25
                       }
@@ -1159,7 +1174,7 @@ function SourceCard({
                   ) : (
                     <ControlValueDisplay
                       label="Flow Max Temperature"
-                      controlSource={undefined}
+                      controlSource={controlSources?.find((cs) => cs.key === 'flow_max')}
                       internalValue={
                         rootConfig?.flow_max_internal ?? hs.flow_max ?? 50
                       }
