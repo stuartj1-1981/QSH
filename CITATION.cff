@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use or study QSH, please cite the fleet-simulation preprint (preferred citation below); the full four-part series is listed in README.md and mirrored in docs/publications/."
+title: "QSH — Quantum Swarm Heating"
+authors:
+  - family-names: Hunt
+    given-names: Stuart J.
+license: AGPL-3.0
+repository-code: "https://github.com/stuartj1-1981/QSH"
+preferred-citation:
+  type: report
+  title: "Physics-Based Thermal Optimisation for Residential Heat Pumps: Fleet Simulation, Weather Compensation Analysis, and the Shoulder Mode Discovery"
+  authors:
+    - family-names: Hunt
+      given-names: Stuart J.
+  doi: 10.5281/zenodo.18903154
+  year: 2026
+references:
+  - type: report
+    title: "Air-Gapped AI Development Pipeline"
+    authors:
+      - family-names: Hunt
+        given-names: Stuart J.
+    doi: 10.5281/zenodo.19323404
+    year: 2026
+  - type: report
+    title: "Domain-Expert AI Collaboration: Crossing the Paradigm Boundary from Industrial Control to Application Software"
+    authors:
+      - family-names: Hunt
+        given-names: Stuart J.
+    doi: 10.5281/zenodo.19382919
+    year: 2026
+  - type: report
+    title: "DFAN: Distributed Fractal Awareness Network — A Biomimetic Control Architecture for Intelligent Energy Transfer Systems"
+    authors:
+      - family-names: Hunt
+        given-names: Stuart J.
+    doi: 10.5281/zenodo.19443159
+    year: 2026
