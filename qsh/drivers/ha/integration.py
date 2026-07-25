@@ -23,6 +23,62 @@ class WriteOutcome(enum.Enum):
     NO_TOKEN = "no_token"                     # no SUPERVISOR_TOKEN — never attempted
 
 
+# INSTRUCTION-442 — LATCHED annunciation of breaker write-suppression windows.
+# Keyed to impact, not to state: the latch enters on the FIRST write actually
+# dropped (a breaker window with zero attempted writes stays annunciator-quiet,
+# matching 408's freeze philosophy) and clears at the breaker's close-summary
+# path carrying the suppressed-write count. Emission is wrapped so an
+# annunciator failure (unregistered event in a stripped build, import-order
+# surprise) degrades to the existing log lines and can never alter a
+# WriteOutcome or skip a counter update (442 §7).
+WRITE_SUPPRESSION_EVENT = "HA.write_suppression"
+
+
+def _register_write_suppression_event():
+    try:
+        from ...events import EventKind, EventSpec, get_annunciator
+        get_annunciator().register(EventSpec(
+            name=WRITE_SUPPRESSION_EVENT,
+            kind=EventKind.LATCHED,
+            payload_fields=("first_dropped", "suppressed_count"),
+            default_level=logging.WARNING,
+        ))
+    except Exception:
+        logging.debug(
+            "HA.write_suppression event registration failed", exc_info=True
+        )
+
+
+_register_write_suppression_event()
+
+
+def _annunciate_suppression_entered(first_dropped: str) -> None:
+    try:
+        from ...events import get_annunciator
+        get_annunciator().entered(
+            WRITE_SUPPRESSION_EVENT,
+            first_dropped=first_dropped,
+            suppressed_count=1,
+        )
+    except Exception:
+        logging.debug(
+            "HA.write_suppression entered-emission failed", exc_info=True
+        )
+
+
+def _annunciate_suppression_cleared(suppressed_count: int) -> None:
+    try:
+        from ...events import get_annunciator
+        get_annunciator().exited(
+            WRITE_SUPPRESSION_EVENT,
+            suppressed_count=suppressed_count,
+        )
+    except Exception:
+        logging.debug(
+            "HA.write_suppression exited-emission failed", exc_info=True
+        )
+
+
 class _CircuitBreaker:
     """Simple circuit breaker: 5 failures -> 15 min cooldown."""
 
@@ -49,6 +105,9 @@ class _CircuitBreaker:
                 logging.warning(
                     f"HA circuit breaker: {self._suppressed_writes} write(s) were suppressed while open"
                 )
+                # INSTRUCTION-442 — clear the suppression latch at the single
+                # close path, carrying the same count the summary logs.
+                _annunciate_suppression_cleared(self._suppressed_writes)
                 self._suppressed_writes = 0
             return False
         return True
@@ -73,6 +132,9 @@ class _CircuitBreaker:
                 "HA circuit breaker open — suppressing writes. First dropped: "
                 f"{domain}.{service} entity={entity}. Further drops at DEBUG until cooldown expires."
             )
+            # INSTRUCTION-442 — latch the suppression window on the first
+            # write actually dropped (impact-keyed, not state-keyed).
+            _annunciate_suppression_entered(f"{domain}.{service} entity={entity}")
         else:
             logging.debug(f"HA write suppressed (breaker open): {domain}.{service} entity={entity}")
 

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [1.5.29] — 2026-07-25
+
+### Added
+- Optimum-start recovery planning now records a physical per-source shadow
+  plan and a start/arrival census, including per-source heat-up observations
+  on dual-source installs. No control behaviour changes.
+- Hot-water recovery is now instrumented: per-room temperature droop is
+  measured across each hot-water cycle, and recovery start/completion is
+  reported with the affected rooms, measured droop, and exit reason.
+- Write-suppression windows are now announced in the log: an event latches on
+  the first dropped write and clears when the breaker closes, reporting how
+  many writes were suppressed.
+
+### Changed
+- Hot-water recovery now targets rooms by measured droop with a capped boost,
+  and exits when rooms recover, at the duration cap, or immediately when no
+  deficit exists — replacing the fixed room list and the flow-temperature
+  exit proxy.
+
+### Fixed
+- Summer mode no longer enters when the 12-hour forecast minimum already fails
+  the exit threshold, suppressing an enter/exit churn cycle. An optional
+  entry-margin setting widens the no-enter band.
+- Control endpoints no longer report success for writes the circuit breaker
+  suppressed: responses now carry the actual write outcome.
+
 ## [1.5.28] — 2026-07-22
 
 ### Added

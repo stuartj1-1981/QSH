@@ -327,20 +327,33 @@ def set_control_mode(body: ControlModeBody):
                 )
 
     # 4. Sync to MQTT (when running via HA with MQTT flow control method)
+    # INSTRUCTION-442 — consume the WriteOutcome contract (408): a breaker-
+    # suppressed publish returns instead of raising, so it must not take the
+    # silent-success path. "mqtt_sync" is unconditional and five-valued: the
+    # enum's .value when the MQTT leg runs, the route-level literal
+    # "not_applicable" when the leg's own condition means no publish is
+    # attempted at all — consumers never infer from absence.
+    mqtt_sync = "not_applicable"
     if config is not None and config.get("control_method") == "mqtt":
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
         topic = f"{prefix}/control/dfan_control" if prefix else "qsh/control/dfan_control"
         try:
-            from ...drivers.ha.integration import set_ha_service
-            set_ha_service(
+            from ...drivers.ha.integration import WriteOutcome, set_ha_service
+            result = set_ha_service(
                 "mqtt",
                 "publish",
                 {"topic": topic, "payload": str(body.enabled).lower(), "retain": True},
             )
+            mqtt_sync = result.value
+            if result is not WriteOutcome.SENT:
+                logger.warning(
+                    "dfan_control MQTT publish NOT sent (outcome=%s)", result.value
+                )
         except Exception as e:
+            mqtt_sync = "failed"
             logger.warning("dfan_control MQTT publish failed: %s", e)
 
-    return {"control_enabled": body.enabled}
+    return {"control_enabled": body.enabled, "mqtt_sync": mqtt_sync}
 
 
 # ── Forecast extension master enable (INSTRUCTION-200 V3) ───────────
@@ -653,16 +666,26 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
         topic = f"{prefix}/{suffix}" if prefix else suffix
         try:
-            from ...drivers.ha.integration import set_ha_service
-            set_ha_service(
+            from ...drivers.ha.integration import WriteOutcome, set_ha_service
+            result = set_ha_service(
                 "mqtt",
                 "publish",
                 {"topic": topic, "payload": payload, "retain": True},
             )
-            logger.info(
-                "MQTT write-back (via HA): topic=%s payload=%s retain=True written_at=%.3f",
-                topic, payload, written_at,
-            )
+            # INSTRUCTION-442 — the success INFO only asserts publishes that
+            # were actually sent; the PendingWriteback below is recorded in
+            # every branch ("attempted publish", INSTRUCTION-268) and remains
+            # the functional non-arrival detector.
+            if result is WriteOutcome.SENT:
+                logger.info(
+                    "MQTT write-back (via HA): topic=%s payload=%s retain=True written_at=%.3f",
+                    topic, payload, written_at,
+                )
+            else:
+                logger.warning(
+                    "MQTT write-back (via HA) NOT sent (outcome=%s) for %s: topic=%s payload=%s",
+                    result.value, control_key, topic, payload,
+                )
         except Exception as e:
             logger.warning("MQTT write-back (via HA) failed for %s: %s", control_key, e)
     else:
