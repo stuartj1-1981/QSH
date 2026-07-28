@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.5.30] — 2026-07-28
+
+### Changed
+- **Breaking:** `control_enabled` must now be set to `true` as a YAML boolean to
+  allow QSH to control your heating. Values like `1` or `"true"`, or a missing
+  setting, now leave the add-on in shadow mode instead of being treated as
+  enabled. If your configuration omits `control_enabled` or sets it to anything
+  other than `true`/`false`, set it explicitly after upgrading. Toggles via Home
+  Assistant, MQTT and the web UI are unaffected.
+- MQTT dispatch and manual-override log messages are now reported once when a
+  condition starts and once when it clears, rather than repeating every
+  30 seconds. No control decisions change.
+
 ## [1.5.29] — 2026-07-25
 
 ### Added
