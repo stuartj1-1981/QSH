@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
+from ...utils import MISSING, resolve_control_enabled
 
 
 def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
@@ -259,18 +260,26 @@ class HADriver:
 
         # dfan_control: read from HA entity if configured, else fall back to
         # config["control_enabled"]. INSTRUCTION-125: collapsed from
-        # dfan_control_internal. default=False as defence-in-depth fallback
-        # for the pathological case where both sources are absent.
+        # dfan_control_internal.
+        #
+        # INSTRUCTION-453: the internal fallback is admitted, not trusted.
+        # default=MISSING (not False) because resolve_value returns `default`
+        # only when BOTH the external read and the internal key are absent —
+        # exactly the case the payload should name. An entity reporting
+        # 'unavailable'/'unknown' does NOT arrive here as None: resolve_value
+        # falls through to the config value, so availability transients
+        # annunciate nothing (§1.3).
         from ..resolve import resolve_value as _resolve_value
-        control_enabled = _resolve_value(
-            config,
-            entity_key="entities.dfan_control_toggle",
-            internal_key="control_enabled",
-            default=False,
-            read_fn=_read_dfan_control_state,
-        ).value
-        if control_enabled is None:
-            control_enabled = False
+        control_enabled = resolve_control_enabled(
+            _resolve_value(
+                config,
+                entity_key="entities.dfan_control_toggle",
+                internal_key="control_enabled",
+                default=MISSING,
+                read_fn=_read_dfan_control_state,
+            ).value,
+            layer="ha_read",
+        )
 
         # INSTRUCTION-159B Task 5 V2: dual-source HA tariff fetch.
         #
@@ -554,16 +563,16 @@ class HADriver:
 
     def write_outputs(self, outputs: OutputBlock, config: Dict) -> None:
         """Dispatch control outputs to Home Assistant."""
-        # INSTRUCTION-125: fail-closed default as defence-in-depth. Primary
-        # path is config.py YAML load which defaults missing control_enabled
-        # to True on load; this fallback only activates on in-memory
-        # corruption.
-        control_enabled = config.get("control_enabled")
-        if control_enabled is None:
-            logging.warning(
-                "control_enabled missing from config — defaulting to shadow (defence-in-depth)"
-            )
-            control_enabled = False
+        # INSTRUCTION-125 / INSTRUCTION-453: fail-safe admission as defence-in-
+        # depth. The primary path is the config.py YAML load, which since
+        # INSTRUCTION-453 admits at layer "config_yaml" and stores a strict
+        # bool. A non-boolean therefore reaches this line only through
+        # in-memory corruption, or through a config dict built by a path that
+        # bypasses qsh/config.py — tests, the wizard, an API restore. Both are
+        # real, and both are annunciated here rather than resolved silently.
+        control_enabled = resolve_control_enabled(
+            config.get("control_enabled", MISSING), layer="ha_write"
+        )
 
         # ── Hardware commands (HP flow/mode + TRV setpoints) ──
         if outputs.hardware_changed:

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
+from ...utils import MISSING, resolve_control_enabled
 from ...occupancy.comfort_schedule import get_comfort_schedule_store
 from .client import MQTTClient, MQTTClientConfig
 from ..resolve import ResolvedValue, deep_get, _validate_range
@@ -89,12 +90,10 @@ def _register_mqtt_events() -> None:
         latch_key=("topic", "json_path"),
         default_level=logging.WARNING,
     ))
-    ann.register(EventSpec(
-        name="MQTT.control_enabled_missing",
-        kind=EventKind.LATCHED,
-        payload_fields=(),
-        default_level=logging.WARNING,
-    ))
+    # INSTRUCTION-453 — the former per-driver control-enable annunciation is
+    # retired. The condition is cross-layer, not MQTT-specific, and is now
+    # carried by CONTROL.enable_unresolved, registered at qsh.utils import time
+    # with latch_key=("layer",).
     # INSTRUCTION-268 — comfort-temp writeback round-trip verification events.
     ann.register(EventSpec(
         name="COMFORT.writeback_unverified",
@@ -155,6 +154,57 @@ def _register_mqtt_events() -> None:
         name="MQTT.outdoor_no_mapping_fallback",
         kind=EventKind.LATCHED,
         payload_fields=("value", "from_last_valid"),
+        default_level=logging.WARNING,
+    ))
+    # INSTRUCTION-460 — the four operator-log calls on the write_outputs
+    # per-cycle path become registered, edge-gated annunciations. Each was
+    # guarded by a condition rather than an edge, so while the condition held
+    # the line repeated every 30 s cycle.
+    #
+    # A heat-source command names a source absent from config["heat_sources"].
+    # Configuration fault: it persists until the config changes, which restarts
+    # the add-on, so announce-once-per-process per source and no exit.
+    ann.register(EventSpec(
+        name="MQTT.dispatch_unknown_source",
+        kind=EventKind.LATCHED,
+        payload_fields=("source",),
+        latch_key=("source",),
+        default_level=logging.WARNING,
+    ))
+    # A manual_state entry is MANUAL with position_pct=None — barred by
+    # set_manual's validation (225A Task 1), so this is a contract violation
+    # and a code fault. Same lifetime reasoning: fixing it is a code change,
+    # which restarts the process. Announce-once-per-process per room, no exit.
+    ann.register(EventSpec(
+        name="MQTT.manual_state_contract_violation",
+        kind=EventKind.LATCHED,
+        payload_fields=("room",),
+        latch_key=("room",),
+        default_level=logging.WARNING,
+    ))
+    # Membership snapshot of the rooms held in Manual. ON_CHANGE, not LATCHED:
+    # the intent is change-detection, and a LATCHED set-valued key goes silent
+    # on A -> A+B -> A because the first tuple is still latched. changed()
+    # emits on first observation and on every membership transition including
+    # the transition to empty. The published counts are deliberately NOT in the
+    # payload — continuous variables in an ON_CHANGE payload force re-emission
+    # on cycle jitter (CLAUDE.md §"The three event kinds").
+    ann.register(EventSpec(
+        name="MQTT.manual_override_membership",
+        kind=EventKind.ON_CHANGE,
+        payload_fields=("rooms",),
+        default_level=logging.INFO,
+    ))
+    # The driver's own alarm on the INSTRUCTION-225A carve-out: an AUTO room's
+    # setpoint was published while control_enabled was False — a shadow-mode
+    # write. Singleton latch (latch_key=()) gives episode semantics: entered on
+    # the first cycle the condition holds, exited on the first cycle it does
+    # not, so a later episode alarms again. rooms and count ride as diagnostic
+    # payload outside the latch key, so a changing count does not re-emit.
+    ann.register(EventSpec(
+        name="MQTT.manual_gate_inconsistency",
+        kind=EventKind.LATCHED,
+        payload_fields=("rooms", "count"),
         default_level=logging.WARNING,
     ))
 
@@ -1892,18 +1942,15 @@ class MQTTDriver:
         if not self._mqtt or not self._topic_map:
             return
 
-        # INSTRUCTION-125: fail-closed default as defence-in-depth. Primary
-        # path is config.py YAML load which defaults missing control_enabled
-        # to True on load; this fallback only activates on in-memory
-        # corruption.
+        # INSTRUCTION-125 / INSTRUCTION-453: fail-safe admission as defence-in-
+        # depth. Strict boolean True or shadow; every other value is annunciated
+        # as CONTROL.enable_unresolved at layer "mqtt_write". The former
+        # per-driver control-enable annunciation is retired — the condition is
+        # cross-layer, not MQTT-specific, and one condition carries one name.
         _register_mqtt_events()
-        ann = get_annunciator()
-        control_enabled = config.get("control_enabled")
-        if control_enabled is None:
-            ann.entered("MQTT.control_enabled_missing")
-            control_enabled = False
-        else:
-            ann.exited("MQTT.control_enabled_missing")
+        control_enabled = resolve_control_enabled(
+            config.get("control_enabled", MISSING), layer="mqtt_write"
+        )
 
         prefix = config.get("mqtt", {}).get("topic_prefix", "")
 
@@ -2013,9 +2060,10 @@ class MQTTDriver:
             for source_name, cmd in outputs.source_command.items():
                 src_cfg = sources_by_name.get(source_name)
                 if src_cfg is None:
-                    logger.warning(
-                        "MQTT dispatch: unknown source '%s' — skipping",
-                        source_name,
+                    # INSTRUCTION-460 — edge-gated; announce-once-per-process
+                    # per source. Was an unconditional per-cycle warning.
+                    get_annunciator().entered(
+                        "MQTT.dispatch_unknown_source", source=source_name,
                     )
                     continue
                 topic = command_topic_for_source(
@@ -2061,20 +2109,39 @@ class MQTTDriver:
                 # at the dataclass level, so guard explicitly. Skip the room and log
                 # rather than crash the publish loop on contract violation.
                 if entry.position_pct is None:
-                    logger.warning(
-                        "manual_state contract violation: room %r MANUAL with position_pct=None; skipping publish",
-                        room,
+                    # INSTRUCTION-460 — edge-gated; announce-once-per-process
+                    # per room. Was an unconditional per-cycle warning.
+                    get_annunciator().entered(
+                        "MQTT.manual_state_contract_violation", room=room,
                     )
                     continue
                 effective_setpoints[room] = float(entry.position_pct)
                 manual_rooms_active.add(room)
 
+        # INSTRUCTION-460 — Manual-override membership, annunciated ON_CHANGE
+        # and called unconditionally every cycle, outside and above the publish
+        # guards. Steady membership emits nothing; any transition emits once,
+        # including the release to empty (rooms=()). changed() emits on first
+        # observation, so the first cycle of every process writes one INFO line
+        # — accepted deliberately, and bound by the steady-state test case:
+        # suppressing it would cost the per-instance driver state this design
+        # exists to avoid.
+        get_annunciator().changed(
+            "MQTT.manual_override_membership",
+            rooms=tuple(sorted(manual_rooms_active)),
+        )
+
+        # INSTRUCTION-460 — hoisted out of the nested guard below so the
+        # gate-inconsistency decision after the valve block can evaluate
+        # published_auto on cycles where the publish block did not run. That
+        # is the clearing cycle of an episode, very often.
+        published_auto = 0
+        published_manual = 0
+
         # Decide whether the publish loop runs at all.
         # Any MANUAL active forces the loop on (MANUAL bypasses shadow mode per parent §2.4).
         if outputs.valves_changed or manual_rooms_active:
             if control_enabled or manual_rooms_active:
-                published_auto = 0
-                published_manual = 0
                 for om in self._topic_map.output_mappings:
                     if om.field != "valve_setpoint" or not om.room:
                         continue
@@ -2089,25 +2156,35 @@ class MQTTDriver:
                         published_manual += 1
                     else:
                         published_auto += 1
-                if published_manual:
-                    logger.info(
-                        "MANUAL override: published %d valve_setpoint(s) for %d room(s)",
-                        published_manual, len(manual_rooms_active),
-                    )
-                if published_auto and not control_enabled:
-                    # Defence-in-depth: this branch should be unreachable because
-                    # control_enabled=False AND room not in manual_rooms_active is
-                    # suppressed above. If it fires, log loud and continue.
-                    logger.warning(
-                        "MANUAL-aware gate inconsistency: %d AUTO publishes occurred under shadow mode",
-                        published_auto,
-                    )
             else:
                 # Pure AUTO + shadow mode — original V1 behaviour.
                 logger.debug(
                     "SHADOW MODE: suppressed %d valve setpoint(s)",
                     len(outputs.valve_setpoints),
                 )
+
+        # INSTRUCTION-460 — the gate-inconsistency alarm, entered and exited at
+        # one decision point outside both guards.
+        #
+        # Defence-in-depth: the rising branch should be unreachable, because
+        # control_enabled=False AND room not in manual_rooms_active is
+        # suppressed in the publish loop above. If it fires, a shadow-mode write
+        # happened — the one thing the suppression architecture exists to
+        # prevent — so it alarms loud and continues.
+        #
+        # Episode semantics (OB-01): one annunciation per episode, and every
+        # episode. The exit must be evaluated outside the guards because the
+        # clearing cycle is very often a cycle on which the publish block did
+        # not run. exited() against an unset latch returns before _emit, so the
+        # else branch is silent on every healthy cycle.
+        if published_auto and not control_enabled:
+            get_annunciator().entered(
+                "MQTT.manual_gate_inconsistency",
+                rooms=tuple(sorted(manual_rooms_active)),
+                count=published_auto,
+            )
+        else:
+            get_annunciator().exited("MQTT.manual_gate_inconsistency")
 
         # ── Auxiliary boolean outputs (per-room aux actuators, INSTRUCTION-131B) ──
         if outputs.auxiliary_outputs_changed and outputs.auxiliary_outputs:

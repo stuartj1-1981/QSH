@@ -35,6 +35,7 @@ torch = [
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
+    "hypothesis>=6.100",
 ]
 all = [
     "quantum-swarm-heating[torch,dev]",
@@ -63,6 +64,9 @@ testpaths = [
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "property: property-based test (Hypothesis). Slower than a unit test; may be deselected with -m 'not property'.",
+]
 
 # ---------------------------------------------------------------------------
 # Ruff — strict on safety, relaxed on style.
@@ -86,4 +90,5 @@ ignore = []
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "hypothesis>=6.100",
 ]
