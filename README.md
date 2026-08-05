@@ -56,6 +56,10 @@ The methods behind QSH are documented in a four-part preprint series (Stuart J. 
 - **Domain-Expert AI Collaboration: Crossing the Paradigm Boundary from Industrial Control to Application Software** (Apr 2026) — engineering judgement as the scarce resource in AI-assisted development. [doi:10.5281/zenodo.19382919](https://doi.org/10.5281/zenodo.19382919)
 - **DFAN: Distributed Fractal Awareness Network — A Biomimetic Control Architecture for Intelligent Energy Transfer Systems** (Apr 2026) — the design philosophy: QSH as the first deployment of a general energy-transfer architecture. [doi:10.5281/zenodo.19443159](https://doi.org/10.5281/zenodo.19443159)
 
+**Synthesis (Jul 2026):**
+
+- **Two Loops, One V-Model: Composing Process Governance and Formal Product Verification for Assurance of AI-Generated Software** (Jul 2026) — the synthesis of the strands above: how a process-assurance regime and formal product verification compose into a single V-model for AI-generated software. The QSH governance ledger is included as a worked existence proof, with the supporting data artefacts deposited alongside. [doi:10.5281/zenodo.21556620](https://doi.org/10.5281/zenodo.21556620)
+
 Citation metadata for this repository: [`CITATION.cff`](CITATION.cff).
 
 ## Licence
