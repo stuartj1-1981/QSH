@@ -49,7 +49,7 @@ See [Installation Guide](docs/install.md) for step-by-step instructions.
 
 ## Research & Publications
 
-The methods behind QSH are documented in a four-part preprint series (Stuart J. Hunt, 2026 — all open access — CC BY 4.0, DFAN paper CC BY-SA 4.0 — archived on Zenodo; PDFs mirrored in [`docs/publications/`](docs/publications/)):
+The methods behind QSH are documented in a four-part preprint series (Stuart J. Hunt, 2026 — all open access — CC BY 4.0 — archived on Zenodo; PDFs mirrored in [`docs/publications/`](docs/publications/)):
 
 - **Physics-Based Thermal Optimisation for Residential Heat Pumps: Fleet Simulation, Weather Compensation Analysis, and the Shoulder Mode Discovery** (Mar 2026) — 348,170-run fleet simulation, weather-compensation analysis, and the shoulder-mode discovery. [doi:10.5281/zenodo.18903154](https://doi.org/10.5281/zenodo.18903154)
 - **Air-Gapped AI Development Pipeline** (Mar 2026) — the GAMP-inspired, multi-station governance regime under which QSH is engineered: structurally separated authoring, independent review, deployment, and validation. [doi:10.5281/zenodo.19323404](https://doi.org/10.5281/zenodo.19323404)
