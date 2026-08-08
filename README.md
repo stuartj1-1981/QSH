@@ -54,11 +54,28 @@ The methods behind QSH are documented in a four-part preprint series (Stuart J. 
 - **Physics-Based Thermal Optimisation for Residential Heat Pumps: Fleet Simulation, Weather Compensation Analysis, and the Shoulder Mode Discovery** (Mar 2026) — 348,170-run fleet simulation, weather-compensation analysis, and the shoulder-mode discovery. [doi:10.5281/zenodo.18903154](https://doi.org/10.5281/zenodo.18903154)
 - **Air-Gapped AI Development Pipeline** (Mar 2026) — the GAMP-inspired, multi-station governance regime under which QSH is engineered: structurally separated authoring, independent review, deployment, and validation. [doi:10.5281/zenodo.19323404](https://doi.org/10.5281/zenodo.19323404)
 - **Domain-Expert AI Collaboration: Crossing the Paradigm Boundary from Industrial Control to Application Software** (Apr 2026) — engineering judgement as the scarce resource in AI-assisted development. [doi:10.5281/zenodo.19382919](https://doi.org/10.5281/zenodo.19382919)
-- **DFAN: Distributed Fractal Awareness Network — A Biomimetic Control Architecture for Intelligent Energy Transfer Systems** (Apr 2026) — the design philosophy: QSH as the first deployment of a general energy-transfer architecture. [doi:10.5281/zenodo.19443159](https://doi.org/10.5281/zenodo.19443159)
+- **DFAN: Distributed Fractal Awareness Network — A Biomimetic Control Architecture for Intelligent Energy Transfer Systems** (Apr 2026) — the design philosophy: QSH as the first deployment of a general energy-transfer architecture. [doi:10.5281/zenodo.19443158](https://doi.org/10.5281/zenodo.19443158) (v2, Aug 2026 — reference list corrected)
 
 **Synthesis (Jul 2026):**
 
 - **Two Loops, One V-Model: Composing Process Governance and Formal Product Verification for Assurance of AI-Generated Software** (Jul 2026) — the synthesis of the strands above: how a process-assurance regime and formal product verification compose into a single V-model for AI-generated software. The QSH governance ledger is included as a worked existence proof, with the supporting data artefacts deposited alongside. [doi:10.5281/zenodo.21556620](https://doi.org/10.5281/zenodo.21556620)
+
+### Correction notice
+
+**Physics-Based Thermal Optimisation** (Mar 2026) contains errors in its reference list, identified in an audit on 7 August 2026. Three entries do not correspond to real publications and one describes a real standard inaccurately:
+
+- **[6]** Jack, Sunikka-Blank & Lowe, *Energy and Buildings* 258, 111846 — no such paper. That volume and article number belong to unrelated work.
+- **[7]** Mozer, *"The intelligent home"*, ISMB 1994 — incorrect. The intended reference is Mozer, M.C., *"The Neural Network House: An Environment that Adapts to its Inhabitants"*, AAAI Spring Symposium on Intelligent Environments, 1998.
+- **[9]** Vetterli, Sulzer & Jauslin, *Energy and Buildings* 294, 113228 — no such paper.
+- **[15]** MCS 020 is the planning standard for permitted development installations, not a heat pump systems standard.
+
+**The simulation data, physics engine, archetype profiles, live validation measurements, results and conclusions are unaffected.** The errors are confined to the bibliography. The claim in §2.2 attributing support to references [3] and [6] is withdrawn pending re-grounding; the weather-compensation quantification reported in the paper is original to this work and does not depend on it.
+
+The full notice is attached to the Zenodo record: [doi:10.5281/zenodo.18903286](https://doi.org/10.5281/zenodo.18903286)
+
+**DFAN** contained one fabricated reference (Chen & Shi, *Applied Energy* 84(11), 2007) and one that could not be verified. Both are corrected in **v2**, which is the version linked above and mirrored here.
+
+Both bibliographies were assembled with AI literature-search assistance and were not independently resolved to primary sources before deposit. Every citation is now resolved to a primary source before deposit — each DOI resolved and its returned title and authors compared against the citation as written, and each standard retrieved and its issuing body confirmed. The fabricated entries carried real journal, volume and article-number coordinates attached to fabricated author and title pairs, which makes them undetectable by reading and trivially detectable by resolution.
 
 Citation metadata for this repository: [`CITATION.cff`](CITATION.cff).
 
