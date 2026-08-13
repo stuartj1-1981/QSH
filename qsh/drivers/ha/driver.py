@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from ...forecast.compute import derive_daily_lows
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...utils import MISSING, resolve_control_enabled
 
@@ -431,9 +432,15 @@ class HADriver:
                 )
 
         # ── Weather forecast for recovery COP estimation ──
+        # INSTRUCTION-474 Task 5 — seam-derived; the legacy hardcoded-entity
+        # fetch helper is deleted. Population goes through the injected
+        # ForecastProvider (get_forecast_provider() / derive_daily_lows()).
         forecast_temps = None
         if away_active or per_zone_away:
-            forecast_temps = self._fetch_weather_forecast()
+            provider = self.get_forecast_provider()
+            if provider.is_available:
+                now = time.time()
+                forecast_temps = derive_daily_lows(provider.fetch_bundle(now), now)
 
         # ── Refrigerant / Modbus sensors (hp_modbus config section) ──
         hp_modbus = config.get("sensors", {}).get("hp_modbus", {})
@@ -720,57 +727,6 @@ class HADriver:
             return self._hw_controller.get_state()
         except Exception as e:
             logging.debug(f"HADriver: HW state fetch failed: {e}")
-            return None
-
-    def _fetch_weather_forecast(self):
-        """Fetch daily OAT forecast from HA weather entity.
-
-        Returns list of daily low temperatures (°C) for the next 7 days,
-        or None if the weather integration is unavailable.
-
-        Uses the HA REST API weather.get_forecasts service which returns
-        forecast data in the response body.
-        """
-        import os
-        import requests as _requests
-
-        token = os.getenv("SUPERVISOR_TOKEN")
-        if not token:
-            return None
-
-        try:
-            resp = _requests.post(
-                "http://supervisor/core/api/services/weather/get_forecasts",
-                json={
-                    "entity_id": "weather.home",
-                    "type": "daily",
-                },
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                return None
-
-            result = resp.json()
-            # Response is {"weather.home": {"forecast": [...]}}
-            forecasts = result.get("weather.home", {}).get("forecast", [])
-            if not forecasts:
-                return None
-
-            temps = []
-            for day in forecasts[:7]:
-                temp_low = day.get("templow")
-                if temp_low is not None:
-                    temps.append(float(temp_low))
-                else:
-                    temp = day.get("temperature")
-                    if temp is not None:
-                        temps.append(float(temp))
-            return temps if temps else None
-        except Exception:
             return None
 
     # ── Manual override (INSTRUCTION-225A) ─────────────────────────────
