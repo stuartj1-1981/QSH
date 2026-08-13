@@ -11,6 +11,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...forecast.compute import derive_daily_lows
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
@@ -517,6 +518,17 @@ class MQTTDriver:
                 "MQTT forecast: subscribing to %s (configured via mqtt.inputs.forecast.topic)",
                 full_forecast_topic,
             )
+
+            # INSTRUCTION-474 Task 3 — sibling optional daily-summary topic,
+            # same base name + "_daily" suffix, mirroring
+            # MQTTForecastProvider._full_daily_topic construction.
+            daily_forecast_topic = f"{forecast_topic}_daily"
+            full_daily_forecast_topic = (
+                _prefixed(self._prefix, daily_forecast_topic)
+                if self._prefix else daily_forecast_topic
+            )
+            if full_daily_forecast_topic not in all_topics:
+                all_topics.append(full_daily_forecast_topic)
 
         # INSTRUCTION-374A — register mapped (topic, json_path) for message-time
         # presence/value tracking. Must precede subscribe so the ledger is armed
@@ -1877,6 +1889,16 @@ class MQTTDriver:
             "flags": sorted(_capability_stale_flags),
         }
 
+        # ── Weather forecast for recovery COP estimation ──
+        # INSTRUCTION-474 Task 5 — leg (a): forecast_temps was HA-only.
+        # Identical away-gated population, mirroring ha/driver.py's gate
+        # (away_active or per_zone_away) exactly.
+        forecast_temps = None
+        if away_rv.value or per_zone_away:
+            provider = self.get_forecast_provider()
+            if provider.is_available:
+                forecast_temps = derive_daily_lows(provider.fetch_bundle(now), now)
+
         return InputBlock(
             room_temps=room_temps,
             independent_sensors=independent_sensors,
@@ -1929,6 +1951,7 @@ class MQTTDriver:
             has_battery=capabilities.get("has_battery", False),
             away_mode_active=away_rv.value,
             away_days=away_days_rv.value,
+            forecast_temps=forecast_temps,
             per_zone_away=per_zone_away,
             per_room_comfort_overrides=per_room_comfort,
             occupancy_sensor_states=occupancy_sensor_states,

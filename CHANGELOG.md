@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.5.31] — 2026-08-13
+
+### Added
+- Away-mode recovery planning now uses daily forecast low temperatures on both
+  Home Assistant and MQTT installs. MQTT installs gain forecast-aware away
+  recovery for the first time, via an optional retained topic
+  `<topic_prefix>/weather/forecast_daily` (see the MQTT forecast publisher
+  guide). Forecast lows are matched to the actual arrival date; days beyond
+  the forecast fall back to the current outdoor temperature.
+- When away-depth optimisation runs without any forecast data, this is now
+  reported once in the log rather than silently falling back.
+
+### Fixed
+- Away-recovery forecasts were fetched from a hardcoded `weather.home` entity,
+  ignoring the configured forecast weather entity. Installs whose weather
+  entity had a different name silently fell back to the current outdoor
+  temperature when planning away recovery depth.
+
 ## [1.5.30] — 2026-07-28
 
 ### Changed
