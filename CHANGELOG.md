@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.5.32] — 2026-08-16
+
+### Fixed
+- The configured export rate was ignored. `Settings → Tariff → Fallback Rates →
+  Export` had no effect, so exported solar surplus was priced at the import
+  rate. Affects both Home Assistant and MQTT installs. The export rate is now
+  read from the tariff settings as documented.
+- Standalone (non-add-on) hand-authored configs: a top-level `export_rate:` key
+  is no longer read — move the value to `fallback_rates.export`.
+
 ## [1.5.31] — 2026-08-13
 
 ### Added

@@ -363,9 +363,20 @@ class HADriver:
         current_rate = (
             pick_octopus_rate(tariff_rates, fallback=fallback_rate) if tariff_rates else fallback_rate
         )
-        # INSTRUCTION-410 — export default demoted 0.15→0.0 (no phantom credit;
-        # unconfigured export falls to the import tariff via the present-but-0 guard).
-        export_rate = safe_float(config.get("export_rate", 0.0), 0.0)
+        # INSTRUCTION-476 — operator-static export rate, key-corrected. The
+        # pre-476 read consumed a dead top-level export_rate config key that
+        # no production writer populates (Settings → Tariff writes
+        # fallback_rates.export), so the static leg was structurally dead on
+        # HA installs. Ladder matches create_export_provider
+        # (qsh/tariff/__init__.py): fixed_rates.export_rate, else
+        # fallback_rates.export, else 0.0 (INSTRUCTION-410 no-phantom-credit
+        # demotion preserved; unconfigured export still falls to the import
+        # tariff via the present-but-0 guard).
+        _fixed_rates = config.get("fixed_rates") or {}
+        _static_export = _fixed_rates.get("export_rate")
+        if _static_export is None:
+            _static_export = (config.get("fallback_rates") or {}).get("export", 0.0)
+        export_rate = safe_float(_static_export, 0.0)
 
         # Flow limits from HA entities
         flow_min, flow_max = get_flow_temp_limits(config)
