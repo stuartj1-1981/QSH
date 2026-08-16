@@ -1504,11 +1504,21 @@ class MQTTDriver:
         fixed_rates = config.get("fixed_rates") or {}
         if fixed_rates:
             current_rate = fixed_rates.get("import_rate", 0.245)
-            # INSTRUCTION-410 — export default demoted 0.15→0.0 (no phantom credit).
-            export_rate = fixed_rates.get("export_rate", 0.0)
         else:
             current_rate = fallback_rates.get("standard", 0.245)
-            export_rate = fallback_rates.get("export", 0.0)
+
+        # INSTRUCTION-476 — export leg decoupled from the fixed_rates block
+        # gate: key-level precedence matching create_export_provider, so a
+        # fixed_rates block without export_rate no longer masks
+        # fallback_rates.export. Import leg (block-gated) unchanged.
+        export_rate = fixed_rates.get("export_rate")
+        if export_rate is None:
+            export_rate = (fallback_rates or {}).get("export", 0.0)
+        if export_rate is None:
+            # Present-but-null on the final rung: .get's default fires on
+            # absence, not on a stored null. OB-01 requires 0.0, never None,
+            # on a float-typed money-path field (ASSESSMENT-476-V2 M-02).
+            export_rate = 0.0
 
         # ── Control topics via _resolve_mqtt_control (cache-first with internal fallback) ──
         away_rv = self._resolve_mqtt_control(
