@@ -765,37 +765,34 @@
 ### Fixed
 - Dual heat source acquisition pipeline: per-source sensor selector,
   MQTT placeholder differentiation, duplicate-topic PATCH guard
-  (INSTRUCTION-241A, INSTRUCTION-241B, INSTRUCTION-241C)
 - Wizard per-source sensor tab routing for multi-heat-source configs
 
 ## [1.4.1] — 2026-05-16
 
 ### Added
-- Multi-heat-source wizard + Settings editor (INSTRUCTION-237A,
-  INSTRUCTION-237B) — plural `heat_sources` array with per-source
-  carbon factor (BEIS defaults as placeholders for gas/LPG/oil), max
-  source count enforced via `MAX_HEAT_SOURCES`, plural-first hydration
-  through validate/deploy/scan-MQTT
+- Multi-heat-source wizard + Settings editor — plural `heat_sources`
+  array with per-source carbon factor (BEIS defaults as placeholders
+  for gas/LPG/oil), max source count enforced via `MAX_HEAT_SOURCES`,
+  plural-first hydration through validate/deploy/scan-MQTT
 - HTTP 400 short-circuit in `/api/wizard/deploy` when `heat_sources`
-  list is empty (INSTRUCTION-237A V2 G-N1)
+  list is empty
 
 ### Changed
-- Mobile sidebar scrollable with pinned header/footer
-  (INSTRUCTION-238) — `flex-1 min-h-0 overflow-y-auto overscroll-contain`
-  on nav, `shrink-0` on logo and section footer
+- Mobile sidebar scrollable with pinned header/footer —
+  `flex-1 min-h-0 overflow-y-auto overscroll-contain` on nav,
+  `shrink-0` on logo and section footer
 - History seed window widened from 24 h to 168 h
-  (`SEED_WINDOW_HOURS = (MAX_ENTRIES * 30) // 3600`, INSTRUCTION-239),
+  (`SEED_WINDOW_HOURS = (MAX_ENTRIES * 30) // 3600`),
   derived from deque capacity × cycle period to fail loudly on drift
 - Engineering RL chart titles drop "(48h)" suffix that misrepresented
-  the actual rolling window (INSTRUCTION-239)
+  the actual rolling window
 
 ### Fixed
 - First-cycle seed ordering: historian seed completes before the first
   cycle history append, preventing the seeded cycle from being evicted
-  from the buffer (INSTRUCTION-240)
+  from the buffer
 - Wizard setup-mode redirect tightened — `App.setup-mode-routing.test`
   covers the case where config retains placeholder markers on restart
-  (INSTRUCTION-240)
 
 ## [1.4.0] — 2026-05-15
 
@@ -806,105 +803,91 @@ override at the dispatch layer, and hybrid HP+boiler heat-source
 handover.
 
 ### Added — DFAN forecast-aware control
-- Forecast context, master-enable, confidence primitives (INSTRUCTION-200)
-- Forecast scalars + per-room dicts (INSTRUCTION-198)
-- Forecast predictor + drift detector, relocated to `qsh/projection/` per
-  T-31 production-code import-graph constraint (INSTRUCTION-199)
-- Forecast history + reconciliation (INSTRUCTION-201A)
-- Counterfactual + RL evaluation infrastructure (INSTRUCTION-201B)
-- DFAN alarms A + B as notifications (not protective trips) (INSTRUCTION-201C)
-- RecoveryScheduler forecast-aware short-circuit (INSTRUCTION-202)
-- ShoulderController forecast-aware shutdown bias (INSTRUCTION-203)
-- TariffOptimiser forecast-load qualifier detection (INSTRUCTION-204)
-  + qualifier→sweep wiring (INSTRUCTION-213)
+- Forecast context, master-enable, confidence primitives
+- Forecast scalars + per-room dicts
+- Forecast predictor + drift detector, relocated to `qsh/projection/` to
+  satisfy the production-code import-graph constraint
+- Forecast history + reconciliation
+- Counterfactual + RL evaluation infrastructure
+- DFAN alarms A + B as notifications (not protective trips)
+- RecoveryScheduler forecast-aware short-circuit
+- ShoulderController forecast-aware shutdown bias
+- TariffOptimiser forecast-load qualifier detection
+  + qualifier→sweep wiring
 - ValveController solar attenuation, post-dissipation, TRV-setpoint-only
-  (INSTRUCTION-205)
-- FlowController forecast-aware setpoint relaxation (INSTRUCTION-206)
-- RL observation vector + state-dim coupled reset (INSTRUCTION-207A)
-- RL single-writer migration + composition unification (INSTRUCTION-207B)
-- DFAN forecast WebUX backend foundation (INSTRUCTION-208A)
-- DFAN forecast frontend types + 5 hooks (INSTRUCTION-208B)
-- DFAN forecast frontend components (INSTRUCTION-208C)
-- DFAN forecast page composition + routing (INSTRUCTION-208D)
-- DFAN forecast shared helpers (INSTRUCTION-209)
-- ShoulderController forecast-aware restart bias (INSTRUCTION-212)
-- API: DFAN forecast carriers in WebSocket envelope (INSTRUCTION-226)
+- FlowController forecast-aware setpoint relaxation
+- RL observation vector + state-dim coupled reset
+- RL single-writer migration + composition unification
+- DFAN forecast WebUX backend foundation
+- DFAN forecast frontend types + 5 hooks
+- DFAN forecast frontend components
+- DFAN forecast page composition + routing
+- DFAN forecast shared helpers
+- ShoulderController forecast-aware restart bias
+- API: DFAN forecast carriers in WebSocket envelope
 
 ### Added — Forecast subsystem refactor
-- ForecastProvider Protocol seam (INSTRUCTION-220A)
-- HAForecastProvider + FailureTracker (INSTRUCTION-220B)
-- MQTTForecastProvider + topic schema + config wiring (INSTRUCTION-220C)
+- ForecastProvider Protocol seam
+- HAForecastProvider + FailureTracker
+- MQTTForecastProvider + topic schema + config wiring
 - ForecastController migration + pure parse/compute/state +
-  MockForecastProvider (INSTRUCTION-220D)
+  MockForecastProvider
 - Defect 1 persistence fix + legacy WeatherForecaster deletion
-  (INSTRUCTION-220E)
-- Public-beta UX cleanup (INSTRUCTION-223)
-- Section renumber + tooltips + HelpTip + t_indoor guard (INSTRUCTION-227A)
-- Sysid+forecast: solar capacity observer + API exposure (INSTRUCTION-227B)
+- Public-beta UX cleanup
+- Section renumber + tooltips + HelpTip + t_indoor guard
+- Sysid+forecast: solar capacity observer + API exposure
 - Projection: kWp + time-base unit fix at three rate functions
-  (INSTRUCTION-227C)
 
 ### Added — Multi-emitter direct TRV zones
-- HA driver fan-out (INSTRUCTION-222A)
-- MQTT driver fan-out (INSTRUCTION-222B)
-- Per-emitter valve-position read-side fan-out — HA (INSTRUCTION-224B),
-  MQTT (INSTRUCTION-224C)
+- HA driver fan-out
+- MQTT driver fan-out
+- Per-emitter valve-position read-side fan-out — HA and MQTT
 - CycleSnapshot per-emitter field + `qsh_emitter` historian measurement
-  (INSTRUCTION-224D)
 - UI: per-emitter display in RoomDetail + MQTT list editor + Historian
-  emitter filter (INSTRUCTION-224E)
+  emitter filter
 
 ### Added — Manual override (PCS7 AUTO/MANUAL parity)
-- Manual-state foundation + HA driver intercept at direct-TRV dispatch
-  layer per INSTRUCTION-225A carve-out
-- MQTT driver MANUAL override parity (INSTRUCTION-225B)
-- `/api/manual` REST + `CycleSnapshot.manual_state` (INSTRUCTION-225C)
-- Engineering Valves page + MANUAL badge/strip (INSTRUCTION-225D)
+- Manual-state foundation + HA driver intercept at the direct-TRV
+  dispatch layer
+- MQTT driver MANUAL override parity
+- `/api/manual` REST + `CycleSnapshot.manual_state`
+- Engineering Valves page + MANUAL badge/strip
 
 ### Added — Hybrid HP+boiler heat source
-- Per-source heat-source dispatch on HA and MQTT (INSTRUCTION-228A)
-- Source-selection surfaced in Settings and Home banner (INSTRUCTION-228B)
+- Per-source heat-source dispatch on HA and MQTT
+- Source-selection surfaced in Settings and Home banner
 - Hybrid HP+boiler handover integration tests + owner smoke harness
-  (INSTRUCTION-228C)
 
-### Added — EventAnnunciator migration (T-33 + T-34)
-- EventAnnunciator service and Controller shims (INSTRUCTION-221A)
-- Pipeline migration (INSTRUCTION-221B)
-- Drivers migration (INSTRUCTION-221C)
-- Utility modules migration (INSTRUCTION-221D)
-- Remove deprecated primitives + final measurement (INSTRUCTION-221E)
+### Added — EventAnnunciator migration
+- EventAnnunciator service and Controller shims
+- Pipeline migration
+- Drivers migration
+- Utility modules migration
+- Remove deprecated primitives + final measurement
 
 ### Added — Other
-- Vendor write-budget knob — backend (INSTRUCTION-216A), frontend +
-  wizard UI (INSTRUCTION-216B)
+- Vendor write-budget knob — backend, frontend + wizard UI
 - DHW signal inputs consolidated under Settings → Hot Water
-  (INSTRUCTION-236)
-- Engineering page section and column tooltips (INSTRUCTION-214)
-- SCOP CH sparkline via `hw_active` tag filter (INSTRUCTION-215)
-- Building 3D layout: lift 2-floor cap (INSTRUCTION-235)
-- Live View canvas COP gated on `performance.source` (INSTRUCTION-232)
+- Engineering page section and column tooltips
+- SCOP CH sparkline via `hw_active` tag filter
+- Building 3D layout: lift 2-floor cap
+- Live View canvas COP gated on `performance.source`
 
 ### Fixed
 - Octopus tariff: gas prefix gate strips rate-class + accepts current
-  SILVER family (INSTRUCTION-219)
+  SILVER family
 - Octopus tariff: gate routing on `hp_euid`, not tariff key
-  (INSTRUCTION-234)
 - HA driver: `heating_entity` / `trv_entity` list-form contract
-  (INSTRUCTION-231A-D)
 - HA driver: type-guard `heating_entity` at three layers
-  (INSTRUCTION-230)
 - HA driver: restore legacy heating-entity fallback for declared-stems
-  case (INSTRUCTION-229)
+  case
 - MQTT driver: first-fresh valve aggregation with last-winner recovery
-  (INSTRUCTION-231B)
-- Frontend: DFAN Master Enable toggle URL (INSTRUCTION-218)
+- Frontend: DFAN Master Enable toggle URL
 - Settings: TRV Name field clearable; hidden for multi-emitter zones
 - None-mode: inject inferred-open valve fraction at call sites
 - Guard scipy import + flip `from_dict` `step_source` default
-  (INSTRUCTION-217)
-- Historian COP write — live-source gate (INSTRUCTION-211)
+- Historian COP write — live-source gate
 - Forecast logging — unavailable edge-detect (HA + MQTT parity)
-  (INSTRUCTION-210)
 
 ### Release-pipeline
 - Ship `qsh.forecast` and `qsh.forecast.providers` as packages (operational
@@ -917,10 +900,10 @@ handover.
 
 ### Fixed
 - Octopus tariff: open-ended slot handling for fixed-rate tariffs and
-  indefinite `valid_to` (INSTRUCTION-194). Resolves "empty tariff" symptom on
+  indefinite `valid_to`. Resolves "empty tariff" symptom on
   installs where slots return without a bounded end timestamp.
-- Cost controller midnight rollover: defensive cap and UTC-explicit gate
-  (INSTRUCTION-193). Catches `cycles_total_today` overruns observed in fleet
+- Cost controller midnight rollover: defensive cap and UTC-explicit
+  gate. Catches `cycles_total_today` overruns observed in fleet
   telemetry where the date-change gate failed to fire on some installs.
   **Operator note (TZ migration):** on first cycle after upgrade, BST
   installs whose service was last running between 23:00 and 00:00 BST
@@ -1042,7 +1025,7 @@ handover.
 
 ### Fixed
 - Restore `qsh.config_io` module to the public Docker image. v1.2.7 lifted
-  YAML atomic-write helpers into a new shared module (INSTRUCTION-130 Task 0)
+  YAML atomic-write helpers into a new shared module
   but did not add the module to `scripts/release/submodule-compile-list.txt`,
   so it shipped as neither source nor compiled `.so`. Three import sites
   (`qsh/api/routes/config.py:19`, `qsh/main.py:328`, `qsh/telemetry.py:475`)
@@ -1064,7 +1047,7 @@ handover.
 - Affected files: `sysid.py`, `main.py`, `rl_model.py`, `balancing.py`, `telemetry.py`,
   `api/routes/away.py`, `hw_aware.py`, `pipeline/__init__.py`.
 - Back-port `__main__.py` entrypoint shim, `image` field in `config.json`, and `run.sh`
-  fix from public repo to private repo (source of truth). These originated in
-  INSTRUCTION-76A/76B on the public repo and were regressed by the v1.1.4 release sync.
-- Add T-18 guard to `release-sync.sh` to hard-fail if `config.json` is missing the
+  fix from public repo to private repo (source of truth). These originated on
+  the public repo and were regressed by the v1.1.4 release sync.
+- Add a guard to `release-sync.sh` to hard-fail if `config.json` is missing the
   `image` field after copy.
