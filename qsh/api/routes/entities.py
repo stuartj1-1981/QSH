@@ -32,6 +32,10 @@ class ResolvedEntity(BaseModel):
     friendly_name: str
     state: str
     unit: str
+    # INSTRUCTION-480A — carried so the Settings surface can suggest an
+    # occupancy sensor class for an already-stored entity without a scan.
+    # Mirrors the wizard scan payload (qsh/api/routes/wizard.py:716).
+    device_class: str = ""
 
 
 class ResolveRequest(BaseModel):
@@ -86,6 +90,7 @@ def resolve_entities(body: ResolveRequest):
                 friendly_name=attrs.get("friendly_name") or entity_id,
                 state=entity.get("state") or "unknown",
                 unit=attrs.get("unit_of_measurement") or "",
+                device_class=attrs.get("device_class") or "",
             )
         else:
             result[entity_id] = None

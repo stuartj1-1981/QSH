@@ -3,6 +3,7 @@ import { Plus, Trash2, Search, Loader2 } from 'lucide-react'
 import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
+import { OccupancyFields } from '../OccupancyFields'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
 import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml, type BatteryDeviceYaml } from '../../types/config'
 
@@ -700,11 +701,19 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         onChange={(v) => updateRoomMqttTopic(name, 'trv_setpoint', v)}
                         scanResults={mqttScanResults}
                       />
-                      <TopicPicker
-                        label="Occupancy Sensor (optional)"
-                        value={room.mqtt_topics?.occupancy_sensor || ''}
-                        onChange={(v) => updateRoomMqttTopic(name, 'occupancy_sensor', v)}
-                        scanResults={mqttScanResults}
+                      <OccupancyFields
+                        room={room}
+                        onChange={(changes) => updateRoom(name, changes)}
+                        sensorSlot={
+                          <TopicPicker
+                            label="Occupancy Sensor (optional)"
+                            value={room.mqtt_topics?.occupancy_sensor || ''}
+                            onChange={(v) => updateRoomMqttTopic(name, 'occupancy_sensor', v)}
+                            scanResults={mqttScanResults}
+                          />
+                        }
+                        sensorConfigured={!!room.mqtt_topics?.occupancy_sensor}
+                        idPrefix={`${name}-wizard-mqtt`}
                       />
                     </div>
                   ) : (
@@ -862,15 +871,28 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           candidates={candidates.battery_entity || []}
                         />
                       )}
-                      <EntityPicker
-                        slot="occupancy_sensor"
-                        room={name}
-                        label="Occupancy Sensor (optional)"
-                        value={room.occupancy_sensor || ''}
-                        onChange={(v) =>
-                          updateRoom(name, { occupancy_sensor: v || undefined })
+                      <OccupancyFields
+                        room={room}
+                        onChange={(changes) => updateRoom(name, changes)}
+                        sensorSlot={
+                          <EntityPicker
+                            slot="occupancy_sensor"
+                            room={name}
+                            label="Occupancy Sensor (optional)"
+                            value={room.occupancy_sensor || ''}
+                            onChange={(v) =>
+                              updateRoom(name, { occupancy_sensor: v || undefined })
+                            }
+                            candidates={candidates.occupancy_sensor || []}
+                          />
                         }
-                        candidates={candidates.occupancy_sensor || []}
+                        sensorConfigured={!!room.occupancy_sensor}
+                        deviceClass={
+                          (candidates.occupancy_sensor || []).find(
+                            (c) => c.entity_id === room.occupancy_sensor,
+                          )?.device_class
+                        }
+                        idPrefix={`${name}-wizard-ha`}
                       />
                       {/* INSTRUCTION-373B — occupancy-sensor battery; device =
                           occupancy_sensor, only when that sensor is set. */}

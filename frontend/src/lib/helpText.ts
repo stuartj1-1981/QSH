@@ -54,6 +54,14 @@ export const BALANCING = {
   severity: 'How far the zone flow deviates from the ideal. Higher deviation means the zone is more out of balance.',
 } as const
 
+export const OCCUPANCY = {
+  sensorClass: 'Presence sensors (mmWave/radar) report continuously while PIRs report movement only. The choice sets the default debounce when no explicit value is given below — 10s for presence, 60s for motion.',
+  predictive: 'Learns your occupancy patterns to preheat ahead of arrival. The learner needs observation time before it predicts anything — this is not an immediate-effect switch.',
+  debounce: 'How long an occupancy reading must hold before QSH acts on it. Filters out brief sensor flicker.',
+  fallback: 'What QSH assumes about occupancy when the sensor stops reporting.',
+  watchdog: 'How long to hold the last known occupancy state before degrading to \'Assume Occupied\'.',
+} as const
+
 export const SWARM = {
   inputs:
     'Each swarm input this unit can consume. The light shows whether the unit is using that data on live control — green: in use; amber: observing (received but not applied live); red: no data; grey: reserved (channel not yet active).',

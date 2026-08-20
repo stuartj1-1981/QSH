@@ -631,6 +631,42 @@ export interface BalancingResponse {
   error?: string
 }
 
+// Predictive occupancy types (INSTRUCTION-478A/478B). The nine counter keys
+// mirror qsh/occupancy/predictive.py::_COUNTER_KEYS exactly — used both per-room
+// (PredictiveRoom.counters) and summed fleet-wide (PredictiveResponse.gate_stats).
+export interface PredictiveCounters {
+  pred_obs_total: number
+  pred_obs_skipped_away: number
+  pred_obs_skipped_fallback: number
+  pred_obs_skipped_partial: number
+  pred_slots_mature: number
+  pred_windows_licensed: number
+  hits: number
+  false_preheats: number
+  missed_arrivals: number
+}
+
+export interface PredictiveWindow {
+  start_ts: number
+  end_ts: number
+  confidence: number
+}
+
+export interface PredictiveRoom {
+  predictive_enabled: boolean
+  sensor_class: 'motion' | 'presence'
+  licensed: boolean
+  counters: PredictiveCounters
+  next_window: PredictiveWindow | null
+  active_hold: boolean
+}
+
+export interface PredictiveResponse {
+  rooms: Record<string, PredictiveRoom>
+  gate_stats: PredictiveCounters
+  error?: string
+}
+
 // INSTRUCTION-371B — per-device battery health (FI-11). The `status` literal
 // union is mirrored from INSTRUCTION-371A Task 7's pinned domain (its
 // authoritative source: pinned to the latched SENSOR.battery_low state), not

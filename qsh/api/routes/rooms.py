@@ -3,7 +3,7 @@
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
-from typing import Optional, Union, Dict, List
+from typing import Any, Optional, Union, Dict, List
 
 from qsh.config import validate_auxiliary_output_block
 
@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 
 VALID_EMITTER_TYPES = {"radiator", "ufh", "fan_coil", "none"}
 VALID_BOUNDARY_TYPES = {"wall", "open", "party", "floor_ceiling"}
+# INSTRUCTION-480A — mirrors qsh/config.py::_validate_sensor_class (motion |
+# presence) and the occupancy_fallback default at qsh/config.py:1388.
+VALID_OCCUPANCY_CLASSES = {"motion", "presence"}
+VALID_OCCUPANCY_FALLBACKS = {"schedule", "occupied", "last_known"}
+
+# INSTRUCTION-480A landing, owner ruling 20 August 2026. T1's ten newly declared
+# room keys. `_room_to_yaml` omits a field in two cases, and under the prior
+# whole-room replace BOTH meant "this key leaves the YAML": exclude_none=True
+# drops a field sent as explicit null, and the 162A all-defaults aux block is
+# popped outright. T2's merge made an omission ambiguous and read it as "do not
+# touch", which silently broke 162A's tested explicit-null-clears contract for
+# `auxiliary_output`. `update_room` now treats a field the caller ADDRESSED but
+# which serialisation dropped as a removal. These ten are EXCLUDED from that
+# rule so 480A's own T2 statement still holds -- a caller cannot clear them --
+# and 480A section 11 open item 1 stays open as registered rather than closed here.
+T1_NEW_ROOM_KEYS = frozenset({
+    "mqtt_topics", "trv_name", "occupancy_sensor", "occupancy_debounce",
+    "occupancy_fallback", "last_known_timeout_s", "occupancy_class",
+    "predictive_occupancy", "away_active_internal", "away_days_internal",
+})
 RESERVED_FACE_KEYWORDS = {"external", "ground", "roof", "unheated"}
 
 WALL_FACE_KEYS = ("north_wall", "east_wall", "south_wall", "west_wall")
@@ -173,6 +193,20 @@ class RoomConfig(BaseModel):
     # zones with manual TRVs. Range [10.0, 25.0] °C. Cross-field rule:
     # rejected unless control_mode == 'none'.
     fixed_setpoint: Optional[float] = None
+    # INSTRUCTION-480A — keys accepted by qsh/config.py at room level that the
+    # model did not declare. Undeclared keys were destroyed by update_room's
+    # whole-room replace; T2 makes that write a merge, and these fields make
+    # the keys settable through the endpoint rather than merely survivable.
+    mqtt_topics: Optional[Dict[str, Any]] = None
+    trv_name: Optional[str] = None
+    occupancy_sensor: Optional[str] = None
+    occupancy_debounce: Optional[int] = None
+    occupancy_fallback: Optional[str] = None
+    last_known_timeout_s: Optional[int] = None
+    occupancy_class: Optional[str] = None
+    predictive_occupancy: Optional[bool] = None
+    away_active_internal: Optional[bool] = None
+    away_days_internal: Optional[int] = None
 
     @field_validator("floor")
     @classmethod
@@ -193,6 +227,28 @@ class RoomConfig(BaseModel):
         if not (10.0 <= v <= 25.0):
             raise ValueError(
                 f"fixed_setpoint must be in range [10.0, 25.0] °C, got {v}"
+            )
+        return v
+
+    @field_validator("occupancy_class")
+    @classmethod
+    def occupancy_class_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if v not in VALID_OCCUPANCY_CLASSES:
+            raise ValueError(
+                f"Invalid occupancy_class '{v}'. Valid: {sorted(VALID_OCCUPANCY_CLASSES)}"
+            )
+        return v
+
+    @field_validator("occupancy_fallback")
+    @classmethod
+    def occupancy_fallback_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if v not in VALID_OCCUPANCY_FALLBACKS:
+            raise ValueError(
+                f"Invalid occupancy_fallback '{v}'. Valid: {sorted(VALID_OCCUPANCY_FALLBACKS)}"
             )
         return v
 
@@ -449,6 +505,13 @@ def update_room(room_name: str, room: RoomConfig):
         )
 
     room_data = _room_to_yaml(room)
+    # A key the caller explicitly addressed but which `_room_to_yaml` dropped is
+    # a REMOVAL, not an omission; a key the caller never mentioned is preserved
+    # by the merge below. `_room_to_yaml` never renames a key, so this set
+    # difference is exact. See T1_NEW_ROOM_KEYS for why the ten are excluded.
+    cleared_by_caller = (
+        set(room.model_dump(exclude_unset=True)) - set(room_data) - T1_NEW_ROOM_KEYS
+    )
     aux_warnings: List[str] = []
 
     def transform(raw: dict) -> dict:
@@ -469,7 +532,19 @@ def update_room(room_name: str, room: RoomConfig):
         rooms = raw.get("rooms", {})
         if room_name not in rooms:
             raise KeyError(f"Room '{room_name}' not found")
-        rooms[room_name] = room_data
+        # INSTRUCTION-480A — merge, not replace. `_room_to_yaml` uses
+        # exclude_none=True, so `room_data` holds only the fields the caller
+        # actually sent; anything else in the stored room survives. The prior
+        # `rooms[room_name] = room_data` destroyed every key the model did not
+        # declare — including an MQTT room's whole `mqtt_topics` wiring.
+        existing = rooms[room_name]
+        if isinstance(existing, dict):
+            merged = {**existing, **room_data}
+            for key in cleared_by_caller:
+                merged.pop(key, None)
+            rooms[room_name] = merged
+        else:
+            rooms[room_name] = room_data
         return raw
 
     try:

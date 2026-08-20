@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { X, Calendar, Plane, Flame, Eye, EyeOff } from 'lucide-react'
+import { X, Calendar, Plane, Flame, Eye, EyeOff, Clock } from 'lucide-react'
 import { formatTemp, statusColor, cn } from '../lib/utils'
 import type { RoomState, SysidRoom, BoostRoom, ManualEntry } from '../types/api'
 import { useRoomHistory } from '../hooks/useHistory'
+import { usePredictive } from '../hooks/usePredictive'
 import { TrendChart } from './TrendChart'
 import { apiUrl } from '../lib/api'
 import { EntityValue } from './EntityValue'
@@ -32,6 +33,8 @@ interface RoomDetailProps {
 export function RoomDetail({ name, room, sysid, boost, engineering, onClose, entityIds, hpActive = true, manualEntry }: RoomDetailProps) {
   const { data: roomHistory } = useRoomHistory(['temp', 'valve'], 24)
   const thisRoomHistory = roomHistory[name] ?? []
+  const { data: predictiveData, setPredictiveEnabled, restartNotice } = usePredictive()
+  const predictiveRoom = predictiveData?.rooms?.[name]
 
   // Transform room history into chart-friendly format
   const tempData = thisRoomHistory.map(p => ({ t: p.t, temp: p.temp }))
@@ -100,19 +103,21 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
         {/* Occupancy badge */}
         <div className="flex items-center justify-center gap-2 mb-4">
           {(() => {
-            const OccIcon = room.occupancy_source === 'sensor' ? Eye
+            const isPredicted = room.occupancy_source === 'predicted'
+            const OccIcon = isPredicted ? Clock
+              : room.occupancy_source === 'sensor' ? Eye
               : room.occupancy_source?.includes('unavailable') ? EyeOff
               : Calendar
             return (
               <>
                 {room.occupancy === 'occupied' && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10 text-green-600 text-xs font-medium">
-                    <OccIcon size={12} /> Occupied
+                    <OccIcon size={12} /> {isPredicted ? 'Predicted (awaiting arrival)' : 'Occupied'}
                   </span>
                 )}
                 {room.occupancy === 'unoccupied' && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-500/10 text-gray-500 text-xs font-medium">
-                    <OccIcon size={12} /> Unoccupied
+                    <OccIcon size={12} /> {isPredicted ? 'Predicted (awaiting arrival)' : 'Unoccupied'}
                   </span>
                 )}
               </>
@@ -249,6 +254,41 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
                 Min on/off: {room.aux_min_on_s}s / {room.aux_min_off_s}s
                 {' · '}Max {room.aux_max_cycles_per_hour}/h
               </div>
+            )}
+          </section>
+        )}
+
+        {/* Predictive occupancy (INSTRUCTION-478B) — hidden entirely when the
+            room is absent from the report (no occupancy sensor configured). */}
+        {predictiveRoom && (
+          <section className="mt-4 pt-4 border-t border-[var(--border)]" data-testid="predictive-block">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold">Predictive occupancy</h3>
+              <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+                <input
+                  type="checkbox"
+                  aria-label="Enable predictive occupancy"
+                  checked={predictiveRoom.predictive_enabled}
+                  onChange={(e) => setPredictiveEnabled(name, e.target.checked)}
+                />
+                Enabled
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <DetailItem label="Sensor class" value={predictiveRoom.sensor_class} />
+              <DetailItem label="Licensed" value={predictiveRoom.licensed ? 'yes' : 'no'} />
+              <DetailItem label="Hits" value={String(predictiveRoom.counters.hits)} />
+              <DetailItem label="False preheats" value={String(predictiveRoom.counters.false_preheats)} />
+              <DetailItem label="Missed arrivals" value={String(predictiveRoom.counters.missed_arrivals)} />
+              {predictiveRoom.next_window && (
+                <DetailItem
+                  label="Next window"
+                  value={`${new Date(predictiveRoom.next_window.start_ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${Math.round(predictiveRoom.next_window.confidence * 100)}%)`}
+                />
+              )}
+            </div>
+            {restartNotice && (
+              <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">{restartNotice}</p>
             )}
           </section>
         )}

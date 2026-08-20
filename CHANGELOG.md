@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [1.5.34] — 2026-08-20
+
+### Added
+- **Predictive occupancy.** Rooms can now learn when you actually use them, and
+  pull scheduled warm-up forward when a zone is likely to be occupied. The
+  learner watches every zone that has an occupancy sensor from first boot and
+  scores itself, but only acts on zones you opt in to, per room. It can only
+  bring comfort forward — it never cuts it short. Each room shows its sensor
+  type, whether prediction is licensed there, the hit / false-preheat /
+  missed-arrival counters, and the next predicted window; a clock icon marks a
+  room being held warm on a prediction.
+- **Occupancy settings are now editable from the interface on both drivers.**
+  Sensor type, predictive occupancy, debounce, fallback behaviour and watchdog
+  timeout now appear identically on the Settings page and in the Wizard, on
+  both Home Assistant and MQTT installs. Sensor type and predictive occupancy
+  previously required hand-editing `qsh.yaml`; fallback behaviour and watchdog
+  timeout were available on Home Assistant only, and none of the five appeared
+  in the Wizard. Where a sensor class has not been set explicitly, the
+  interface suggests one from the entity — as a text hint only, never applied
+  automatically.
+
+### Fixed
+- **Scheduled pre-heat was being cancelled in rooms that have an occupancy
+  sensor.** The schedule would promote a room to recovering, the sensor
+  reading would evict it in the same cycle, and the re-setback pass undid the
+  pre-heat — so scheduled optimum-start recovery worked only while the sensor
+  was broken. This affected all four sensor modes. A room now stays in
+  recovery against a validly-off sensor, while an occupied reading still
+  confirms it.
+- **Room settings could be silently discarded when saved through the rooms
+  API.** Saving a room replaced its stored settings wholesale, dropping up to
+  eleven settings that the endpoint did not itself declare. On MQTT installs
+  this could clear a room's entire actuation wiring; it also dropped the
+  per-zone occupancy settings, the per-zone away overrides and the TRV name.
+- Entity lookups now report each entity's device class, so the Settings page
+  can suggest an occupancy sensor type for an already-configured entity
+  without running a fresh scan.
+
+### Security
+- Frontend build-tooling dependency updates: `undici` 7.28.0 to 7.29.0, and
+  `js-yaml` 4.3.0 to 4.3.1. Both are development-only dependencies of the
+  frontend toolchain — no shipped runtime code is affected.
+
 ## [1.5.32] — 2026-08-16
 
 ### Fixed

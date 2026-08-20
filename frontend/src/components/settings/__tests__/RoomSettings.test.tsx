@@ -35,19 +35,20 @@ describe('RoomSettings occupancy sensor', () => {
     expect(labels.length).toBeGreaterThan(0)
   })
 
-  it('renders debounce input for all rooms', () => {
+  it('renders debounce input only for rooms with a sensor configured (INSTRUCTION-480B)', () => {
     render(<RoomSettings rooms={baseRooms} driver="ha" onRefetch={() => {}} />)
     const debounceLabels = screen.getAllByText('Debounce (s)')
-    // Debounce field is always visible alongside occupancy sensor field
-    expect(debounceLabels.length).toBe(2)
+    // OccupancyFields gates all five fields on sensorConfigured — only
+    // lounge (which has occupancy_sensor set) shows debounce.
+    expect(debounceLabels.length).toBe(1)
   })
 
-  it('renders debounce input even without sensor', () => {
+  it('hides debounce input without sensor (INSTRUCTION-480B)', () => {
     const roomsNoSensor = {
       bedroom: { area_m2: 15, facing: 'N', ceiling_m: 2.4 },
     }
     render(<RoomSettings rooms={roomsNoSensor} driver="ha" onRefetch={() => {}} />)
-    expect(screen.queryByText('Debounce (s)')).not.toBeNull()
+    expect(screen.queryByText('Debounce (s)')).toBeNull()
   })
 
   it('shows fallback dropdown when occupancy_sensor is set', () => {
@@ -1285,5 +1286,57 @@ describe('RoomSettings battery devices', () => {
     fireEvent.click(screen.getByText('Save Changes'))
     const call = patchMock.mock.calls.find((c) => c[0] === 'battery_devices')
     expect(call).toBeFalsy()
+  })
+})
+
+// =============================================================================
+// INSTRUCTION-480B — occupancy parity (T5 cases 11-12: Settings / HA, MQTT)
+// =============================================================================
+
+describe('RoomSettings occupancy parity (INSTRUCTION-480B)', () => {
+  it('case 11: Settings / HA — sensor-type select and predictive checkbox present, writes occupancy_class', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      lounge: {
+        area_m2: 20,
+        facing: 'S',
+        ceiling_m: 2.4,
+        occupancy_sensor: 'binary_sensor.lounge_presence',
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByText('Sensor Type')).toBeInTheDocument()
+    expect(screen.getByText('Predictive occupancy')).toBeInTheDocument()
+
+    const select = document.getElementById('lounge-ha-occupancy-class') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'presence' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const [section, payload] = patchMock.mock.calls[0]
+    expect(section).toBe('rooms')
+    expect(payload.lounge.occupancy_class).toBe('presence')
+  })
+
+  it('case 12: Settings / MQTT — sensor-type select and predictive checkbox present, writes occupancy_class', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      lounge: {
+        area_m2: 20,
+        facing: 'S',
+        ceiling_m: 2.4,
+        mqtt_topics: { occupancy_sensor: 'rooms/lounge/occupancy' },
+      },
+    }
+    render(<RoomSettings rooms={rooms} driver="mqtt" onRefetch={() => {}} />)
+    expect(screen.getByText('Sensor Type')).toBeInTheDocument()
+    expect(screen.getByText('Predictive occupancy')).toBeInTheDocument()
+
+    const select = document.getElementById('lounge-mqtt-occupancy-class') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'presence' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const [section, payload] = patchMock.mock.calls[0]
+    expect(section).toBe('rooms')
+    expect(payload.lounge.occupancy_class).toBe('presence')
   })
 })

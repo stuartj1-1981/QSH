@@ -6,6 +6,9 @@ interface ResolvedEntity {
   friendly_name: string
   state: string
   unit: string
+  /** INSTRUCTION-480A — HA device_class, "" when absent. Consumed by
+   *  suggestOccupancyClass; never written to config. */
+  device_class: string
 }
 
 /**
