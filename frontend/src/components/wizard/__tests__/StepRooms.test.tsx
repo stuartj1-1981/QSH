@@ -582,3 +582,64 @@ describe('StepRooms — per-device battery entry (INSTRUCTION-373B)', () => {
     expect((call![1] as unknown[]).length).toBe(2)
   })
 })
+
+// =============================================================================
+// INSTRUCTION-480B — occupancy parity (T5 cases 13-14: Wizard / HA, MQTT)
+// =============================================================================
+
+describe('StepRooms occupancy parity (INSTRUCTION-480B)', () => {
+  it('case 13: Wizard / HA — sensor-type select and predictive checkbox present, writes occupancy_class', () => {
+    const onUpdate = vi.fn()
+    const config = haConfig({
+      area_m2: 20,
+      facing: 'S',
+      ceiling_m: 2.4,
+      occupancy_sensor: 'binary_sensor.lounge_presence',
+    })
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+
+    expect(screen.getByText('Sensor Type')).toBeInTheDocument()
+    expect(screen.getByText('Predictive occupancy')).toBeInTheDocument()
+
+    const select = document.getElementById('lounge-wizard-ha-occupancy-class') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'presence' } })
+
+    const lastCall = onUpdate.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    expect(lastCall![0]).toBe('rooms')
+    const updatedRooms = lastCall![1] as Record<string, RoomConfigYaml>
+    expect(updatedRooms.lounge.occupancy_class).toBe('presence')
+  })
+
+  it('case 14: Wizard / MQTT — sensor-type select and predictive checkbox present, writes occupancy_class', () => {
+    const onUpdate = vi.fn()
+    const config = {
+      driver: 'mqtt' as const,
+      rooms: {
+        lounge: {
+          area_m2: 20,
+          facing: 'S',
+          ceiling_m: 2.4,
+          mqtt_topics: { occupancy_sensor: 'rooms/lounge/occupancy' },
+        },
+      },
+    }
+    render(<StepRooms config={config} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByText(/lounge/))
+
+    expect(screen.getByText('Sensor Type')).toBeInTheDocument()
+    expect(screen.getByText('Predictive occupancy')).toBeInTheDocument()
+
+    const select = document.getElementById(
+      'lounge-wizard-mqtt-occupancy-class',
+    ) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'presence' } })
+
+    const lastCall = onUpdate.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    expect(lastCall![0]).toBe('rooms')
+    const updatedRooms = lastCall![1] as Record<string, RoomConfigYaml>
+    expect(updatedRooms.lounge.occupancy_class).toBe('presence')
+  })
+})

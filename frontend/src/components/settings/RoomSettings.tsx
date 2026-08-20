@@ -7,6 +7,7 @@ import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { AuxOutputEditor } from './AuxOutputEditor'
+import { OccupancyFields } from '../OccupancyFields'
 
 // INSTRUCTION-335 — the wizard property band (qsh/api/routes/wizard.py:51-52,
 // 58, 69-70). Area band is a dirty-scoped client save-gate; bedrooms band and
@@ -1184,42 +1185,27 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                   }
                   placeholder={`rooms/${name}/setpoint`}
                 />
-                <TopicField
-                  label="Occupancy Topic"
-                  value={room.mqtt_topics?.occupancy_sensor || ''}
-                  onChange={(v) =>
-                    updateRoom(name, {
-                      mqtt_topics: {
-                        ...room.mqtt_topics,
-                        occupancy_sensor: v || undefined,
-                      },
-                    })
-                  }
-                  placeholder={`rooms/${name}/occupancy`}
-                />
-
-                {/* Occupancy debounce — driver-agnostic */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-[var(--text-muted)] mb-1">
-                      Debounce (s)
-                    </label>
-                    <input
-                      type="number"
-                      step="10"
-                      min="0"
-                      max="600"
-                      value={room.occupancy_debounce ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value ? parseInt(e.target.value, 10) : undefined
-                        const clamped = raw !== undefined ? Math.min(600, Math.max(0, raw)) : undefined
-                        updateRoom(name, { occupancy_debounce: clamped })
-                      }}
-                      placeholder="60"
-                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                <OccupancyFields
+                  room={room}
+                  onChange={(changes) => updateRoom(name, changes)}
+                  sensorSlot={
+                    <TopicField
+                      label="Occupancy Topic"
+                      value={room.mqtt_topics?.occupancy_sensor || ''}
+                      onChange={(v) =>
+                        updateRoom(name, {
+                          mqtt_topics: {
+                            ...room.mqtt_topics,
+                            occupancy_sensor: v || undefined,
+                          },
+                        })
+                      }
+                      placeholder={`rooms/${name}/occupancy`}
                     />
-                  </div>
-                </div>
+                  }
+                  sensorConfigured={!!room.mqtt_topics?.occupancy_sensor}
+                  idPrefix={`${name}-mqtt`}
+                />
 
                 {/* Legacy HA config — render read-only muted if present */}
                 {hasLegacyHaFields(room) && (
@@ -1369,36 +1355,24 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     />
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <EntityField
-                    label="Occupancy Sensor"
-                    value={room.occupancy_sensor || ''}
-                    friendlyName={resolved[room.occupancy_sensor || '']?.friendly_name}
-                    state={resolved[room.occupancy_sensor || '']?.state}
-                    unit={resolved[room.occupancy_sensor || '']?.unit}
-                    placeholder="binary_sensor.room_presence"
-                    onChange={(v) => updateRoom(name, { occupancy_sensor: v || undefined })}
-                  />
-                  <div>
-                    <label className="block text-xs text-[var(--text-muted)] mb-1">
-                      Debounce (s)
-                    </label>
-                    <input
-                      type="number"
-                      step="10"
-                      min="0"
-                      max="600"
-                      value={room.occupancy_debounce ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value ? parseInt(e.target.value, 10) : undefined
-                        const clamped = raw !== undefined ? Math.min(600, Math.max(0, raw)) : undefined
-                        updateRoom(name, { occupancy_debounce: clamped })
-                      }}
-                      placeholder="60"
-                      className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                <OccupancyFields
+                  room={room}
+                  onChange={(changes) => updateRoom(name, changes)}
+                  sensorSlot={
+                    <EntityField
+                      label="Occupancy Sensor"
+                      value={room.occupancy_sensor || ''}
+                      friendlyName={resolved[room.occupancy_sensor || '']?.friendly_name}
+                      state={resolved[room.occupancy_sensor || '']?.state}
+                      unit={resolved[room.occupancy_sensor || '']?.unit}
+                      placeholder="binary_sensor.room_presence"
+                      onChange={(v) => updateRoom(name, { occupancy_sensor: v || undefined })}
                     />
-                  </div>
-                </div>
+                  }
+                  sensorConfigured={!!room.occupancy_sensor}
+                  deviceClass={resolved[room.occupancy_sensor || '']?.device_class}
+                  idPrefix={`${name}-ha`}
+                />
                 {/* INSTRUCTION-373B — occupancy-sensor battery; device =
                     occupancy_sensor, only when that sensor is set. */}
                 {room.occupancy_sensor && (
@@ -1412,53 +1386,6 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                       placeholder="sensor.room_occupancy_battery"
                       onChange={(v) => setBatteryFor(room.occupancy_sensor!, name, v)}
                     />
-                  </div>
-                )}
-                {room.occupancy_sensor && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-[var(--text-muted)] mb-1">
-                        Sensor Unavailable Behaviour
-                      </label>
-                      <select
-                        value={room.occupancy_fallback || 'schedule'}
-                        onChange={(e) =>
-                          updateRoom(name, {
-                            occupancy_fallback: e.target.value as RoomConfigYaml['occupancy_fallback'],
-                          })
-                        }
-                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                      >
-                        <option value="schedule">Use Schedule</option>
-                        <option value="occupied">Assume Occupied</option>
-                        <option value="last_known">Hold Last Known</option>
-                      </select>
-                    </div>
-                    {room.occupancy_fallback === 'last_known' && (
-                      <div>
-                        <label className="block text-xs text-[var(--text-muted)] mb-1">
-                          Watchdog timeout (min)
-                        </label>
-                        <input
-                          type="number"
-                          step="5"
-                          min="5"
-                          max="480"
-                          value={room.last_known_timeout_s != null ? Math.round(room.last_known_timeout_s / 60) : ''}
-                          onChange={(e) => {
-                            const mins = e.target.value ? parseInt(e.target.value, 10) : undefined
-                            updateRoom(name, {
-                              last_known_timeout_s: mins !== undefined ? Math.min(28800, Math.max(300, mins * 60)) : undefined,
-                            })
-                          }}
-                          placeholder="60"
-                          className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
-                        />
-                        <p className="text-xs text-[var(--text-muted)] mt-1">
-                          Degrade to &lsquo;occupied&rsquo; after this duration if sensor doesn&apos;t recover
-                        </p>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>

@@ -118,6 +118,10 @@ export interface RoomConfigYaml {
   occupancy_debounce?: number
   occupancy_fallback?: 'schedule' | 'occupied' | 'last_known'
   last_known_timeout_s?: number
+  /** INSTRUCTION-478A/478B — predictive-occupancy learner enable + sensor
+   *  class, round-tripped via the `rooms` section PATCH (qsh/config.py:1390-1391). */
+  predictive_occupancy?: boolean
+  occupancy_class?: 'motion' | 'presence'
   /** Per-room auxiliary boolean output (INSTRUCTION-131A schema). */
   auxiliary_output?: AuxiliaryOutputYaml | null
 
