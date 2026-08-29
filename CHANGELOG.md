@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.5.35] — 2026-08-29
+
+### Added
+- **Hand heat-source control to an automation.** A new MQTT topic lets a Demand
+  Flexibility Service or Octopus Saving-Session automation lock the system to
+  your boiler or your heat pump for the session, then hand it back to automatic
+  on its own. Commands expire after a set time (four hours by default) so a
+  stuck automation can never leave a source locked indefinitely, and a locked
+  switch still respects your minimum run time.
+
+### Fixed
+- **Dual-source flapping under swinging export prices.** The choice between
+  boiler and heat pump no longer flips back and forth when export prices swing
+  in and out during a single period — for example, broken cloud over solar
+  against a high Agile window. The system now decides on the cost it expects
+  over the period rather than the price at that instant, and only switches when
+  a saving has genuinely persisted.
+
 ## [1.5.34] — 2026-08-20
 
 ### Added
