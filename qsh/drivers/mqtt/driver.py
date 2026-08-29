@@ -208,6 +208,16 @@ def _register_mqtt_events() -> None:
         payload_fields=("rooms", "count"),
         default_level=logging.WARNING,
     ))
+    # INSTRUCTION-487 — a cache entry for a _resolve_mqtt_control call armed
+    # with max_age_s has aged past the TTL and no longer governs; resolution
+    # falls back to the internal (config) value. Latched per topic.
+    ann.register(EventSpec(
+        name="MQTT.control_topic_expired",
+        kind=EventKind.LATCHED,
+        payload_fields=("topic",),
+        latch_key=("topic",),
+        default_level=logging.WARNING,
+    ))
 
 
 # INSTRUCTION-268 — writeback round-trip verification tolerance.
@@ -360,6 +370,19 @@ def _parse_bool_payload(s: str):
     if lo in ("false", "0", "off"):
         return False
     return None
+
+
+def _validate_mode_string(s: str):
+    """INSTRUCTION-487 — heat-source mode payload: 'auto' (case-folded) or an
+    exact source name (validated downstream by the controller's invalid_mode
+    latch — the driver transports, the controller judges). Never raises."""
+    try:
+        stripped = str(s).strip()
+    except Exception:
+        return None
+    if not stripped or len(stripped) > 64:
+        return None
+    return "auto" if stripped.lower() == "auto" else stripped
 
 
 class MQTTDriver:
@@ -618,6 +641,7 @@ class MQTTDriver:
         validate=None,
         *,
         json_path: Optional[str] = None,
+        max_age_s: Optional[float] = None,
     ) -> ResolvedValue:
         """Read from auto-subscribed MQTT control topic cache, fall back to internal value.
 
@@ -635,6 +659,16 @@ class MQTTDriver:
                           candidate, which takes the invalid-payload branch
                           identically to a failed scalar validation. Blank/None ⇒
                           plain-scalar behaviour (byte-identical to pre-353A).
+            max_age_s:    INSTRUCTION-487 — optional TTL, in seconds, on the
+                          cache entry's age. None (default) disables the check
+                          and this parameter has zero effect on any existing
+                          call site (OB-06). When set and a cache entry is
+                          present but older than max_age_s, the entry is
+                          treated as absent (falls through to the internal
+                          fallback) and MQTT.control_topic_expired is latched
+                          for this topic; a present, within-age entry exits
+                          the latch. The annunciator is untouched when
+                          max_age_s is None.
 
         Returns:
             ResolvedValue with source="external" when MQTT cache hit+valid,
@@ -644,6 +678,11 @@ class MQTTDriver:
         ann = get_annunciator()
         full_topic = _prefixed(self._prefix, topic_suffix)
         entry = cache.get(full_topic)
+        if max_age_s is not None and entry is not None and (time.time() - entry[1]) > max_age_s:
+            ann.entered("MQTT.control_topic_expired", topic=full_topic)
+            entry = None
+        elif max_age_s is not None and entry is not None:
+            ann.exited("MQTT.control_topic_expired", topic=full_topic)
         if entry is not None:
             raw_str = entry[0]  # (payload_str, timestamp)
             if json_path:
@@ -1577,6 +1616,18 @@ class MQTTDriver:
         )
         self._last_resolved["comfort_temp"] = comfort_temp_rv
 
+        # INSTRUCTION-487 — DFS/session automation heat-source mode command.
+        ttl_min = (config.get("source_selection") or {}).get("mode_command_ttl_minutes", 240.0)
+        mode_rv = self._resolve_mqtt_control(
+            cache,
+            "control/heat_source_mode",
+            "source_selection.mode",
+            default="auto",
+            validate=_validate_mode_string,
+            max_age_s=(ttl_min * 60.0) if ttl_min and ttl_min > 0 else None,
+        )
+        self._last_resolved["heat_source_mode"] = mode_rv
+
         # INSTRUCTION-268 — write-and-readback verification.
         self._verify_pending_writeback(comfort_temp_rv, now)
 
@@ -1961,6 +2012,7 @@ class MQTTDriver:
             has_battery=capabilities.get("has_battery", False),
             away_mode_active=away_rv.value,
             away_days=away_days_rv.value,
+            heat_source_mode_command=(mode_rv.value if mode_rv.source == "external" else ""),
             forecast_temps=forecast_temps,
             per_zone_away=per_zone_away,
             per_room_comfort_overrides=per_room_comfort,

@@ -633,6 +633,8 @@ def get_control_topics(config: Dict[str, Any]) -> list:
         "control/flow_min",
         "control/flow_max",
         configured_control_topic(config, "pid_target"),
+        # INSTRUCTION-487 — DFS/session automations set the heat-source mode.
+        "control/heat_source_mode",
     ]
     for room in config.get("rooms", {}):
         topics.append(f"control/{room}/away")
