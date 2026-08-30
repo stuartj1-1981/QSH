@@ -3,6 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import type { RoomHistoryData } from '../hooks/useHistory'
+import { tempDomain } from '../lib/chartDomain'
 
 interface MultiRoomTempChartProps {
   roomHistory: RoomHistoryData
@@ -53,6 +54,8 @@ export const MultiRoomTempChart = memo(function MultiRoomTempChart({ roomHistory
             fontSize={10}
             unit=" °C"
             width={45}
+            domain={tempDomain}
+            allowDecimals={false}
           />
           <Tooltip
             contentStyle={{
