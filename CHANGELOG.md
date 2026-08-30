@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.5.36] — 2026-08-30
+
+### Changed
+- **Temperature charts now scale to fit your data.** Previously every
+  temperature chart started its axis at 0 degrees, so a house whose rooms all
+  sit between 19 and 22 degrees rendered as an unreadable band squashed into
+  the top of the plot. The all-room and per-room temperature charts, the Home
+  flow-temperature chart and the engineering flow comparison now fit the axis
+  to the readings on screen. The RL Reward chart also scales both ends, so
+  negative rewards are no longer clipped off the bottom. Valve position,
+  demand, RL loss and blend factor keep their zero baseline, because zero is
+  the meaningful reference for those.
+
 ## [1.5.35] — 2026-08-29
 
 ### Added

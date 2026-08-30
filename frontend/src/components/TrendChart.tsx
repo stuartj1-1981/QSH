@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import type { ComponentProps } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
@@ -10,11 +11,14 @@ interface TrendLine {
   color: string
 }
 
+type YDomain = ComponentProps<typeof YAxis>['domain']
+
 interface TrendChartProps {
   title: string
   data: HistoryPoint[]
   lines: TrendLine[]
   yUnit?: string
+  yDomain?: YDomain
 }
 
 function formatTime(ts: number): string {
@@ -22,7 +26,7 @@ function formatTime(ts: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export const TrendChart = memo(function TrendChart({ title, data, lines, yUnit }: TrendChartProps) {
+export const TrendChart = memo(function TrendChart({ title, data, lines, yUnit, yDomain }: TrendChartProps) {
   if (data.length === 0) {
     return (
       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 mb-4">
@@ -52,6 +56,7 @@ export const TrendChart = memo(function TrendChart({ title, data, lines, yUnit }
             fontSize={10}
             unit={yUnit ? ` ${yUnit}` : ''}
             width={35}
+            domain={yDomain}
           />
           <Tooltip
             contentStyle={{

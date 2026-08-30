@@ -4,6 +4,7 @@ import { useSysid, useSysidRoom, resetSysidRoom } from '../hooks/useSysid'
 import { useHistory } from '../hooks/useHistory'
 import { useRawConfig } from '../hooks/useConfig'
 import { TrendChart } from '../components/TrendChart'
+import { tempDomain } from '../lib/chartDomain'
 import { HardwareTelemetry } from '../components/HardwareTelemetry'
 import { HelpTip } from '../components/HelpTip'
 import { cn } from '../lib/utils'
@@ -562,7 +563,7 @@ function RlTrainingSection({
         title="RL Reward"
         data={rewardData}
         lines={[{ key: 'rl_reward', label: 'Reward', color: 'var(--green)' }]}
-
+        yDomain={['auto', 'auto']}
       />
       <TrendChart
         title="RL Loss"
@@ -579,6 +580,7 @@ function RlTrainingSection({
       <TrendChart
         title="Flow Comparison"
         data={flowData}
+        yDomain={tempDomain}
         lines={[
           { key: 'det_flow', label: 'Deterministic', color: 'var(--blue)' },
           { key: 'rl_flow', label: 'RL', color: 'var(--green)' },

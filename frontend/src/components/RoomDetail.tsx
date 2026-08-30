@@ -5,6 +5,7 @@ import type { RoomState, SysidRoom, BoostRoom, ManualEntry } from '../types/api'
 import { useRoomHistory } from '../hooks/useHistory'
 import { usePredictive } from '../hooks/usePredictive'
 import { TrendChart } from './TrendChart'
+import { tempDomain } from '../lib/chartDomain'
 import { apiUrl } from '../lib/api'
 import { EntityValue } from './EntityValue'
 
@@ -185,6 +186,7 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
               data={tempData}
               lines={[{ key: 'temp', label: 'Temperature', color: 'var(--accent)' }]}
               yUnit="°C"
+              yDomain={tempDomain}
             />
           </div>
         )}

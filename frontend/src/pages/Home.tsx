@@ -14,6 +14,7 @@ import { EngineeringBar } from '../components/EngineeringBar'
 import { ComfortControl } from '../components/ComfortControl'
 import { FlowLimits } from '../components/FlowLimits'
 import { TrendChart } from '../components/TrendChart'
+import { tempDomain } from '../lib/chartDomain'
 import { OperatingStateTimeline } from '../components/OperatingStateTimeline'
 import { SystemHealth } from '../components/SystemHealth'
 import { Wifi, WifiOff, Plane, Home as HomeIcon, Info } from 'lucide-react'
@@ -520,6 +521,7 @@ const HomeTrends = memo(function HomeTrends() {
         data={flowData}
         lines={FLOW_LINES}
         yUnit="°C"
+        yDomain={tempDomain}
       />
       <TrendChart
         title="Total Demand"
