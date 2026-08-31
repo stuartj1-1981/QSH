@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.5.37] — 2026-08-31
+
+### Added
+- **Two new Home Assistant sensors, with nothing to set up.**
+  `sensor.qsh_operating_state` reports what the system is doing right now and
+  `sensor.qsh_heat_demand` reports how much heat the house is asking for, so
+  you can build notifications and automations on them ahead of the heating
+  season. Both appear on their own: on a Home Assistant install they are
+  posted every cycle, and on an MQTT install they arrive as properly
+  discovered entities alongside the topics you already have. The operating
+  state is one of a fixed set of twelve values that will not change under
+  your automations, with the readable description and whether the system is
+  live or in shadow mode carried as attributes. Systems running in shadow
+  mode publish these too, so an install that is only observing still tells
+  you what it would be doing. All of it is on by default and can be turned
+  off if you would rather not have it.
+
 ## [1.5.36] — 2026-08-30
 
 ### Changed
