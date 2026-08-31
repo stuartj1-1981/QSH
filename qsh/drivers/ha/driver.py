@@ -717,6 +717,38 @@ class HADriver:
                 except Exception as e:
                     logging.warning(f"HADriver: notification dispatch failed: {e}")
 
+        # ── Telemetry entities (INSTRUCTION-494) ───────────────────────────
+        # sensor.qsh_operating_state / sensor.qsh_heat_demand. Mirrors the
+        # MQTT driver's shadow-topic precedent (drivers/mqtt/driver.py:2318)
+        # — telemetry publishes state, commands nothing, and is deliberately
+        # NOT gated on control_enabled. See CLAUDE.md §"Shadow Mode — Critical
+        # Rule for `write_outputs`" for the documented exemption; the
+        # exemption is positively asserted by
+        # tests/test_shadow_write_suppression_types.py.
+        if config.get("publish_ha_entities", True):
+            from .integration import set_ha_state
+
+            set_ha_state(
+                "sensor.qsh_operating_state",
+                outputs.operating_state_code or "unknown",
+                {
+                    "friendly_name": "QSH Operating State",
+                    "display_state": outputs.operating_state,
+                    "control_mode": "live" if control_enabled else "shadow",
+                    "icon": "mdi:heat-pump-outline",
+                },
+            )
+            set_ha_state(
+                "sensor.qsh_heat_demand",
+                f"{outputs.heat_demand_kw:.2f}",
+                {
+                    "friendly_name": "QSH Heat Demand",
+                    "unit_of_measurement": "kW",
+                    "state_class": "measurement",
+                    "icon": "mdi:radiator",
+                },
+            )
+
     # ── Helpers ────────────────────────────────────────────────────────
 
     def _fetch_hw_state(self, config, sensor_data):

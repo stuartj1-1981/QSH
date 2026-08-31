@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -358,6 +359,15 @@ def _resolve_signal_quality(
     return ("unavailable", None, None)
 
 
+def _shadow_base(topic_prefix: str) -> str:
+    """INSTRUCTION-494 — the single falsy-prefix-fallback derivation shared by
+    the shadow-topic publishers (write_outputs) and the HA MQTT Discovery
+    config publisher (setup). Identical to client.py:103's status-topic
+    fallback, so config topic strings and publisher topic strings cannot
+    diverge (Task 5's governing invariant)."""
+    return topic_prefix if topic_prefix else "qsh"
+
+
 def _parse_bool_payload(s: str):
     """Parse MQTT boolean payload.  Returns True/False or None on invalid input.
 
@@ -581,6 +591,11 @@ class MQTTDriver:
                 "next major version."
             )
 
+        # INSTRUCTION-494 Task 5(b)/(c) — HA MQTT Discovery configs for the
+        # two telemetry entities. Retained, published once at setup (not a
+        # per-cycle publish).
+        self._publish_ha_discovery(config)
+
         # INSTRUCTION-225B — boot-time AUTO-on-restart contract log.
         from qsh import manual_state
         manual_state.init(config)
@@ -593,6 +608,83 @@ class MQTTDriver:
             )
 
         return {"prev_mode": "heat"}
+
+    def _publish_ha_discovery(self, config: Dict) -> None:
+        """INSTRUCTION-494 Task 5(b)/(c) — retained HA MQTT Discovery configs
+        for sensor.qsh_operating_state / sensor.qsh_heat_demand, published
+        over the already-retained shadow topics.
+
+        `mqtt_discovery` and `publish_mqtt_shadow` (both default True) gate
+        entity presence: when either resolves false — no data would back the
+        entities without publish_mqtt_shadow — empty retained payloads are
+        published to both config topics instead, removing the entities from
+        HA (assessment R3).
+
+        The node/object-id segment is sanitised to HA's discovery-topic
+        charset `[a-zA-Z0-9_-]+`; any other character (`/`, `.`, space — all
+        MQTT-legal in topic_prefix) is dropped silently by HA's matcher and
+        the entity never appears otherwise (the F-i2 failure mode).
+        Substitution can in principle collide two exotic prefixes on one
+        broker (`a/b` and `a_b` both sanitise to `a_b`); accepted as a
+        residual — co-broker QSH installs are prefix-distinct in practice,
+        and refusing discovery instead would break the zero-configuration
+        promise. The sanitised form is used for the discovery topic path,
+        `unique_id` and `device.identifiers` only; `state_topic`,
+        `availability_topic` and `json_attributes_topic` are payload
+        *values* and keep the raw `base` — derived via the same
+        `_shadow_base` the shadow-topic publishers use, so config topic
+        strings and publisher topic strings cannot diverge.
+        """
+        discovery_prefix = config.get("mqtt_discovery_prefix", "homeassistant")
+        base = _shadow_base(self._prefix)
+        node_id = re.sub(r"[^a-zA-Z0-9_-]", "_", "qsh_" + base)
+
+        operating_state_topic = f"{discovery_prefix}/sensor/{node_id}/operating_state/config"
+        heat_demand_topic = f"{discovery_prefix}/sensor/{node_id}/heat_demand/config"
+
+        discovery_enabled = config.get("publish_mqtt_shadow", True) and config.get(
+            "mqtt_discovery", True
+        )
+
+        if not discovery_enabled:
+            self._mqtt.publish(operating_state_topic, "", retain=True)
+            self._mqtt.publish(heat_demand_topic, "", retain=True)
+            return
+
+        device = {
+            "identifiers": [node_id],
+            "name": "QSH",
+            "manufacturer": "Quantum Swarm Heating",
+        }
+        availability_topic = f"{base}/status"
+
+        operating_state_config = {
+            "name": "QSH Operating State",
+            "unique_id": f"{node_id}_operating_state",
+            "object_id": "qsh_operating_state",
+            "state_topic": f"{base}/shadow/operating_state_code",
+            "availability_topic": availability_topic,
+            "icon": "mdi:heat-pump-outline",
+            "device": device,
+            "json_attributes_topic": f"{base}/shadow/operating_state_attributes",
+        }
+        heat_demand_config = {
+            "name": "QSH Heat Demand",
+            "unique_id": f"{node_id}_heat_demand",
+            "object_id": "qsh_heat_demand",
+            "state_topic": f"{base}/shadow/total_demand",
+            "availability_topic": availability_topic,
+            "icon": "mdi:radiator",
+            "device": device,
+            "unit_of_measurement": "kW",
+            "state_class": "measurement",
+        }
+        self._mqtt.publish(
+            operating_state_topic, json.dumps(operating_state_config), retain=True
+        )
+        self._mqtt.publish(
+            heat_demand_topic, json.dumps(heat_demand_config), retain=True
+        )
 
     def teardown(self, controllers: List) -> None:
         """Graceful shutdown — save state, publish safe mode, disconnect."""
@@ -2318,9 +2410,6 @@ class MQTTDriver:
         # Telemetry — not gated on control_enabled (shadow mode still publishes observable state)
         # ── Shadow entities (dual-publish transition — 36C Task 8) ──
         if outputs.shadow_changed and config.get("publish_mqtt_shadow", True):
-            def _shadow_base(p: str) -> str:
-                return p if p else "qsh"
-
             base = _shadow_base(prefix)
             legacy_enabled = config.get("mqtt_legacy_shadow_topics", True)
 
@@ -2337,6 +2426,23 @@ class MQTTDriver:
 
             # Operating state (always clean form)
             self._mqtt.publish(f"{base}/shadow/operating_state", outputs.operating_state)
+
+            # INSTRUCTION-494 — machine-enum + attributes topics backing the
+            # HA MQTT Discovery entities (Task 5b). Same base/not-gated-on-
+            # control_enabled telemetry precedent as operating_state above.
+            self._mqtt.publish(
+                f"{base}/shadow/operating_state_code",
+                outputs.operating_state_code or "unknown",
+            )
+            self._mqtt.publish(
+                f"{base}/shadow/operating_state_attributes",
+                json.dumps(
+                    {
+                        "display_state": outputs.operating_state,
+                        "control_mode": "live" if control_enabled else "shadow",
+                    }
+                ),
+            )
 
         # ── Notifications ──
         if outputs.notifications:

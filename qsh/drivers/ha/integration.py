@@ -324,3 +324,48 @@ def set_ha_service(domain, service, data) -> WriteOutcome:
         return WriteOutcome.FAILED
 
 
+def set_ha_state(entity_id, state, attributes=None) -> WriteOutcome:
+    """INSTRUCTION-494 — direct entity-state POST (`/api/states/{entity_id}`),
+    for the per-cycle telemetry entities (sensor.qsh_operating_state,
+    sensor.qsh_heat_demand). Mirrors set_ha_service's entity-id hygiene,
+    _CircuitBreaker participation and WriteOutcome contract.
+
+    Differences from set_ha_service, both for T-45 (this sits on a per-cycle
+    path): the no-token branch logs at DEBUG, not WARNING, and per-attempt
+    request failures log at DEBUG only — the operator-visible signal for a
+    sustained HA API outage is the existing breaker/write-suppression
+    annunciation (LATCHED, edge-gated), not a per-cycle WARNING/ERROR.
+    """
+    if not isinstance(entity_id, str) or not entity_id.strip():
+        logging.debug(
+            "set_ha_state called with invalid entity_id: %r — skipped.", entity_id
+        )
+        return WriteOutcome.FAILED
+    if not headers:
+        logging.debug("No SUPERVISOR_TOKEN found - set_ha_state skipped.")
+        return WriteOutcome.NO_TOKEN
+    if _breaker.is_open():
+        _breaker.note_suppressed_write("states", "post", entity_id)
+        return WriteOutcome.SUPPRESSED_BREAKER_OPEN
+    try:
+        response = requests.post(
+            f"{HA_URL}/api/states/{entity_id}",
+            json={"state": str(state), "attributes": attributes or {}},
+            headers=headers,
+            timeout=SERVICE_TIMEOUT,
+        )
+        if response.status_code >= 400:
+            logging.debug(
+                f"HA rejected state post for {entity_id}: {response.status_code}"
+            )
+            _breaker.record_failure()
+            return WriteOutcome.FAILED
+        _breaker.record_success()
+        logging.debug(f"State {entity_id} posted successfully.")
+        return WriteOutcome.SENT
+    except requests.exceptions.RequestException as e:
+        _breaker.record_failure()
+        logging.debug(f"HA state post error for {entity_id}: err={e}")
+        return WriteOutcome.FAILED
+
+
