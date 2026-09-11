@@ -80,6 +80,10 @@ INIT_ONLY_SHIP_PATHS: Set[str] = {
     "qsh.tariff",
     "qsh.forecast",
     "qsh.forecast.providers",
+    # qsh.qsdb added at the INSTRUCTION-505A landing gate (owner ruling, 3 Sep
+    # 2026): historian.py imports QsdbStore from the package __init__.py,
+    # which release-sync.sh ships as source; T7 alone cannot feed this set.
+    "qsh.qsdb",
 }
 
 # Extra directories to exclude beyond what the rsync manifest covers.

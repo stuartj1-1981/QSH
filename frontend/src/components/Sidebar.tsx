@@ -1,9 +1,9 @@
-import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal, Network, BatteryCharging } from 'lucide-react'
+import { Home, LayoutGrid, Settings, Wrench, Sun, Moon, Calendar, Plane, BarChart3, Scale, TrendingUp, Activity, Gauge, CloudSun, SlidersHorizontal, Network, BatteryCharging, Database } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface SidebarProps {
   page: string
-  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'balancing' | 'device-health' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
+  onNavigate: (page: 'home' | 'rooms' | 'liveview' | 'settings' | 'wizard' | 'schedule' | 'away' | 'engineering' | 'historian' | 'store' | 'balancing' | 'device-health' | 'statistics' | 'scop' | 'forecast' | 'valves' | 'swarm') => void
   engineering: boolean
   onToggleEngineering: () => void
   dark: boolean
@@ -107,6 +107,12 @@ export function Sidebar({
               label="Historian"
               active={page === 'historian'}
               onClick={() => onNavigate('historian')}
+            />
+            <NavItem
+              icon={<Database size={18} />}
+              label="Store"
+              active={page === 'store'}
+              onClick={() => onNavigate('store')}
             />
             <NavItem
               icon={<CloudSun size={18} />}

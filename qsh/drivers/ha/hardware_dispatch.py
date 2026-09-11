@@ -16,6 +16,7 @@ import math
 from typing import Optional
 from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
+from qsh.events import EventKind, EventSpec, get_annunciator
 
 
 # Lower bound on the readback mismatch alarm threshold. Preserves
@@ -375,6 +376,22 @@ def _apply_mode_ha_service(config, optimal_mode):
 # ========================================================================
 
 
+def _register_events() -> None:
+    """Per-call registration (INSTRUCTION-506 T4), following the
+    sensor_fetcher.py:25-31 pattern — register() is idempotent for identical
+    specs, so per-call cost is a small dict lookup. Import-time registration
+    is not used here: DuplicateRegistrationError on a conflicting spec would
+    make import order a real property in a write-path module."""
+    ann = get_annunciator()
+    ann.register(EventSpec(
+        name="HA.mode_readback_mismatch",
+        kind=EventKind.LATCHED,
+        payload_fields=("commanded", "observed", "consecutive", "hp_power_kw"),
+        latch_key=("commanded", "observed"),
+        default_level=logging.WARNING,
+    ))
+
+
 def compute_mode_readback(
     prev_mismatch_count: int,
     optimal_mode: Optional[str],
@@ -395,8 +412,11 @@ def compute_mode_readback(
 
     The mismatch counter is independent of should_update_mode — alarm semantics are
     intent-vs-reality, not debouncer state (INSTRUCTION-116 D1). should_update_mode
-    only selects log severity: WARNING when QSH just attempted the mode-write,
-    INFO when quiescent.
+    selects the severity of the opening (rising-edge) annunciation only: WARNING
+    when QSH just attempted the mode-write, INFO when quiescent. Once the
+    HA.mode_readback_mismatch latch is open, no subsequent cycle re-emits at any
+    level until the mismatch clears (INSTRUCTION-506 T4) — the counter is
+    unaffected by this and keeps incrementing every cycle as before.
 
     This is the single shared readback computation for every driver: the HA driver
     (apply_hardware_control below) and the MQTT injection slot
@@ -418,6 +438,8 @@ def compute_mode_readback(
             unchanged when readback is unavailable (hp_power_kw is None or
             optimal_mode is None).
     """
+    _register_events()
+    ann = get_annunciator()
     applied_mode = optimal_mode if should_update_mode else prev_mode
     new_mismatch_count = prev_mismatch_count
     if hp_power_kw is not None and optimal_mode is not None:
@@ -432,6 +454,7 @@ def compute_mode_readback(
                 # QSH commanded flow at/below return — HP idle is demand-satisfied,
                 # not an unresponsive HP. Do not escalate; reset the counter.
                 new_mismatch_count = 0
+                ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=observed_mode)
                 logging.debug(
                     "Readback: commanded heat but HP idle with flow %.1f°C <= return "
                     "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
@@ -447,18 +470,38 @@ def compute_mode_readback(
                         new_mismatch_count, readback_threshold, optimal_mode,
                     )
                 elif should_update_mode:
-                    logging.warning(
+                    logging.debug(
                         "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
                         new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
                     )
+                    ann.entered(
+                        "HA.mode_readback_mismatch",
+                        commanded=optimal_mode, observed=observed_mode,
+                        consecutive=new_mismatch_count, hp_power_kw=hp_power_kw,
+                        level=logging.WARNING,
+                    )
                 else:
-                    logging.info(
+                    logging.debug(
                         "Mode readback (%d consecutive): optimal=%s but HP power=%.2fkW (observed %s) — "
                         "will trigger re-command next cycle",
                         new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
                     )
+                    ann.entered(
+                        "HA.mode_readback_mismatch",
+                        commanded=optimal_mode, observed=observed_mode,
+                        consecutive=new_mismatch_count, hp_power_kw=hp_power_kw,
+                        level=logging.INFO,
+                    )
         else:
             new_mismatch_count = 0
+            # observed_mode == optimal_mode here (that is what "else" means), so
+            # it cannot identify the latch tuple a prior mismatch cycle opened —
+            # that tuple was (optimal_mode, <the mismatched observed value>).
+            # prev_mode is this function's own previous-cycle applied_mode, which
+            # compute_mode_readback always sets to that cycle's observed_mode
+            # below, so it recovers the closing half of the tuple without new
+            # state (INSTRUCTION-506 T4).
+            ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=prev_mode)
         applied_mode = observed_mode
 
     return applied_mode, new_mismatch_count

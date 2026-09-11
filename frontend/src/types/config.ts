@@ -422,6 +422,20 @@ export interface HwPrechargeYaml {
   min_cycle_minutes?: number
 }
 
+/** The seven `historian.store` keys, exactly (INSTRUCTION-510C P1, read at
+ *  `qsh/config.py:3329-3340`). `cutover` is the `manual`/`auto` policy key;
+ *  `cutover_force` is a standing config flag, distinct from the one-shot
+ *  `force` a cutover request can carry. */
+export interface StoreYaml {
+  shadow?: boolean
+  cutover?: 'manual' | 'auto'
+  cutover_force?: boolean
+  retention_days?: number
+  local_cache_days?: number
+  external_path?: string | null
+  parity_report?: boolean
+}
+
 export interface HistorianYaml {
   enabled?: boolean
   host?: string
@@ -431,6 +445,7 @@ export interface HistorianYaml {
   password?: string
   batch_size?: number
   flush_interval_s?: number
+  store?: StoreYaml
 }
 
 export interface ShoulderYaml {
