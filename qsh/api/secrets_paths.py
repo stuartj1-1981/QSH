@@ -50,6 +50,11 @@ Audit dispositions:
   migrations don't drop the flag).
 - telemetry.api_token — INCLUDED. Fleet-telemetry registration token.
   Persisted by qsh/telemetry.py::_persist_api_token.
+- historian.mirror.influxdb.username — INCLUDED. Mirror InfluxDB username
+  (INSTRUCTION-505E T3) — credential-class by the same logic as
+  historian.username.
+- historian.mirror.influxdb.password — INCLUDED. Mirror InfluxDB password
+  (INSTRUCTION-505E T3) — mirrors historian.password.
 
 Excluded (not credential-class):
 - ha section credentials — HA addon supervisor manages access tokens via
@@ -80,6 +85,9 @@ SECRETS_PATHS: frozenset[str] = frozenset({
     "historian.username",
     "historian.password",
     "historian.token",
+    # Historian mirror (INSTRUCTION-505E T3)
+    "historian.mirror.influxdb.username",
+    "historian.mirror.influxdb.password",
     # Fleet telemetry registration
     "telemetry.api_token",
 })

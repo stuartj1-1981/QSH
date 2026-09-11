@@ -56,7 +56,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
         pip install --no-cache-dir torch==2.2.0; \
     fi \
     && pip install --no-cache-dir \
-        numpy==1.26.4 networkx requests pyyaml influxdb websocket-client \
+        numpy==1.26.4 networkx requests pyyaml influxdb duckdb==1.5.5 websocket-client \
         paho-mqtt aiomqtt fastapi==0.115.0 uvicorn[standard]==0.30.0 \
         python-multipart scipy==1.13.1
 
@@ -143,6 +143,7 @@ import qsh.forecast; \
 import qsh.forecast.providers; \
 import qsh.swarm; \
 from qsh.swarm.shadow_sysid import ShadowSysidTrack; \
+import qsh.qsdb; \
 print('T-23 / T-24 Check A deep import smoke PASS')"
 
 # Check C — NumPy ABI bridge smoke (INSTRUCTION-375). A torch built against a

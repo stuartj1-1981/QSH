@@ -35,6 +35,8 @@ from typing import Optional, Tuple
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+from ...events import EventKind, EventSpec, get_annunciator
+
 
 def _clean_temp(value):
     """Round temperature to 1 decimal place for the Float scalar on the new backend endpoint.
@@ -56,6 +58,11 @@ def _clean_temp(value):
 # logged response.elapsed on successes; raise if p95 exceeds 3 s.
 REQUEST_TIMEOUT_SECONDS = 5
 REQUEST_RETRY_ON_TIMEOUT = True  # single intra-cycle retry on socket.timeout only
+
+# INSTRUCTION-506 T1 — 40% of REQUEST_TIMEOUT_SECONDS. Observed nominal is
+# ~0.5s; this is a first estimate on the same review schedule as
+# REQUEST_TIMEOUT_SECONDS above (see its comment for the review trigger).
+SLOW_RESPONSE_THRESHOLD_S = 2.0
 
 AUTH_URL = "https://api.octopus.energy/v1/graphql/"          # obtainKrakenToken, refresh
 API_URL  = "https://api.backend.octopus.energy/v1/graphql/"  # HP mutations
@@ -244,6 +251,22 @@ def set_zone_setpoint(temp):
     logging.info(f"Octopus API: zone setpoint stored as {_zone_setpoint}°C")
 
 
+def _register_events() -> None:
+    """Per-call registration (INSTRUCTION-506 T1), following the
+    sensor_fetcher.py:25-31 pattern — register() is idempotent for identical
+    specs, so per-call cost is a small dict lookup, and capturing the
+    annunciator singleton at import time would leave dangling refs across
+    test resets."""
+    ann = get_annunciator()
+    ann.register(EventSpec(
+        name="HA.octopus_api_slow",
+        kind=EventKind.LATCHED,
+        payload_fields=("elapsed_s", "threshold_s"),
+        latch_key=(),
+        default_level=logging.WARNING,
+    ))
+
+
 def _graphql_request(query, variables=None, token=None, url=None):
     """Execute a GraphQL request. Returns parsed JSON or None on failure.
 
@@ -255,8 +278,11 @@ def _graphql_request(query, variables=None, token=None, url=None):
       - One intra-cycle retry on socket.timeout (only). HTTP 5xx, URLError, and
         other failures fall through to the caller on first occurrence so the
         existing _consecutive_failures backoff still converges.
-      - Successful responses log elapsed wall time at INFO so we can calibrate
-        REQUEST_TIMEOUT_SECONDS after one week of production data.
+      - Successful responses log elapsed wall time at DEBUG (INSTRUCTION-506 T1
+        — the one-week calibration window this originally supported expired
+        without the review being performed; see OI-1). The operator-facing
+        signal is HA.octopus_api_slow, latched WARNING when elapsed exceeds
+        SLOW_RESPONSE_THRESHOLD_S.
     """
     payload = {"query": query}
     if variables:
@@ -269,6 +295,9 @@ def _graphql_request(query, variables=None, token=None, url=None):
     data = json.dumps(payload).encode("utf-8")
     req = Request(url or API_URL, data=data, headers=headers, method="POST")
 
+    _register_events()
+    ann = get_annunciator()
+
     attempts = 2 if REQUEST_RETRY_ON_TIMEOUT else 1
     for attempt in range(1, attempts + 1):
         try:
@@ -276,7 +305,19 @@ def _graphql_request(query, variables=None, token=None, url=None):
             with urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
                 elapsed = time.monotonic() - t0
-                logging.info(f"Octopus API OK in {elapsed:.2f}s (attempt {attempt}/{attempts})")
+                logging.debug(f"Octopus API OK in {elapsed:.2f}s (attempt {attempt}/{attempts})")
+                if elapsed >= SLOW_RESPONSE_THRESHOLD_S:
+                    ann.entered(
+                        "HA.octopus_api_slow",
+                        elapsed_s=elapsed,
+                        threshold_s=SLOW_RESPONSE_THRESHOLD_S,
+                    )
+                else:
+                    ann.exited(
+                        "HA.octopus_api_slow",
+                        elapsed_s=elapsed,
+                        threshold_s=SLOW_RESPONSE_THRESHOLD_S,
+                    )
                 if body.get("errors"):
                     for err in body["errors"]:
                         code = err.get("extensions", {}).get("errorCode", "???")

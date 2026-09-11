@@ -37,6 +37,22 @@ export function formatInterval(seconds: number): string {
   return `${hours} h`
 }
 
+/** Format a byte count as B/KB/MB/GB, one decimal above KB.
+ *  `--` for null/undefined, `0 B` for zero. */
+export function formatBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '--'
+  if (n === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = n
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const formatted = unitIndex === 0 ? String(value) : value.toFixed(1)
+  return `${formatted} ${units[unitIndex]}`
+}
+
 export function statusColor(status: string): string {
   switch (status) {
     case 'ok': return 'text-[var(--green)]'

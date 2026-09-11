@@ -29,7 +29,14 @@ export function HistorianSettings({
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<InfluxTestResponse | null>(null)
 
+  // INSTRUCTION-510C T2(b) — the fallback initialiser above (`{ enabled,
+  // host, port, database, username }`) carries no `store` block. The PATCH
+  // this panel sends is a full-section overwrite (restore_redacted,
+  // routes/config.py): saving while `initial` is undefined would send that
+  // fallback shape and delete `store`, stranding a migration. Refuse
+  // instead — the same rule useStoreConfig applies to its own save().
   const save = async () => {
+    if (initial === undefined) return
     const result = await patch('historian', hist)
     if (result) onRefetch()
   }
@@ -64,7 +71,7 @@ export function HistorianSettings({
         <h2 className="text-lg font-bold text-[var(--text)]">Historian (InfluxDB)</h2>
         <button
           onClick={save}
-          disabled={saving}
+          disabled={saving || initial === undefined}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}

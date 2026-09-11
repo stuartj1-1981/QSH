@@ -2,6 +2,96 @@
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-11
+
+### Added
+- **QSH now keeps its own copy of your history, alongside InfluxDB.** On the
+  first start after this upgrade, an install with the historian enabled begins
+  keeping a local copy of its history under `/data/qsdb`, pulls its existing
+  history across from InfluxDB in the background, and switches its own reads
+  to the local copy once every day has been checked against InfluxDB. Nothing
+  is written to InfluxDB any differently until then, and nothing is lost at
+  any point — InfluxDB has had everything all along. Disk growth is on the
+  order of 285 MB a year.
+
+  To stay on InfluxDB only, set `historian.store.shadow: false`. On an install
+  that has not started copying, nothing is created. On one part-way through,
+  the copying pauses where it is and picks up again if you remove the setting.
+
+  Sealed days can optionally be copied out to a Home Assistant `/share/` or
+  `/media/` mount, verified on arrival, with the local copy kept for a
+  configurable window. An unreachable mount never blocks the control loop or a
+  read — it is reported and worked around.
+- **A new Store page**, in the sidebar next to Historian when engineering mode
+  is on. It shows the migration's progress, what the store holds day by day,
+  and a daily comparison against InfluxDB. It also carries storage and
+  retention settings, a cutover control that names the current backend, the
+  target and the unreconciled-day count before it sends anything, and a
+  read-only SQL console for querying the store directly — capped, interrupted
+  at 30 seconds, and unable to reach anything outside the store's own data.
+- **Three new read-only historian endpoints** — `GET /api/historian/store`,
+  `GET /api/historian/days` and `GET /api/historian/parity` — reporting store
+  health and migration progress, the sealed-day list, and the daily parity
+  reports. All three answer on an install with no store rather than failing.
+- **An optional mirror to a second InfluxDB.** Once an install has switched to
+  its local copy, `historian.mirror.influxdb` can feed a secondary InfluxDB so
+  anything you have built on the first keeps working. Off by default, with its
+  own counters, and it never affects the primary.
+
+### Changed
+- **The historian no longer stalls the control loop when InfluxDB is slow or
+  unreachable.** Each request is now tried once instead of three times: an
+  unreachable InfluxDB used to hold the loop for about ninety seconds every
+  time the historian flushed — more than once a minute, and longer than the
+  loop's own interval — and now holds it for thirty, with the loop recovering
+  between flushes. Points lost to a failed write are counted and logged rather
+  than retried. A configured mirror waits five seconds rather than ninety.
+- **A much quieter operator log.** Four per-cycle log lines on the Home
+  Assistant driver layer — request timings, valve stale-value fallbacks, mode
+  readback mismatches and a missing supervisor token — no longer repeat every
+  cycle. Each is now reported once when the condition starts and stays silent
+  until it clears. On one reported install these accounted for the large
+  majority of the operator log.
+
+### Fixed
+- **InfluxDB 2 is now supported.** The historian issued a database-create call
+  unconditionally at start-up; against InfluxDB 2's compatibility API that call
+  fails, and the failure silently disabled the historian even though the server
+  had already answered successfully. It now confirms the database exists
+  instead, while still failing safely if it genuinely does not. InfluxDB 1.x
+  installs are unaffected. A server that accepts writes but offers no query API
+  is now reported by name rather than as an opaque connection failure.
+- **Optimum Start now works on installs running a Comfort Schedule night
+  setback.** Recovery was being measured against the target in force at the
+  time of the check rather than the one that would apply when occupancy
+  resumed, so the shortfall never came out positive and recovery never
+  started. Installs without a Comfort Schedule were not affected.
+- **The local store's memory budget is now configurable and defaults higher**
+  (`historian.store.memory_limit_mb`, default 512 MiB, accepted between 256 and
+  4096). The old fixed budget was being used up by the store's own housekeeping
+  before a night's copying could even start. The store also now records what
+  was holding its memory at the start and end of every pass.
+- **One failed write no longer stops a whole night's copying.** A single
+  failing day used to abort the entire pass, turning one recoverable failure
+  into a stall that never cleared on its own. The failing day is now skipped
+  and the pass carries on; three failures in a row still stop it. A stalled
+  install catches up by itself on the next pass, with no manual step.
+- **A part-written day is no longer recorded as complete.** A write that ran
+  out of memory partway through used to be treated as a success, leaving that
+  day's progress permanently stuck and silently retried in full every night.
+  Days are now written in bounded batches, a write that still falls short is
+  raised and reported, and a day that wrote but has not yet matched its source
+  row count is tracked rather than dropped.
+- **A measurement that could not be read is no longer treated as empty.** A
+  slow or unreachable InfluxDB could make the daily progress check conclude
+  there was nothing left to copy and move the install onto its local store
+  permanently, before that measurement had ever been copied. A failed read now
+  counts as no progress, the switch-over waits for a read that actually
+  succeeds, and a warning appears while a measurement cannot be read.
+- **Empty days are no longer sealed.** A measurement that recorded nothing on a
+  given day had that day written as an empty sealed day, which then latched a
+  historian warning that could never clear. Such days are now left unsealed,
+  and any already written are cleaned up automatically on the next start.
 ## [1.5.37] — 2026-08-31
 
 ### Added

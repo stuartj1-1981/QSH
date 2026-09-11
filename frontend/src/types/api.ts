@@ -921,3 +921,152 @@ export interface CutoverGatesResponse {
 export interface FallbackCountsResponse {
   fallback_counts: Record<string, number>
 }
+
+// Store page types (INSTRUCTION-510B T1). All three response interfaces
+// carry both `historian` and `store` booleans on every branch — 510A V3's
+// two-boolean degradation (R1). `StoreStats` mirrors Historian.get_stats()'s
+// keys; every one is optional-and-nullable because a no-store install still
+// answers with the historian-level keys populated and the store-level keys
+// null.
+export interface StoreStats {
+  enabled?: boolean | null
+  connected?: boolean | null
+  server_version?: string | null
+  total_written?: number | null
+  total_errors?: number | null
+  total_points_lost?: number | null
+  cop_suppressed_heat_cycles?: number | null
+  buffer_size?: number | null
+  backend_config?: string | null
+  store_shadow?: boolean | null
+  mirror_enabled?: boolean | null
+  mirror_written?: number | null
+  mirror_errors?: number | null
+  mirror_points_lost?: number | null
+  backend_effective?: string | null
+  store_rows_written?: number | null
+  store_errors?: number | null
+  store_type_conflicts?: number | null
+  store_read_missing_files?: number | null
+  open_rows?: number | null
+  sealed_days?: number | null
+  local_bytes?: number | null
+  migration_state?: string | null
+  sql_snapshot_age_s?: number | null
+  external_ok?: boolean | null
+  external_days?: number | null
+  external_bytes?: number | null
+  cache_days?: number | null
+  external_last_error?: string | null
+  backfill_state?: string | null
+  population_days?: number | null
+  reconciled_days?: number | null
+  unreconciled_days?: number | null
+  source_ok?: boolean | null
+  source_last_error?: string | null
+  last_pulled_day?: string | null
+}
+
+export interface StoreStatsResponse {
+  historian: boolean
+  store: boolean
+  stats: StoreStats | null
+}
+
+export interface SealedDayRow {
+  measurement: string
+  day: string
+  location: 'local' | 'external'
+  path: string | null
+  cache_path: string | null
+  rows: number
+  sha256: string | null
+  // Not returned by the current `/days` route (the manifest's `bytes`
+  // column exists but `sealed_days()` does not select it) — optional so a
+  // future backend addition is picked up without a type change.
+  bytes?: number | null
+}
+
+export interface SealedDaysResponse {
+  historian: boolean
+  store: boolean
+  days: SealedDayRow[]
+  total: number
+  truncated: boolean
+}
+
+export interface ParityIndexResponse {
+  historian: boolean
+  store: boolean
+  days: string[]
+}
+
+// The persisted report file's own shape (qsdb/parity.py::_write_report) —
+// `comparisons` / `edge_comparisons` are the only populations recorded;
+// case count and mismatch count are derived from them client-side, never
+// stored pre-computed. `skipped` reports carry neither array.
+export interface ParityComparison {
+  method: string
+  args: Record<string, unknown>
+  day: string | null
+  match: boolean
+  diff?: unknown
+  near_window_open?: boolean
+}
+
+export interface ParityReport {
+  generated_at?: string
+  skipped?: boolean
+  comparisons?: ParityComparison[]
+  edge_comparisons?: ParityComparison[]
+  [key: string]: unknown
+}
+
+// Store page control types (INSTRUCTION-510C T1). The request/response
+// shapes below are read from source rather than cited from a cleared
+// text — two of the three diverged from what the instruction assumed,
+// and the deviation is recorded in this arc's PR description:
+//
+// - The SQL body field is `q`, not `sql` (`routes/historian.py:249-250`,
+//   `SqlBody`). `StoreSqlRequest` follows the route, not 505E's prose.
+// - `POST /api/config/test-store` does not return `{success, message}`.
+//   It returns the shape below (`routes/config.py:1018-1088`).
+export interface StoreSqlRequest {
+  q: string
+}
+
+// Mirrors qsh/qsdb/sql.py:268-276 as read at source — wider than 505E's
+// cleared text, which named only `columns` and `rows`.
+export interface StoreSqlResponse {
+  columns: string[]
+  rows: unknown[][]
+  row_count: number
+  truncated: boolean
+  elapsed_ms: number
+  snapshot_age_s?: number | null
+  sealed_days?: number
+}
+
+export interface TestStoreResponse {
+  duckdb: {
+    available: boolean
+    version: string | null
+  }
+  root: {
+    path: string
+    exists: boolean
+    writable: boolean
+    free_bytes: number | null
+  }
+  migration: {
+    state?: string
+    backend?: string
+    backend_effective?: string
+    cutover_setting?: string
+    [key: string]: unknown
+  }
+  external_path: {
+    form_ok: boolean
+    reachable: boolean | null
+  } | null
+}

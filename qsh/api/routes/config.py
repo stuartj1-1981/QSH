@@ -3,13 +3,16 @@
 import copy
 import logging
 import os
+import shutil
 import yaml
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from ..state import shared_state
+from ...historian import get_historian
+from ...qsdb import QsdbStore
 
 # YAML I/O primitives live in qsh.config_io so non-HTTP modules can update
 # qsh.yaml without importing from this routes package (INSTRUCTION-130 Task 0).
@@ -1006,6 +1009,95 @@ def test_influxdb(req: InfluxTestRequest):
         return {"success": False, "message": "influxdb Python package not installed"}
     except Exception as e:
         return {"success": False, "message": f"Connection failed: {e}"}
+
+
+class StoreTestRequest(BaseModel):
+    external_path: Optional[str] = None
+
+
+@router.post("/config/test-store")
+def test_store(req: StoreTestRequest):
+    """Report qsdb store readiness (INSTRUCTION-505F T4, OB-F5).
+
+    POST /api/config/test-store
+
+    Never probes ``external_path`` (only its FORM is checked; reachability
+    is read from the running store's own last health check, never a fresh
+    ``os.stat``), never opens a second store, and never calls
+    ``duckdb.connect`` — ``QsdbStore.is_available()`` is the same
+    import-only check the store itself uses to decide whether it can run.
+    The reported root is ``QsdbStore.DEFAULT_ROOT`` (T1(b)), not a second
+    literal, so a test-time redirect of the class attribute (T6) is
+    reflected here too.
+    """
+    duckdb_available = QsdbStore.is_available()
+    duckdb_version = None
+    if duckdb_available:
+        import duckdb as _duckdb
+
+        try:
+            duckdb_version = _duckdb.__version__
+        except AttributeError:
+            duckdb_version = None
+
+    root = QsdbStore.DEFAULT_ROOT
+    root_exists = os.path.isdir(root)
+    writable = False
+    free_bytes = None
+    if root_exists:
+        try:
+            free_bytes = shutil.disk_usage(root).free
+        except OSError:
+            free_bytes = None
+        # Writability is tested only when the root already exists — this
+        # route never creates it (505F T4).
+        probe_path = os.path.join(root, ".qsh_test_store_write_probe")
+        try:
+            with open(probe_path, "w"):
+                pass
+            writable = True
+        except OSError:
+            writable = False
+        finally:
+            try:
+                os.remove(probe_path)
+            except OSError:
+                pass
+
+    h = get_historian()
+    if h is not None:
+        migration = h.migration_status()
+    else:
+        historian_cfg = (shared_state.get_config() or {}).get("historian", {})
+        backend = historian_cfg.get("backend", "influxdb")
+        migration = {
+            "state": "none",
+            "backend": backend,
+            "backend_effective": backend,
+            "cutover_setting": historian_cfg.get("store", {}).get("cutover", "manual"),
+        }
+
+    external_path_result = None
+    if req.external_path is not None:
+        normalised = os.path.normpath(req.external_path)
+        form_ok = normalised.startswith("/share/") or normalised.startswith("/media/")
+        # Reachability is the store's own last mount health check — the
+        # copier's `external_ok`, surfaced via the public get_stats()
+        # contract — never a fresh stat of the given candidate path.
+        reachable = h.get_stats().get("external_ok") if h is not None else None
+        external_path_result = {"form_ok": form_ok, "reachable": reachable}
+
+    return {
+        "duckdb": {"available": duckdb_available, "version": duckdb_version},
+        "root": {
+            "path": root,
+            "exists": root_exists,
+            "writable": writable,
+            "free_bytes": free_bytes,
+        },
+        "migration": migration,
+        "external_path": external_path_result,
+    }
 
 
 def _redact_config(config: dict) -> dict:

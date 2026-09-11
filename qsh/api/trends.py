@@ -164,19 +164,14 @@ class TrendBuffer:
             logger.info("TrendBuffer: No active historian — starting empty")
             return
 
-        client = getattr(historian, "_client", None)
-        if client is None:
-            logger.info("TrendBuffer: No InfluxDB client — starting empty")
-            return
-
         try:
-            self._seed_system_metrics(client)
-            self._seed_room_metrics(client)
+            self._seed_system_metrics(historian)
+            self._seed_room_metrics(historian)
             logger.info("TrendBuffer: Seeded %d points from InfluxDB", self.size)
         except Exception as e:
             logger.warning("TrendBuffer: InfluxDB seed failed: %s", e)
 
-    def _seed_system_metrics(self, client: Any) -> None:
+    def _seed_system_metrics(self, historian: Any) -> None:
         """Query system metrics from InfluxDB and populate buffers."""
         fields = [
             "outdoor_temp",
@@ -184,39 +179,33 @@ class TrendBuffer:
             "active_source_thermal_output_kw",
             "active_source_performance_value",
             "hp_power_kw",
-            "cop AS hp_cop",
-            "flow_temp AS hp_flow_temp",
-            "demand_kw AS total_demand",
+            "cop",
+            "flow_temp",
+            "demand_kw",
             "tariff_rate",
         ]
-        query = (
-            f'SELECT {", ".join(fields)} FROM qsh_system '
-            f"WHERE time > now() - 24h"
-        )
-        try:
-            result = client.query(query)
-            points = list(result.get_points(measurement="qsh_system"))
-        except Exception as e:
-            logger.debug("TrendBuffer: system query failed: %s", e)
-            return
+        points = historian.read_recent("qsh_system", fields, hours=24)
+
+        # Raw field name -> trend-buffer metric name. Replaces the dropped
+        # InfluxQL `AS` aliases (INSTRUCTION-501 T3) — read_recent() returns
+        # fields unaliased, so the remap happens here instead.
+        _map = {
+            "outdoor_temp": "outdoor_temp",
+            "active_source_input_kw": "active_source_input_kw",
+            "active_source_thermal_output_kw": "active_source_thermal_output_kw",
+            "active_source_performance_value": "active_source_performance_value",
+            "hp_power_kw": "hp_power_kw",
+            "cop": "hp_cop",
+            "flow_temp": "hp_flow_temp",
+            "demand_kw": "total_demand",
+            "tariff_rate": "cost_today_pence",
+        }
 
         with self._lock:
             for point in points:
                 ts = _parse_influx_time(point.get("time"))
                 if ts is None:
                     continue
-
-                _map = {
-                    "outdoor_temp": "outdoor_temp",
-                    "active_source_input_kw": "active_source_input_kw",
-                    "active_source_thermal_output_kw": "active_source_thermal_output_kw",
-                    "active_source_performance_value": "active_source_performance_value",
-                    "hp_power_kw": "hp_power_kw",
-                    "hp_cop": "hp_cop",
-                    "hp_flow_temp": "hp_flow_temp",
-                    "total_demand": "total_demand",
-                    "tariff_rate": "cost_today_pence",
-                }
                 for influx_key, metric_name in _map.items():
                     val = point.get(influx_key)
                     if val is not None:
@@ -224,38 +213,32 @@ class TrendBuffer:
                             {"t": ts, "v": float(val)}
                         )
 
-    def _seed_room_metrics(self, client: Any) -> None:
+    def _seed_room_metrics(self, historian: Any) -> None:
         """Query room metrics from InfluxDB and populate buffers."""
-        query = (
-            'SELECT temperature, target, valve_pct FROM qsh_room '
-            'WHERE time > now() - 24h GROUP BY room'
+        points = historian.read_recent(
+            "qsh_room", ["temperature", "target", "valve_pct"], hours=24, tag="room"
         )
-        try:
-            result = client.query(query)
-        except Exception as e:
-            logger.debug("TrendBuffer: room query failed: %s", e)
-            return
+
+        influx_to_metric = {
+            "temperature": "temp",
+            "target": "target",
+            "valve_pct": "valve",
+        }
 
         with self._lock:
-            for (_, tags), points in result.items():
-                room = tags.get("room", "")
+            for point in points:
+                room = point.get("room")
                 if not room:
                     continue
-                for point in points:
-                    ts = _parse_influx_time(point.get("time"))
-                    if ts is None:
-                        continue
-                    influx_to_metric = {
-                        "temperature": "temp",
-                        "target": "target",
-                        "valve_pct": "valve",
-                    }
-                    for influx_key, metric_name in influx_to_metric.items():
-                        val = point.get(influx_key)
-                        if val is not None:
-                            self._get_room_deque(room, metric_name).append(
-                                {"t": ts, "v": float(val)}
-                            )
+                ts = _parse_influx_time(point.get("time"))
+                if ts is None:
+                    continue
+                for influx_key, metric_name in influx_to_metric.items():
+                    val = point.get(influx_key)
+                    if val is not None:
+                        self._get_room_deque(room, metric_name).append(
+                            {"t": ts, "v": float(val)}
+                        )
 
 
 def _resolve_metric_value(snapshot: Any, metric: str) -> Optional[float]:

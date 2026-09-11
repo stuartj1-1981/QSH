@@ -127,13 +127,8 @@ class CycleHistory:
             logger.info("CycleHistory: No active historian — starting empty")
             return
 
-        client = getattr(historian, "_client", None)
-        if client is None:
-            logger.info("CycleHistory: No InfluxDB client — starting empty")
-            return
-
         try:
-            entries = self._query_and_build_entries(client)
+            entries = self._query_and_build_entries(historian)
             if entries:
                 with self._lock:
                     for entry in entries:
@@ -146,7 +141,7 @@ class CycleHistory:
         except Exception as e:
             logger.warning("CycleHistory: InfluxDB seed failed: %s", e)
 
-    def _query_and_build_entries(self, client: Any) -> List["HistoryEntry"]:
+    def _query_and_build_entries(self, historian: Any) -> List["HistoryEntry"]:
         """Query InfluxDB for system, room, and RL data; merge into HistoryEntry list."""
         from datetime import datetime
 
@@ -160,62 +155,49 @@ class CycleHistory:
                 return None
 
         # ── Query system metrics ──
-        sys_query = (
-            f"SELECT flow_temp, outdoor_temp, hp_power_kw, cop, delta_t, "
-            f"demand_kw, tariff_rate, return_temp, operating_state "
-            f"FROM qsh_system WHERE time > now() - {SEED_WINDOW_HOURS}h"
+        sys_points = historian.read_recent(
+            "qsh_system",
+            [
+                "flow_temp", "outdoor_temp", "hp_power_kw", "cop", "delta_t",
+                "demand_kw", "tariff_rate", "return_temp", "operating_state",
+            ],
+            hours=SEED_WINDOW_HOURS,
         )
-        try:
-            sys_result = client.query(sys_query)
-            sys_points = list(sys_result.get_points(measurement="qsh_system"))
-        except Exception as e:
-            logger.debug("CycleHistory: system query failed: %s", e)
-            sys_points = []
 
         # ── Query RL metrics ──
-        rl_query = (
-            f"SELECT reward, loss, blend_factor, det_flow, rl_proposed_flow "
-            f"FROM qsh_rl WHERE time > now() - {SEED_WINDOW_HOURS}h"
+        rl_points = historian.read_recent(
+            "qsh_rl",
+            ["reward", "loss", "blend_factor", "det_flow", "rl_proposed_flow"],
+            hours=SEED_WINDOW_HOURS,
         )
-        try:
-            rl_result = client.query(rl_query)
-            rl_points = list(rl_result.get_points(measurement="qsh_rl"))
-        except Exception as e:
-            logger.debug("CycleHistory: RL query failed: %s", e)
-            rl_points = []
 
         # ── Query room metrics ──
-        room_query = (
-            f"SELECT temperature, target, valve_pct, occupancy "
-            f"FROM qsh_room WHERE time > now() - {SEED_WINDOW_HOURS}h GROUP BY room"
+        room_points = historian.read_recent(
+            "qsh_room",
+            ["temperature", "target", "valve_pct", "occupancy"],
+            hours=SEED_WINDOW_HOURS,
+            tag="room",
         )
-        try:
-            room_result = client.query(room_query)
-        except Exception as e:
-            logger.debug("CycleHistory: room query failed: %s", e)
-            room_result = None
 
         # Build room data indexed by rounded timestamp
         # (round to nearest 30s to align with system points)
         room_by_ts: Dict[int, Dict[str, Dict[str, Any]]] = {}
-        if room_result is not None:
-            for (_, tags), points in room_result.items():
-                room_name = tags.get("room", "")
-                if not room_name:
-                    continue
-                for pt in points:
-                    ts = _parse_ts(pt.get("time"))
-                    if ts is None:
-                        continue
-                    ts_key = int(ts // 30) * 30  # round to 30s boundary
-                    if ts_key not in room_by_ts:
-                        room_by_ts[ts_key] = {}
-                    room_by_ts[ts_key][room_name] = {
-                        "temp": pt.get("temperature"),
-                        "target": pt.get("target"),
-                        "valve": pt.get("valve_pct", 0),
-                        "occupancy": pt.get("occupancy", "unknown"),
-                    }
+        for pt in room_points:
+            room_name = pt.get("room") or ""
+            if not room_name:
+                continue
+            ts = _parse_ts(pt.get("time"))
+            if ts is None:
+                continue
+            ts_key = int(ts // 30) * 30  # round to 30s boundary
+            if ts_key not in room_by_ts:
+                room_by_ts[ts_key] = {}
+            room_by_ts[ts_key][room_name] = {
+                "temp": pt.get("temperature"),
+                "target": pt.get("target"),
+                "valve": pt.get("valve_pct") if pt.get("valve_pct") is not None else 0,
+                "occupancy": pt.get("occupancy") or "unknown",
+            }
 
         # Build RL data indexed by rounded timestamp
         rl_by_ts: Dict[int, dict] = {}
@@ -225,10 +207,10 @@ class CycleHistory:
                 continue
             ts_key = int(ts // 30) * 30
             rl_by_ts[ts_key] = {
-                "rl_reward": pt.get("reward", 0.0),
-                "rl_loss": pt.get("loss", 0.0),
-                "rl_blend": pt.get("blend_factor", 0.0),
-                "det_flow": pt.get("det_flow", 0.0),
+                "rl_reward": pt.get("reward", 0.0) or 0.0,
+                "rl_loss": pt.get("loss", 0.0) or 0.0,
+                "rl_blend": pt.get("blend_factor", 0.0) or 0.0,
+                "det_flow": pt.get("det_flow", 0.0) or 0.0,
                 "rl_flow": pt.get("rl_proposed_flow"),
             }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatTimeRange, formatInterval } from '../utils'
+import { formatTimeRange, formatInterval, formatBytes } from '../utils'
 
 // Use fixed UTC epochs (seconds). Node vitest runs with TZ from the
 // environment; we build dates explicitly from UTC then compare against the
@@ -82,5 +82,39 @@ describe('formatInterval', () => {
 
   it('formats 1.5h as "1.5 h"', () => {
     expect(formatInterval(5400)).toBe('1.5 h')
+  })
+})
+
+describe('formatBytes', () => {
+  it('returns "--" for null', () => {
+    expect(formatBytes(null)).toBe('--')
+  })
+
+  it('returns "--" for undefined', () => {
+    expect(formatBytes(undefined)).toBe('--')
+  })
+
+  it('returns "0 B" for zero', () => {
+    expect(formatBytes(0)).toBe('0 B')
+  })
+
+  it('formats sub-KB values in bytes', () => {
+    expect(formatBytes(512)).toBe('512 B')
+  })
+
+  it('formats KB values with one decimal', () => {
+    expect(formatBytes(2048)).toBe('2.0 KB')
+  })
+
+  it('formats MB values with one decimal', () => {
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  })
+
+  it('formats GB values with one decimal', () => {
+    expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe('3.0 GB')
+  })
+
+  it('does not exceed GB for very large values', () => {
+    expect(formatBytes(1024 * 1024 * 1024 * 1024)).toBe('1024.0 GB')
   })
 })

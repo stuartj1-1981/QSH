@@ -108,8 +108,7 @@ def _safe_div(num: Optional[float], den: Optional[float]) -> Optional[float]:
 
 def _config_tz(historian) -> str:
     """Pull installation_tz from the historian's stored config; default UK."""
-    cfg = getattr(historian, "_config", None) or {}
-    return cfg.get("installation_tz", "Europe/London")
+    return historian.installation_tz
 
 
 @router.get("")
@@ -156,8 +155,7 @@ def get_scop(
             "mode": mode,
         }
 
-    cfg = getattr(h, "_config", None) or {}
-    if cfg.get("active_source_type") not in (None, "heat_pump"):
+    if h.active_source_type not in (None, "heat_pump"):
         return {
             "available": False,
             "message": "SCOP is HP-specific. Active source is not a heat pump.",

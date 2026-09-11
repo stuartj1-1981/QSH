@@ -38,6 +38,17 @@ def _register_events() -> None:
         latch_key=("key",),
         default_level=logging.INFO,
     ))
+    # INSTRUCTION-506 T2 — per-emitter valve stale-fallback latch. `perc` is
+    # diagnostic payload only (excluded from latch_key), same reasoning as
+    # HA.hot_water_stale_lastvalid's age_s (:79-81 above): a drifting
+    # percentage must not re-fire the latch.
+    ann.register(EventSpec(
+        name="HA.valve_stale_lastvalid",
+        kind=EventKind.LATCHED,
+        payload_fields=("room", "stem", "entity", "perc"),
+        latch_key=("room", "stem"),
+        default_level=logging.INFO,
+    ))
     ann.register(EventSpec(
         name="HA.sensor_stale_no_history",
         kind=EventKind.LATCHED,
@@ -577,6 +588,8 @@ def _read_one_valve_position(
         ``None`` if unavailable AND no history (caller falls back to room-level).
     """
     global _last_valid_heating_perc_per_emitter
+    _register_events()
+    ann = get_annunciator()
     key = (room, stem)
     perc_raw, is_fresh = _fetch_with_staleness(entity, "valve", default=0.0)
 
@@ -585,13 +598,18 @@ def _read_one_valve_position(
         if scale != 100:
             perc = round(perc / float(scale) * 100.0, 1)
         _last_valid_heating_perc_per_emitter[key] = perc
+        ann.exited("HA.valve_stale_lastvalid", room=room, stem=stem)
         return perc
 
     if key in _last_valid_heating_perc_per_emitter:
         last = _last_valid_heating_perc_per_emitter[key]
-        logging.info(
+        logging.debug(
             "Valve %s/%s (%s) stale - using last valid: %.1f%%",
             room, stem, entity, last,
+        )
+        ann.entered(
+            "HA.valve_stale_lastvalid",
+            room=room, stem=stem, entity=entity, perc=last,
         )
         return last
 

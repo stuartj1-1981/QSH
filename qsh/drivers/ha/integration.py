@@ -79,6 +79,37 @@ def _annunciate_suppression_cleared(suppressed_count: int) -> None:
         )
 
 
+# INSTRUCTION-506 T5 — `headers` is a module-level constant evaluated once at
+# import (line 12 above), so this condition cannot clear within a process
+# lifetime. latch_key=() gives one emission per process; there is
+# deliberately no falling edge (see T5 in the instruction — the correct
+# clearing act is a process restart with the token present).
+NO_SUPERVISOR_TOKEN_EVENT = "HA.no_supervisor_token"
+
+
+def _annunciate_no_supervisor_token(caller: str) -> None:
+    # Registered per-call rather than once at import (contrast
+    # _register_write_suppression_event above): register() is idempotent, so
+    # the per-call cost is a small dict lookup, and it survives an
+    # EventAnnunciator singleton reset (e.g. between tests) without needing a
+    # second import-time call.
+    try:
+        from ...events import EventKind, EventSpec, get_annunciator
+        ann = get_annunciator()
+        ann.register(EventSpec(
+            name=NO_SUPERVISOR_TOKEN_EVENT,
+            kind=EventKind.LATCHED,
+            payload_fields=("caller",),
+            latch_key=(),
+            default_level=logging.WARNING,
+        ))
+        ann.entered(NO_SUPERVISOR_TOKEN_EVENT, caller=caller)
+    except Exception:
+        logging.debug(
+            "HA.no_supervisor_token entered-emission failed", exc_info=True
+        )
+
+
 class _CircuitBreaker:
     """Simple circuit breaker: 5 failures -> 15 min cooldown."""
 
@@ -203,7 +234,7 @@ def fetch_ha_entity(entity_id, attr=None, default=None, suppress_log=False):
     if not entity_id.strip():
         return default
     if not headers:
-        logging.warning("No SUPERVISOR_TOKEN found - fetch_ha_entity will return default.")
+        _annunciate_no_supervisor_token("fetch_ha_entity")
         return default
     if _breaker.is_open():
         return default
@@ -288,7 +319,7 @@ def fetch_ha_entity_full(entity_id, default=None, suppress_log=False):
 
 def set_ha_service(domain, service, data) -> WriteOutcome:
     if not headers:
-        logging.warning("No SUPERVISOR_TOKEN found - set_ha_service skipped.")
+        _annunciate_no_supervisor_token("set_ha_service")
         return WriteOutcome.NO_TOKEN
     if _breaker.is_open():
         _breaker.note_suppressed_write(domain, service, _entity_label(data))
