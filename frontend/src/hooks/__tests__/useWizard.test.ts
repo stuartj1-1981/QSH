@@ -7,22 +7,23 @@ describe('useWizard', () => {
     vi.restoreAllMocks()
   })
 
-  it('defaults to HA branch with 15 steps', () => {
+  it('defaults to HA branch with 16 steps', () => {
     // INSTRUCTION-162B: HA gained an `aux_outputs` step between `rooms` and
     // `tariff` (13 → 14). INSTRUCTION-368: HA gained a `building` step after
-    // `thermal` (14 → 15).
+    // `thermal` (14 → 15). INSTRUCTION-524C: a `historian` step between
+    // `hot_water` and `disclaimer` (15 → 16).
     const { result } = renderHook(() => useWizard())
-    expect(result.current.totalSteps).toBe(15)
+    expect(result.current.totalSteps).toBe(16)
     expect(result.current.stepName).toBe('restore_backup')
   })
 
   it('HA branch step sequence skips MQTT Broker', () => {
     const { result } = renderHook(() => useWizard())
     expect(result.current.steps).not.toContain('mqtt_broker')
-    expect(result.current.totalSteps).toBe(15)
+    expect(result.current.totalSteps).toBe(16)
   })
 
-  it('MQTT branch includes MQTT Broker step with 16 steps', () => {
+  it('MQTT branch includes MQTT Broker step with 17 steps', () => {
     // INSTRUCTION-162B: MQTT path gained `aux_outputs` (14 → 15).
     // INSTRUCTION-368: MQTT gained `building` after `thermal` (15 → 16).
     // Mock validation endpoint
@@ -38,7 +39,7 @@ describe('useWizard', () => {
       result.current.updateConfig('driver', 'mqtt')
     })
 
-    expect(result.current.totalSteps).toBe(16)
+    expect(result.current.totalSteps).toBe(17)
     expect(result.current.steps).toContain('mqtt_broker')
   })
 
@@ -139,7 +140,7 @@ describe('useWizard', () => {
 
     expect(result.current.stepLabels).toContain('MQTT Broker')
     expect(result.current.stepLabels).toContain('Auxiliary outputs')
-    expect(result.current.stepLabels).toHaveLength(16)
+    expect(result.current.stepLabels).toHaveLength(17)
   })
 })
 
@@ -509,5 +510,22 @@ describe('useWizard deploy 409 + acknowledgement threading', () => {
       result.current.toggleAcknowledgement('a:1', false)
     })
     expect(result.current.acknowledgedRuleIds).toEqual(['b:2'])
+  })
+  it('the historian step sits between hot water and disclaimer on both branches (INSTRUCTION-524C)', () => {
+    const { result } = renderHook(() => useWizard())
+
+    const ha = result.current.steps
+    expect(ha[ha.indexOf('historian') - 1]).toBe('hot_water')
+    expect(ha[ha.indexOf('historian') + 1]).toBe('disclaimer')
+    expect(result.current.stepLabels).toContain('Historian')
+
+    act(() => {
+      result.current.updateConfig('driver', 'mqtt')
+    })
+
+    const mqtt = result.current.steps
+    expect(mqtt[mqtt.indexOf('historian') - 1]).toBe('hot_water')
+    expect(mqtt[mqtt.indexOf('historian') + 1]).toBe('disclaimer')
+    expect(result.current.stepLabels).toContain('Historian')
   })
 })

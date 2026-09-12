@@ -418,6 +418,16 @@ export function StepReview({
           />
         </SummarySection>
 
+        <SummarySection title="Historian">
+          {/* The config alone cannot say which store an existing install
+              records to (INSTRUCTION-524B §1.3), so this says only on or
+              off. INSTRUCTION-524C T4. */}
+          <SummaryItem
+            label="Record history"
+            value={config.historian?.enabled === true ? 'On' : 'Off'}
+          />
+        </SummarySection>
+
         {/* INSTRUCTION-420 D2 — sensor reporting ADVISORY. Informational by
             construction: it renders measured classes where the running
             system already has data, degrades honestly to a measuring note

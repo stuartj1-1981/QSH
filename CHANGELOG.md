@@ -2,6 +2,68 @@
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-09-12
+
+### Added
+- The setup wizard has a Historian step, on Home Assistant and MQTT installs,
+  that turns on the built-in store. It is off unless you turn it on, and on a
+  re-run it keeps the historian settings you already have.
+- The local store prints the memory limit and temporary directory it actually
+  applied, plus the DuckDB version, once when it opens, so a configured value
+  can be confirmed rather than assumed.
+- The store status at `GET /api/historian/store` now reports the memory
+  DuckDB's buffer manager is using and its limit, on every install and at any
+  time; each history-migration pass also records the same figures once in the
+  log.
+- The SQL page can list the history migration's per-day comparisons as
+  `qsdb_reconcile`, so a migration that is not finishing can be inspected
+  directly.
+
+### Changed
+- Settings → Historian now turns the built-in store on or off and no longer
+  asks for InfluxDB. On a system InfluxDB still records for, it offers one
+  action: move the history to the built-in store. On a system whose move is
+  paused it offers to resume it, and says how to finish a move whose InfluxDB
+  is gone. A cut-over system that is recording nothing can be repaired with
+  one button.
+- The Historian and Statistics pages now send you to Settings → Historian when
+  the historian is off, instead of to `qsh.yaml`.
+- With `historian.backend: qsdb`, QSH no longer contacts InfluxDB by default
+  unless `historian.store.shadow: true` is set. An install that set
+  `backend: qsdb` by hand while a migration from InfluxDB was still running
+  must also set `historian.store.shadow: true`, or it records nothing — the
+  start-up line says so. The start-up line now says whether history is going
+  to the built-in store or to InfluxDB, and why when nothing is recorded,
+  including how to finish a move whose InfluxDB is gone.
+
+### Fixed
+- While the local store is copying history across from InfluxDB, the control
+  loop no longer waits for it. A migration pass held the store for minutes at
+  a time, and because the control cycle wrote its own readings through the
+  same store, the cycle stretched with it — up to five minutes against a
+  normal thirty seconds — and the Store page hung on "Loading" for the same
+  period. The cycle now hands its readings over and carries on, so it keeps
+  its normal interval and the Store page keeps answering throughout. If the
+  store ever falls so far behind that its queue fills, the newest writes to
+  the local copy are dropped rather than delaying the loop; they are counted
+  and announced once, and until the local store takes over from InfluxDB,
+  InfluxDB still receives everything.
+- The history migration no longer stalls short of 100% on an install where a
+  measurement has gone quiet — a DHW measurement retired by an earlier
+  upgrade, or an alarm measurement on a system that has not raised an alarm
+  for a while. A day was only treated as finished once that particular
+  measurement wrote a row past midnight, so a measurement that had stopped
+  writing left its last day unfinished for ever and the migration never
+  completed. A day is now treated as finished when the store as a whole has a
+  row past midnight. Installs that had stopped short of 100% will complete the
+  migration on their own, and with `cutover: auto` — the shipped default —
+  they will then switch over to the local store without intervention.
+- The local store's memory budget now defaults to 2048 MiB rather than 512.
+  512 was headroom rather than a measurement, and in the field it ran out:
+  writes failed with the pool full. The budget stays configurable as
+  `historian.store.memory_limit_mb` within [256, 4096], and an install on a
+  memory-constrained box can set it lower.
+
 ## [1.6.0] — 2026-09-11
 
 ### Added

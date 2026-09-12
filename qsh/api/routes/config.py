@@ -1074,7 +1074,7 @@ def test_store(req: StoreTestRequest):
             "state": "none",
             "backend": backend,
             "backend_effective": backend,
-            "cutover_setting": historian_cfg.get("store", {}).get("cutover", "manual"),
+            "cutover_setting": historian_cfg.get("store", {}).get("cutover", "auto"),
         }
 
     external_path_result = None

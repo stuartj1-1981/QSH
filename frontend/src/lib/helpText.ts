@@ -31,10 +31,66 @@ export const SOLAR = {
   diversionThreshold: 'The minimum surplus solar power (in watts) before QSH diverts energy to heating instead of exporting.',
 } as const
 
+/** Settings -> Historian, one text per mode and variant (INSTRUCTION-524B
+ *  T5). The UI offers the built-in store only; no text asks for InfluxDB.
+ *  `HistorianChoice` picks the variant from the mode, `setup.active`,
+ *  `section.enabled` and `isParked(section)`. */
 export const HISTORIAN = {
-  enabled: 'Logs system data to InfluxDB for long-term charts and analysis. Requires an InfluxDB add-on or server.',
-  host: 'The hostname or IP address of your InfluxDB server. Use the add-on name if running as a Home Assistant add-on.',
-  database: 'The InfluxDB database name where QSH stores its data. Created automatically on first write.',
+  unknown: {
+    noSetup: 'QSH cannot read the historian state.',
+    unread:
+      'QSH has not read the built-in store yet. It reads it when heating control starts; during first setup, that is after the setup is deployed. If this does not change after a restart, read the add-on log.',
+    noState: 'QSH reports a built-in store but not its state. Try again.',
+  },
+  unavailable: 'The built-in store cannot run on this system.',
+  unreadable:
+    'This system has a built-in store that QSH cannot read. Read the add-on log.',
+  migratingParked: {
+    active:
+      'InfluxDB still records your history, but the move to the built-in store is paused by historian.store.shadow.',
+    inactive:
+      'Nothing is recorded: the move of your history to the built-in store is paused by historian.store.shadow.',
+    // Review finding R1, carried by DISPATCH-NOTE-524A-524B-2026-09-12.md.
+    // The cleared text keyed the parked branch on `active` alone, so a
+    // disabled historian was told the key was the reason nothing is
+    // recorded when the first cause is that the historian is off. RESUME
+    // writes `enabled: true` with `store.shadow: true`, so one press does
+    // fix both, and this text says so.
+    notEnabled:
+      'The historian is off, and the move of your history to the built-in store is also paused by historian.store.shadow. Resume the move turns the historian on and continues the move.',
+    advice:
+      'If InfluxDB still runs, resume the move. If InfluxDB is gone, resume the move, then set historian.store.cutover_force: true in qsh.yaml and use Cut over on the Store page (Engineering mode). History not yet copied is lost.',
+  },
+  migrating: {
+    active:
+      'QSH is moving your history from InfluxDB to the built-in store. When the move is complete, QSH uses the built-in store.',
+    enabledNotActive:
+      'History is being moved from InfluxDB, but nothing is recorded: InfluxDB did not answer when QSH last started. If InfluxDB is gone, set historian.store.cutover_force: true in qsh.yaml and use Cut over on the Store page (Engineering mode). History not yet copied is lost.',
+    notEnabled:
+      'A move of history from InfluxDB to the built-in store is not finished. Turn the historian on to continue it.',
+  },
+  builtin: {
+    recording: 'The historian records to the built-in store.',
+    enabledNotActive:
+      'The built-in store holds your history, but nothing is recorded now. Use the built-in store only to fix this.',
+    notEnabled:
+      'The built-in store holds your history. Turn the historian on to record to it.',
+  },
+  legacy: {
+    lead:
+      'This system records history to InfluxDB (InfluxDB answered when QSH last started). QSH no longer supports InfluxDB.',
+    move: 'Move the history to the built-in store.',
+    noStore: 'The built-in store did not start. Read the add-on log.',
+  },
+  fresh: {
+    lead:
+      'QSH keeps its history in its own store on this system. You do not need InfluxDB.',
+    oldInflux: 'History in an old InfluxDB is not copied.',
+    // `active` alone cannot say this: an InfluxDB that answered makes it
+    // true. No write fixes a store that fails to open.
+    storeDidNotStart:
+      'The built-in store did not start, so nothing is recorded. Read the add-on log.',
+  },
 } as const
 
 export const SOURCE_SELECTION = {

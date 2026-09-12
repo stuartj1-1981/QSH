@@ -5,6 +5,7 @@ const modules = import.meta.glob('../*.tsx', { query: '?raw', eager: true, impor
 const DRIVER_AGNOSTIC_FILES = [
   'ThermalSettings.tsx',
   'HistorianSettings.tsx',
+  'HistorianChoice.tsx',
   'DataSharingSettings.tsx',
   'SourceSelectionSettings.tsx',
   'SystemSettings.tsx',

@@ -15,6 +15,7 @@ import { StepSchedules } from '../components/wizard/StepSchedules'
 import { StepThermal } from '../components/wizard/StepThermal'
 import { StepBuilding } from '../components/wizard/StepBuilding'
 import { StepHotWater } from '../components/wizard/StepHotWater'
+import { StepHistorian } from '../components/wizard/StepHistorian'
 import { StepReview } from '../components/wizard/StepReview'
 import { StepTelemetryAgreement } from '../components/wizard/StepTelemetryAgreement'
 import { StepDisclaimer } from '../components/wizard/StepDisclaimer'
@@ -167,6 +168,8 @@ export function Wizard({ onComplete, onExit }: WizardProps) {
             onUpdate={wizard.updateConfig}
           />
         )
+      case 'historian':
+        return <StepHistorian config={wizard.config} onUpdate={wizard.updateConfig} />
       case 'disclaimer':
         return (
           <StepDisclaimer

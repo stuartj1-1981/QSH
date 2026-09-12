@@ -1070,3 +1070,27 @@ export interface TestStoreResponse {
     reachable: boolean | null
   } | null
 }
+
+/** `GET /api/historian/setup` — INSTRUCTION-524A T1's nine keys, exactly.
+ *  Answers in every state, including with the historian off, which is what
+ *  lets the Settings panel and the wizard offer a safe choice before the
+ *  historian is enabled (INSTRUCTION-524B T1). */
+export interface HistorianSetupResponse {
+  store_available: boolean
+  store_record: boolean
+  record_state:
+    | 'none'
+    | 'shadow'
+    | 'backfill'
+    | 'reconciled'
+    | 'cutover'
+    | 'unreadable'
+    | 'unread'
+    | null
+  historian: boolean
+  store_open: boolean
+  active: boolean
+  backend_config: string
+  backend_effective: string | null
+  enabled: boolean
+}
