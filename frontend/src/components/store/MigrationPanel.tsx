@@ -70,7 +70,7 @@ export function MigrationPanel({ stats }: MigrationPanelProps) {
       {isParked && (
         <p className="text-xs text-[var(--text-muted)]">
           This migration is parked, not stuck: <code>historian.store.shadow</code> is holding
-          it here. Removing that key resumes it.
+          it here. Set it to <code>true</code> to resume it.
         </p>
       )}
 

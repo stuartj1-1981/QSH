@@ -24,6 +24,7 @@ vi.mock('../../components/wizard/StepSchedules', () => ({ StepSchedules: () => n
 vi.mock('../../components/wizard/StepThermal', () => ({ StepThermal: () => null }))
 vi.mock('../../components/wizard/StepBuilding', () => ({ StepBuilding: () => null }))
 vi.mock('../../components/wizard/StepHotWater', () => ({ StepHotWater: () => null }))
+vi.mock('../../components/wizard/StepHistorian', () => ({ StepHistorian: () => null }))
 vi.mock('../../components/wizard/StepTelemetryAgreement', () => ({ StepTelemetryAgreement: () => null }))
 vi.mock('../../components/wizard/StepDisclaimer', () => ({ StepDisclaimer: () => null }))
 
@@ -51,8 +52,8 @@ const deployUrlCalls = (mock: ReturnType<typeof vi.fn>) =>
 // Click the footer primary (labelled Next on every step except review, Deploy
 // on review) until the review step is reached.
 async function driveToReview() {
-  // HA branch: 15 steps, review is index 14 → 14 forward clicks.
-  for (let i = 0; i < 14; i++) {
+  // HA branch: 16 steps, review is index 15 → 15 forward clicks.
+  for (let i = 0; i < 15; i++) {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /next/i }))
     })

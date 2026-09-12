@@ -438,6 +438,22 @@ export interface StoreYaml {
 
 export interface HistorianYaml {
   enabled?: boolean
+  /** The UI writes only `'qsdb'` (INSTRUCTION-524B); `'influxdb'` appears
+   *  only on a section a hand edit or an older release left behind. */
+  backend?: 'influxdb' | 'qsdb'
+  /** The builder's shape is `mirror.influxdb.{...}` (`config.py:3375-3390`).
+   *  Declared so a loaded section round-trips through the panel's
+   *  full-section PATCH without losing it (INSTRUCTION-524B T1, P1 row 10). */
+  mirror?: {
+    influxdb?: {
+      enabled?: boolean
+      host?: string
+      port?: number
+      database?: string
+      username?: string
+      password?: string
+    }
+  }
   host?: string
   port?: number
   database?: string

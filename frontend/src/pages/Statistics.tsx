@@ -102,10 +102,10 @@ export function Statistics() {
         <h2 className="text-xl font-bold mb-4">Statistics</h2>
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-6 text-center">
           <p className="text-[var(--text-muted)] mb-2">
-            InfluxDB historian is not configured.
+            The historian is not configured.
           </p>
           <p className="text-sm text-[var(--text-muted)]">
-            Enable it in your <code className="bg-[var(--bg)] px-1.5 py-0.5 rounded text-xs">qsh.yaml</code> historian section to access historical data.
+            Turn it on in Settings &rarr; Historian.
           </p>
         </div>
       </div>

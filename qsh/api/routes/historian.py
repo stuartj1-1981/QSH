@@ -9,6 +9,7 @@ from typing import Optional
 
 from ...config import HOUSE_CONFIG
 from ...historian import get_historian
+from ...qsdb import QsdbStore
 from ...qsdb.backfill import CutoverRefused
 from ...qsdb.mirror import MirrorRefused
 from ...qsdb.sql import SqlError
@@ -184,6 +185,32 @@ def store_stats():
     # a Historian and NO store, and that is the class 510B's whole degradation
     # design exists for. get_stats() fills the store keys with None there.
     return {"historian": True, "store": h.store_present, "stats": h.get_stats()}
+
+
+@router.get("/setup")
+def historian_setup():
+    """What the historian settings UI must know before it offers a choice
+    (INSTRUCTION-524A T1). 200 in every state. Reads the record only through
+    Historian.record_state, which takes the manifest's lock and never the
+    store's connection lock; never calls get_stats()."""
+    h = get_historian()
+    cfg = HOUSE_CONFIG.get("historian", {})
+    record = QsdbStore.manifest_exists()
+    if h is not None:
+        record_state = h.record_state
+    else:
+        record_state = "unread" if (record or cfg.get("enabled", False)) else None
+    return {
+        "store_available": QsdbStore.is_available(),
+        "store_record": record,
+        "record_state": record_state,
+        "historian": h is not None,
+        "store_open": bool(h is not None and h.store_present),
+        "active": bool(h is not None and h.is_active),
+        "backend_config": cfg.get("backend", "influxdb"),
+        "backend_effective": h.effective_backend if h is not None else None,
+        "enabled": bool(cfg.get("enabled", False)),
+    }
 
 
 @router.get("/days")

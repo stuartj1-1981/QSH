@@ -1,12 +1,15 @@
 // Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
-import { useState, useEffect } from 'react'
-import { Save, Loader2, Check, X } from 'lucide-react'
+import { useState } from 'react'
+import { Save, Loader2 } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
-import { apiUrl } from '../../lib/api'
-import { cn } from '../../lib/utils'
-import { HelpTip } from '../HelpTip'
-import { HISTORIAN } from '../../lib/helpText'
-import type { HistorianYaml, InfluxTestResponse, Driver } from '../../types/config'
+import { useHistorianSetup } from '../../hooks/useHistorianSetup'
+import {
+  applyHistorianAction,
+  deriveHistorianMode,
+  type HistorianAction,
+} from '../../lib/historianMode'
+import { HistorianChoice } from './HistorianChoice'
+import type { HistorianYaml, Driver } from '../../types/config'
 
 interface HistorianSettingsProps {
   historian?: HistorianYaml
@@ -14,64 +17,80 @@ interface HistorianSettingsProps {
   onRefetch: () => void
 }
 
+const CANNOT_READ = 'QSH cannot read the historian state now. Try again.'
+const STATE_CHANGED =
+  'The historian state changed. Read the new state, then save again.'
+
 // driver threaded in 88B; consumed in 88C/88D via rename to `driver`
 export function HistorianSettings({
   historian: initial,
   driver: _driver,
   onRefetch,
 }: HistorianSettingsProps) {
-  const [hist, setHist] = useState<HistorianYaml>(
-    initial || { enabled: false, host: 'a0d7b954-influxdb', port: 8086, database: 'qsh', username: 'qsh' }
-  )
+  // An absent or empty section is `{}` — Settings renders this panel only
+  // after the config has loaded (INSTRUCTION-524B §1.5).
+  const section: HistorianYaml = initial ?? {}
+
   const { patch, saving } = usePatchConfig()
+  const { data: setup, error, refresh, fetchNow } = useHistorianSetup()
 
-  useEffect(() => { setHist(initial || { enabled: false, host: 'a0d7b954-influxdb', port: 8086, database: 'qsh', username: 'qsh' }) }, [initial])
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<InfluxTestResponse | null>(null)
+  const [action, setAction] = useState<HistorianAction | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
 
-  // INSTRUCTION-510C T2(b) — the fallback initialiser above (`{ enabled,
-  // host, port, database, username }`) carries no `store` block. The PATCH
-  // this panel sends is a full-section overwrite (restore_redacted,
-  // routes/config.py): saving while `initial` is undefined would send that
-  // fallback shape and delete `store`, stranding a migration. Refuse
-  // instead — the same rule useStoreConfig applies to its own save().
-  const save = async () => {
-    if (initial === undefined) return
-    const result = await patch('historian', hist)
-    if (result) onRefetch()
+  // Reset the pending action when a newly loaded section arrives. Done as a
+  // render-time adjustment rather than in an effect: an effect that calls
+  // setState unconditionally cascades a second render, which
+  // react-hooks/set-state-in-effect rejects.
+  const [seen, setSeen] = useState(initial)
+  if (initial !== seen) {
+    setSeen(initial)
+    setAction(null)
+    setMessage(null)
   }
 
-  const testConnection = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const resp = await fetch(apiUrl('api/config/test-influxdb'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          host: hist.host || 'a0d7b954-influxdb',
-          port: hist.port || 8086,
-          database: hist.database || 'qsh',
-          username: hist.username || '',
-          password: hist.password || '',
-        }),
-      })
-      const data: InfluxTestResponse = await resp.json()
-      setTestResult(data)
-    } catch (e) {
-      setTestResult({ success: false, message: `Network error: ${e instanceof Error ? e.message : e}` })
-    } finally {
-      setTesting(false)
+  const mode = deriveHistorianMode(section, setup)
+
+  const checked =
+    action === 'enable' || action === 'use_builtin' || action === 'resume'
+      ? true
+      : action === 'disable'
+        ? false
+        : section.enabled === true
+
+  const save = async () => {
+    setMessage(null)
+
+    // Read the state at the moment of writing, not the one the card was
+    // drawn from: an unread record may have been read, or a migration may
+    // have started, since this panel mounted.
+    const fresh = await fetchNow()
+    if (fresh === null) {
+      setMessage(CANNOT_READ)
+      return
     }
+    if (deriveHistorianMode(section, fresh) !== mode) {
+      setMessage(STATE_CHANGED)
+      return
+    }
+    if (action === null) return
+
+    const body = applyHistorianAction(section, mode, action)
+    if (body !== null) {
+      const result = await patch('historian', body)
+      if (!result) return
+    }
+    setAction(null)
+    onRefetch()
+    refresh()
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-[var(--text)]">Historian (InfluxDB)</h2>
+        <h2 className="text-lg font-bold text-[var(--text)]">Historian</h2>
         <button
           onClick={save}
-          disabled={saving || initial === undefined}
+          disabled={saving || action === null || mode === 'unknown'}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -80,123 +99,15 @@ export function HistorianSettings({
       </div>
 
       <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] space-y-4">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={hist.enabled ?? false}
-            onChange={(e) => setHist(prev => ({ ...prev, enabled: e.target.checked }))}
-            className="accent-[var(--accent)]"
-          />
-          <span className="text-sm font-medium text-[var(--text)] flex items-center gap-1">Enable InfluxDB logging <HelpTip text={HISTORIAN.enabled} size={12} /></span>
-        </label>
-
-        {hist.enabled && (
-          <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1">Host <HelpTip text={HISTORIAN.host} size={12} /></label>
-                <input
-                  type="text"
-                  value={hist.host || ''}
-                  onChange={(e) => setHist(prev => ({ ...prev, host: e.target.value }))}
-                  placeholder="a0d7b954-influxdb"
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[var(--text)] mb-1">Port</label>
-                <input
-                  type="number"
-                  value={hist.port ?? 8086}
-                  onChange={(e) => setHist(prev => ({ ...prev, port: parseInt(e.target.value) || 8086 }))}
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-              <div>
-                <label className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1">Database <HelpTip text={HISTORIAN.database} size={12} /></label>
-                <input
-                  type="text"
-                  value={hist.database || ''}
-                  onChange={(e) => setHist(prev => ({ ...prev, database: e.target.value }))}
-                  placeholder="qsh"
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[var(--text)] mb-1">Username</label>
-                <input
-                  type="text"
-                  value={hist.username || ''}
-                  onChange={(e) => setHist(prev => ({ ...prev, username: e.target.value }))}
-                  placeholder="qsh"
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--text)] mb-1">Password</label>
-              <input
-                type="password"
-                value={hist.password || ''}
-                onChange={(e) => setHist(prev => ({ ...prev, password: e.target.value }))}
-                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-[var(--text)] mb-1">
-                  Batch Size (1–100)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={hist.batch_size ?? 20}
-                  onChange={(e) => setHist(prev => ({ ...prev, batch_size: parseInt(e.target.value) || 20 }))}
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[var(--text)] mb-1">
-                  Flush Interval (s)
-                </label>
-                <input
-                  type="number"
-                  min="10"
-                  max="300"
-                  value={hist.flush_interval_s ?? 60}
-                  onChange={(e) =>
-                    setHist(prev => ({ ...prev, flush_interval_s: parseInt(e.target.value) || 60 }))
-                  }
-                  className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-                />
-              </div>
-            </div>
-
-            {/* Test Connection */}
-            <div className="flex items-center gap-3">
-              <button
-                onClick={testConnection}
-                disabled={testing}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium hover:bg-[var(--bg)] disabled:opacity-50"
-              >
-                {testing && <Loader2 size={14} className="animate-spin" />}
-                Test Connection
-              </button>
-              {testResult && (
-                <div
-                  className={cn(
-                    'flex items-center gap-2 text-sm',
-                    testResult.success ? 'text-[var(--green)]' : 'text-[var(--red)]'
-                  )}
-                >
-                  {testResult.success ? <Check size={14} /> : <X size={14} />}
-                  {testResult.message}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        <HistorianChoice
+          section={section}
+          setup={setup}
+          error={error}
+          checked={checked}
+          onAction={setAction}
+          onRetry={refresh}
+        />
+        {message && <p className="text-sm text-[var(--red)]">{message}</p>}
       </div>
     </div>
   )

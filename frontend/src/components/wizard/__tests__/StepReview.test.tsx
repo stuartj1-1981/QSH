@@ -316,3 +316,39 @@ describe('StepReview sensor-cadence advisory (INSTRUCTION-420)', () => {
     ).toHaveTextContent(/never blocks deployment/i)
   })
 })
+
+// ── INSTRUCTION-524C T6(d): the Historian summary ────────────────────────
+describe('Historian summary', () => {
+  it('reads Off when the config has no historian section', () => {
+    render(
+      <StepReview
+        config={baseConfig}
+        validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={vi.fn()}
+        isDeploying={false}
+        deployOutcome={null}
+        onForceDeploy={vi.fn().mockResolvedValue(null)}
+      />
+    )
+    expect(screen.getByText('Historian')).toBeDefined()
+    const item = screen.getByText('Record history').closest('div')
+    expect(item?.textContent).toContain('Off')
+  })
+
+  it('reads On when the historian is enabled', () => {
+    render(
+      <StepReview
+        config={{ ...baseConfig, historian: { enabled: true } }}
+        validationWarnings={[]}
+        acknowledgedRuleIds={[]}
+        onAcknowledge={vi.fn()}
+        isDeploying={false}
+        deployOutcome={null}
+        onForceDeploy={vi.fn().mockResolvedValue(null)}
+      />
+    )
+    const item = screen.getByText('Record history').closest('div')
+    expect(item?.textContent).toContain('On')
+  })
+})

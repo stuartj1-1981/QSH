@@ -18,6 +18,28 @@ vi.mock('../../../hooks/useEntityResolve', () => ({
   useEntityResolve: () => ({ resolved: {}, loading: false }),
 }))
 
+// INSTRUCTION-524B T6(d) — HistorianSettings reads GET /api/historian/setup.
+// A `fresh` response keeps this prop-sync case about the prop.
+vi.mock('../../../hooks/useHistorianSetup', () => ({
+  useHistorianSetup: () => ({
+    data: {
+      store_available: true,
+      store_record: false,
+      record_state: null,
+      historian: true,
+      store_open: false,
+      active: false,
+      backend_config: 'influxdb',
+      backend_effective: null,
+      enabled: false,
+    },
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    fetchNow: vi.fn(),
+  }),
+}))
+
 /* ── component imports (after mocks) ──────────────────────────────── */
 
 import { HeatSourceSettings } from '../HeatSourceSettings'
@@ -118,17 +140,19 @@ describe('Prop-sync: components re-sync local state when props change', () => {
     expect(screen.getByDisplayValue('7.5')).toBeInTheDocument()
   })
 
-  it('HistorianSettings — host updates on rerender', () => {
-    const hA = { enabled: true, host: 'host-a', port: 8086, database: 'qsh', username: 'qsh' }
-    const hB = { enabled: true, host: 'host-b', port: 8086, database: 'qsh', username: 'qsh' }
+  it('HistorianSettings — enabled updates on rerender', () => {
+    // INSTRUCTION-524B T6(d). The panel no longer renders a host input: it
+    // offers the built-in store only, so the synced prop is `enabled`.
+    const hA = { enabled: false }
+    const hB = { enabled: true }
 
     const { rerender } = render(
       <HistorianSettings historian={hA} driver="ha" onRefetch={noop} />
     )
-    expect(screen.getByDisplayValue('host-a')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
 
     rerender(<HistorianSettings historian={hB} driver="ha" onRefetch={noop} />)
-    expect(screen.getByDisplayValue('host-b')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox')).toBeChecked()
   })
 
   it('SourceSelectionSettings — min_dwell_minutes updates on rerender', () => {
