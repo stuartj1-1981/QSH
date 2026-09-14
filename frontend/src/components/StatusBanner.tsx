@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Zap, Wind, AlertTriangle, Flame, EyeOff, Snowflake } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { roomLabel } from '../lib/roomLabel'
 import { sourceShortName } from '../lib/sourceLabels'
 import { DEFAULT_TARIFF_AGGRESSION_MODE, TARIFF_LABELS } from '../lib/tariff'
 import type {
@@ -491,7 +492,7 @@ export const StatusBanner = memo(function StatusBanner({
           <EyeOff size={16} className="shrink-0" />
           <span>
             Occupancy sensor unavailable for{' '}
-            <strong>{fallbackRooms.map(([name]) => name.replace(/_/g, ' ')).join(', ')}</strong>
+            <strong>{fallbackRooms.map(([name, r]) => roomLabel(name, r)).join(', ')}</strong>
             {' '}&mdash; using schedule fallback
           </span>
         </div>

@@ -1,17 +1,17 @@
 import { formatTemp } from '../../lib/utils'
+import { roomLabelTitleCase } from '../../lib/roomLabel'
 import type { RecoveryRoom } from '../../types/schedule'
 
 interface RecoveryViewProps {
   rooms: Record<string, RecoveryRoom>
+  roomConfigs?: Record<string, { display_name?: string | null }>
 }
 
-export function RecoveryView({ rooms }: RecoveryViewProps) {
+export function RecoveryView({ rooms, roomConfigs }: RecoveryViewProps) {
   const entries = Object.entries(rooms)
   if (entries.length === 0) return null
 
   const maxMinutes = Math.max(...entries.map(([, r]) => r.estimated_minutes))
-  const displayName = (name: string) =>
-    name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
   return (
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-6">
@@ -25,7 +25,7 @@ export function RecoveryView({ rooms }: RecoveryViewProps) {
           return (
             <div key={room}>
               <div className="flex items-center justify-between text-sm mb-1">
-                <span className="font-medium">{displayName(room)}</span>
+                <span className="font-medium">{roomLabelTitleCase(room, roomConfigs?.[room])}</span>
                 <span className="text-xs text-[var(--text-muted)]">
                   {formatTemp(data.current_temp)} &rarr; {formatTemp(data.target_temp)}&ensp;~{data.estimated_minutes}m
                 </span>

@@ -1,19 +1,23 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useAwayState, useSetAway, useSetZoneAway } from '../hooks/useAway'
 import { useRoomHistory } from '../hooks/useHistory'
+import { useRooms } from '../hooks/useRooms'
 import { AwayToggle } from '../components/away/AwayToggle'
 import { DurationPicker } from '../components/away/DurationPicker'
 import { ZoneSelector } from '../components/away/ZoneSelector'
 import { SetbackCard } from '../components/away/SetbackCard'
 import { RecoveryView } from '../components/away/RecoveryView'
 import { OccupancyTimeline } from '../components/OccupancyTimeline'
-import { formatTemp } from '../lib/utils'
+import { cn, formatTemp } from '../lib/utils'
+import { roomLabel } from '../lib/roomLabel'
 import type { ZoneAwayState } from '../types/schedule'
 
 export function Away() {
   const { data, loading, refetch } = useAwayState()
   const { setAway, loading: settingAway } = useSetAway()
   const { setZoneAway } = useSetZoneAway()
+  const { data: roomsData } = useRooms()
+  const roomConfigs = roomsData?.rooms
 
   // Local override for days; null means "use server value"
   const [daysOverride, setDaysOverride] = useState<number | null>(null)
@@ -156,7 +160,7 @@ export function Away() {
 
       {/* Recovery status — inline, non-blocking */}
       {data.recovery.active && Object.keys(data.recovery.rooms).length > 0 && (
-        <RecoveryView rooms={data.recovery.rooms} />
+        <RecoveryView rooms={data.recovery.rooms} roomConfigs={roomConfigs} />
       )}
 
       {/* Zone status summary */}
@@ -176,9 +180,13 @@ export function Away() {
             <tbody>
               {Object.entries(data.per_zone).map(([room, zone]: [string, ZoneAwayState]) => {
                 const zoneIsAway = zone.active || isActive
+                const roomConfig = roomConfigs?.[room]
                 return (
                 <tr key={room} className="border-b border-[var(--border)]/50">
-                  <td className="py-1.5 pr-3 capitalize max-w-[100px] truncate">{room.replace(/_/g, ' ')}</td>
+                  <td className={cn(
+                    'py-1.5 pr-3 max-w-[100px] truncate',
+                    roomConfig?.display_name?.trim() ? '' : 'capitalize',
+                  )}>{roomLabel(room, roomConfig)}</td>
                   <td className="py-1.5 pr-3">
                     <span className={zoneIsAway ? 'text-blue-500' : 'text-[var(--green)]'}>
                       {zoneIsAway ? 'Away' : 'Home'}
@@ -213,22 +221,22 @@ export function Away() {
       )}
 
       {/* Per-zone controls */}
-      <ZoneSelector zones={zonesWithOptimistic} onToggleZone={handleZoneToggle} />
+      <ZoneSelector zones={zonesWithOptimistic} roomConfigs={roomConfigs} onToggleZone={handleZoneToggle} />
 
       {/* Occupancy timeline */}
-      <OccupancyTimelineSection />
+      <OccupancyTimelineSection roomConfigs={roomConfigs} />
     </div>
   )
 }
 
-function OccupancyTimelineSection() {
+function OccupancyTimelineSection({ roomConfigs }: { roomConfigs?: Record<string, { display_name?: string | null }> }) {
   const { data: roomHistory, loading } = useRoomHistory(['occupancy'], 24)
 
   if (loading || Object.keys(roomHistory).length === 0) return null
 
   return (
     <div className="mt-2">
-      <OccupancyTimeline roomHistory={roomHistory} hours={24} />
+      <OccupancyTimeline roomHistory={roomHistory} hours={24} roomConfigs={roomConfigs} />
     </div>
   )
 }

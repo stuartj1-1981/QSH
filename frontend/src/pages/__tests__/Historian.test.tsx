@@ -203,4 +203,39 @@ describe('Historian page', () => {
     // single emitter; the chart renders one trace per selected field for
     // the filtered series — same pattern as qsh_room.
   })
+
+  // ===========================================================================
+  // INSTRUCTION-526B T3/T5 — room filter shows a label only where a
+  // configured room has one; retired keys and unlabelled configured rooms
+  // both render as themselves.
+  // ===========================================================================
+
+  it('labels a configured room with a display_name, and shows the raw key for an unlabelled configured room and a retired key', async () => {
+    _mockFetchByUrl({
+      'api/historian/measurements': {
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['outdoor_temp'] }],
+      },
+      'api/historian/fields?measurement=qsh_system': {
+        available: true,
+        fields: ['outdoor_temp'],
+      },
+      'api/historian/tags?measurement=qsh_system': {
+        available: true,
+        tags: { room: ['living_room', 'kitchen', 'retired_room'] },
+      },
+      'api/status/rooms': {
+        timestamp: 0,
+        rooms: {
+          living_room: { display_name: 'Snug' },
+          kitchen: {},
+        },
+      },
+    })
+
+    render(<Historian />)
+    expect(await screen.findByRole('option', { name: 'Snug' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'kitchen' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'retired_room' })).toBeInTheDocument()
+  })
 })

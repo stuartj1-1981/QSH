@@ -113,6 +113,9 @@ export interface RoomConfigYaml {
   valve_hardware?: 'direct_type1' | 'direct_type2' | 'generic'
   valve_scale?: number
   trv_name?: string
+  /** INSTRUCTION-526A — optional operator-set label. The YAML mapping key
+   *  remains the room's identity; this is only a label. */
+  display_name?: string
   mqtt_topics?: RoomMqttTopics
   occupancy_sensor?: string
   occupancy_debounce?: number

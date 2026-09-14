@@ -1,15 +1,14 @@
 import { cn } from '../../lib/utils'
+import { roomLabelTitleCase } from '../../lib/roomLabel'
 import type { ZoneAwayState } from '../../types/schedule'
 
 interface ZoneSelectorProps {
   zones: Record<string, ZoneAwayState>
+  roomConfigs?: Record<string, { display_name?: string | null }>
   onToggleZone: (room: string, active: boolean, days: number) => void
 }
 
-export function ZoneSelector({ zones, onToggleZone }: ZoneSelectorProps) {
-  const displayName = (name: string) =>
-    name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-
+export function ZoneSelector({ zones, roomConfigs, onToggleZone }: ZoneSelectorProps) {
   return (
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5">
       <h3 className="text-sm font-semibold mb-3">Per-Zone Controls</h3>
@@ -29,7 +28,7 @@ export function ZoneSelector({ zones, onToggleZone }: ZoneSelectorProps) {
             )}
           >
             <span className="font-medium truncate">
-              {displayName(room)}
+              {roomLabelTitleCase(room, roomConfigs?.[room])}
               {zone.is_persistent && <span className="text-xs text-[var(--text-muted)]"> *</span>}
             </span>
             <div>

@@ -647,6 +647,45 @@ def patch_config_section(section: str, body=Body(...)):
                 detail="battery_devices entries must have a unique device per entry",
             )
 
+    # INSTRUCTION-526A T4(a) — rooms map-shape guard. Positioned with the
+    # other two arms above, before the snapshot is captured and before any
+    # write. This arm checks the SHAPE of the map and nothing else, because
+    # it is the only part decidable without reading the on-disk file:
+    # structural shape -> 400, the same mapping the heat_sources and
+    # battery_devices arms use. Per-room CONTENT is validated inside the
+    # read_modify_write transform below (T4(b)), scoped to the rooms that
+    # changed, once the on-disk section is in hand — see _apply_patch.
+    _rooms_section = section == "rooms"
+    _rooms_not_bootable_warning = False
+    if section == "rooms":
+        guard_incoming = body.get("data", body) if isinstance(body, dict) else body
+        if not isinstance(guard_incoming, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"rooms PATCH body must be an object (dict), got {type(guard_incoming).__name__}",
+            )
+        for _room_key, _room_val in guard_incoming.items():
+            # The guard does not re-slug or rewrite a key — it is the
+            # identity, and silently rewriting it here is the re-key this
+            # family exists to refuse (OB-6).
+            if not isinstance(_room_key, str) or not _room_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="rooms keys must be non-empty strings",
+                )
+            if not isinstance(_room_val, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"rooms['{_room_key}'] must be an object (dict), got {type(_room_val).__name__}",
+                )
+        if not guard_incoming:
+            # {} means "no rooms" and is admitted — the boot loader's own
+            # _validate_rooms is what refuses to run a house with no rooms,
+            # and that layer is not moved here. But admitting it silently
+            # would write a configuration the next boot already knows it
+            # will reject, so the response carries a warning instead.
+            _rooms_not_bootable_warning = True
+
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml
     # (the section being patched lives in it). Other failures abort the
@@ -821,6 +860,11 @@ def patch_config_section(section: str, body=Body(...)):
             "message": "Root config keys updated",
         }
 
+    # INSTRUCTION-526A T4(b)/(c) — carries the changed-rooms validation
+    # warnings and the label-only decision out of the _apply_patch closure.
+    # Mutated inside the transform, read after read_modify_write returns.
+    _rooms_outcome: Dict[str, Any] = {"label_only": False, "warnings": []}
+
     def _apply_patch(raw: dict) -> dict:
         existing_section = raw.get(section, {})
         # INSTRUCTION-411 D9: preserve EVERY unsubmitted energy.* sub-block, not
@@ -853,6 +897,125 @@ def patch_config_section(section: str, body=Body(...)):
             raw[section] = restore_redacted(existing_section, local_incoming)
         else:
             raw[section] = local_incoming
+
+        if _rooms_section:
+            # INSTRUCTION-526A T4(b)/(c). `raw[section]` is the RESTORED
+            # incoming map — comparing the restored payload rather than the
+            # raw one is normative (T4(b) rule 1): a room carrying an
+            # mqtt_topics key matching key/secret/token/password arrives
+            # holding a redaction sentinel, and comparing raw-to-existing
+            # would make that room look changed on every ordinary Settings
+            # save, so the label-only path would never fire.
+            _restored_rooms = raw[section] if isinstance(raw[section], dict) else {}
+            _existing_rooms = existing_section if isinstance(existing_section, dict) else {}
+
+            # The changed set: present in the incoming map and either absent
+            # from the existing section or differing from it there.
+            _changed_room_keys = {
+                _rk for _rk, _rv in _restored_rooms.items()
+                if _rk not in _existing_rooms or _existing_rooms[_rk] != _rv
+            }
+
+            # T4(b) — content validation, scoped to the rooms that changed.
+            # An unchanged room that would not validate today (e.g. a legacy
+            # list-form trv_name) is never a reason to reject a save that
+            # does not touch it (OB-9). Uses the house's own room-validity
+            # predicate (RoomConfig) rather than a second copy of it (F1).
+            from qsh.api.routes.rooms import RoomConfig, VALID_EMITTER_TYPES, _resolve_control_mode
+            from qsh.config import normalise_room_display_name, validate_auxiliary_output_block
+            from pydantic import ValidationError as _RoomValidationError
+
+            _rooms_warnings: list = []
+            for _rk in _changed_room_keys:
+                _room_obj = _restored_rooms.get(_rk)
+                if not isinstance(_room_obj, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"rooms['{_rk}'] must be an object (dict)",
+                    )
+                try:
+                    _room_model = RoomConfig(**_room_obj)
+                except _RoomValidationError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Room '{_rk}' failed validation: {exc}",
+                    )
+                # emitter_type has no field_validator on RoomConfig itself —
+                # add_room/update_room check it outside the model, so the
+                # same check runs here for PATCH/PUT parity (OB-3).
+                if (
+                    _room_model.emitter_type is not None
+                    and _room_model.emitter_type not in VALID_EMITTER_TYPES
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Invalid emitter_type '{_room_model.emitter_type}' for "
+                            f"room '{_rk}'. Valid: {sorted(VALID_EMITTER_TYPES)}"
+                        ),
+                    )
+                if _room_model.auxiliary_output is not None:
+                    _aux_driver = raw.get("driver", "ha")
+                    _aux_cm = _resolve_control_mode(_room_model)
+                    _aux_errors, _aux_warnings = validate_auxiliary_output_block(
+                        _room_model.auxiliary_output.model_dump(),
+                        driver=_aux_driver,
+                        control_mode=_aux_cm,
+                    )
+                    if _aux_errors:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"errors": _aux_errors, "warnings": _aux_warnings, "room": _rk},
+                        )
+                    _rooms_warnings.extend(_aux_warnings)
+            _rooms_outcome["warnings"] = _rooms_warnings
+
+            # T4(c) — a label-only edit does not restart the pipeline. Any
+            # doubt restarts: same key set required, and every changed room
+            # must be identical to its on-disk counterpart once display_name
+            # is removed from both.
+            # "No change at all" is not this task's carve-out — an identical
+            # PATCH restarts exactly as it does today (§8 exit criterion 4th
+            # restart-decision case).
+            _label_only = bool(_changed_room_keys) and set(
+                _restored_rooms.keys()
+            ) == set(_existing_rooms.keys())
+            if _label_only:
+                for _rk in _changed_room_keys:
+                    _new_obj = _restored_rooms.get(_rk)
+                    _old_obj = _existing_rooms.get(_rk)
+                    if not isinstance(_new_obj, dict) or not isinstance(_old_obj, dict):
+                        # Any doubt restarts — a non-dict room object on
+                        # either side cannot be compared display_name-aside.
+                        _label_only = False
+                        break
+                    _a = dict(_new_obj)
+                    _b = dict(_old_obj)
+                    _a.pop("display_name", None)
+                    _b.pop("display_name", None)
+                    if _a != _b:
+                        _label_only = False
+                        break
+            if _label_only:
+                # QSH_LABEL_ONLY_NO_RESTART — update the live map so the new
+                # label is visible on the next cycle snapshot without a
+                # restart. The live `rooms` section is deliberately NOT
+                # updated here — only room_display_names — because no
+                # consumer reads the nested value and this comparison always
+                # runs against the disk section, not the live copy.
+                _live_config = shared_state.get_config()
+                if _live_config is not None:
+                    _new_display_names = {}
+                    for _rk, _robj in _restored_rooms.items():
+                        _dn = normalise_room_display_name(
+                            _robj.get("display_name") if isinstance(_robj, dict) else None,
+                            _rk,
+                        )
+                        if _dn is not None:
+                            _new_display_names[_rk] = _dn
+                    _live_config["room_display_names"] = _new_display_names
+            _rooms_outcome["label_only"] = _label_only
+
         # INSTRUCTION-237A Task 1b: server-authoritative singular/plural
         # reconciliation for heat_sources. Mirror to singular when only one
         # source; strip the stale singular when 2+. Atomic within this
@@ -905,6 +1068,17 @@ def patch_config_section(section: str, body=Body(...)):
 
     read_modify_write(_apply_patch)
 
+    if _rooms_section and _rooms_outcome["label_only"]:
+        # QSH_LABEL_ONLY_NO_RESTART — a cosmetic label is not worth a
+        # restart. The YAML has already been written by read_modify_write
+        # above; only the restart flag is skipped.
+        return {
+            "updated": "rooms",
+            "restart_required": False,
+            "warnings": _rooms_outcome["warnings"],
+            "message": "Section 'rooms' updated — display-name-only edit, no restart required",
+        }
+
     # Always restart to adopt changes
     try:
         with open("/config/qsh_restart_requested", "w") as f:
@@ -912,11 +1086,20 @@ def patch_config_section(section: str, body=Body(...)):
     except OSError:
         pass
 
-    return {
+    _response = {
         "updated": section,
         "restart_required": True,
         "message": f"Section '{section}' updated — pipeline restarting",
     }
+    if _rooms_section:
+        _response_warnings = list(_rooms_outcome["warnings"])
+        if _rooms_not_bootable_warning:
+            _response_warnings.append(
+                "Configuration has no rooms — the pipeline will not boot "
+                "until at least one room is defined."
+            )
+        _response["warnings"] = _response_warnings
+    return _response
 
 
 @router.delete("/config/{section}")

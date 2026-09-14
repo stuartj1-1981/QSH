@@ -9,6 +9,9 @@ export interface RoomState {
   facing: number | string
   area_m2: number
   ceiling_m: number
+  // INSTRUCTION-526A — optional operator-set label. null when the room
+  // declares none; the room's configured name remains its identity.
+  display_name?: string | null
   // Aux output (INSTRUCTION-131C V6 — tri-state per V4/C5)
   aux_state?: boolean | null         // null = not configured
   aux_dispatched?: boolean | null    // null = not configured OR shadow OR no live attempt yet

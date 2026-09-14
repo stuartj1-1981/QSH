@@ -3,10 +3,12 @@ import { Copy } from 'lucide-react'
 import type { PresetName, DayName } from '../../types/schedule'
 import { DAY_LABELS, ALL_DAYS } from '../../types/schedule'
 import { cn } from '../../lib/utils'
+import { roomLabelTitleCase } from '../../lib/roomLabel'
 import { PresetSelector } from './PresetSelector'
 
 interface ScheduleToolbarProps {
   rooms: string[]
+  roomConfigs?: Record<string, { display_name?: string | null }>
   selectedRoom: string
   onRoomChange: (room: string) => void
   onPreset?: (preset: PresetName) => void
@@ -26,6 +28,7 @@ interface ScheduleToolbarProps {
 
 export function ScheduleToolbar({
   rooms,
+  roomConfigs,
   selectedRoom,
   onRoomChange,
   onPreset,
@@ -46,9 +49,6 @@ export function ScheduleToolbar({
 
   const otherRooms = rooms.filter((r) => r !== selectedRoom)
 
-  const displayName = (name: string) =>
-    name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-
   return (
     <>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 mb-4">
@@ -62,7 +62,7 @@ export function ScheduleToolbar({
           >
             {rooms.map((r) => (
               <option key={r} value={r}>
-                {displayName(r)}
+                {roomLabelTitleCase(r, roomConfigs?.[r])}
               </option>
             ))}
           </select>
@@ -167,7 +167,7 @@ export function ScheduleToolbar({
                     }}
                     className="rounded"
                   />
-                  {displayName(r)}
+                  {roomLabelTitleCase(r, roomConfigs?.[r])}
                 </label>
               ))}
             </div>

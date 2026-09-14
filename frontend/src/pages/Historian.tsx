@@ -18,6 +18,7 @@ import {
   useHistorianFields,
 } from '../hooks/useHistorian'
 import { useStatus } from '../hooks/useStatus'
+import { useRooms } from '../hooks/useRooms'
 
 const LINE_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b']
 
@@ -73,7 +74,9 @@ export function Historian() {
   })
   const [customTo, setCustomTo] = useState(() => toLocalDatetime(new Date()))
 
-  const { rooms, emitters } = useHistorianTags(measurement)
+  const { rooms: roomTags, emitters } = useHistorianTags(measurement)
+  const { data: roomsData } = useRooms()
+  const rooms = roomsData?.rooms ?? {}
   const { fields: rawFields, loading: fieldsLoading } = useHistorianFields(measurement)
   // INSTRUCTION-224E — emitter filter. Surfaces the emitter tag list for
   // qsh_emitter so operators can narrow trends to a single physical TRV.
@@ -211,7 +214,7 @@ export function Historian() {
             </select>
           </div>
 
-          {rooms.length > 0 && (
+          {roomTags.length > 0 && (
             <div>
               <label className="block text-xs text-[var(--text-muted)] mb-1">Room</label>
               <select
@@ -220,9 +223,12 @@ export function Historian() {
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
               >
                 <option value="">All rooms</option>
-                {rooms.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
+                {roomTags.map((r) => {
+                  const label = rooms[r]?.display_name?.trim()
+                  return (
+                    <option key={r} value={r}>{label || r}</option>
+                  )
+                })}
               </select>
             </div>
           )}

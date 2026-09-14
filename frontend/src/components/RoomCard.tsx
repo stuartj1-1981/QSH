@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Flame, Eye, Clock, EyeOff } from 'lucide-react'
 import { cn, formatTemp, statusColor, statusBg } from '../lib/utils'
+import { roomLabelTitleCase } from '../lib/roomLabel'
 import type { RoomState, BoostRoom, ManualEntry } from '../types/api'
 import { EntityValue } from './EntityValue'
 
@@ -55,9 +56,7 @@ interface RoomCardProps {
 }
 
 export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, entityIds, engineering, comfortTempActive, hpActive = true, manualEntry }: RoomCardProps) {
-  const displayName = name
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+  const displayName = roomLabelTitleCase(name, room)
 
   const roundToDisplay = (v: number) => Number(v.toFixed(COMFORT_DISPLAY_DECIMALS))
 

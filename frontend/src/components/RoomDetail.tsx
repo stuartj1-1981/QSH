@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { X, Calendar, Plane, Flame, Eye, EyeOff, Clock } from 'lucide-react'
 import { formatTemp, statusColor, cn } from '../lib/utils'
+import { roomLabelTitleCase } from '../lib/roomLabel'
 import type { RoomState, SysidRoom, BoostRoom, ManualEntry } from '../types/api'
 import { useRoomHistory } from '../hooks/useHistory'
 import { usePredictive } from '../hooks/usePredictive'
@@ -41,9 +42,7 @@ export function RoomDetail({ name, room, sysid, boost, engineering, onClose, ent
   const tempData = thisRoomHistory.map(p => ({ t: p.t, temp: p.temp }))
   const valveData = thisRoomHistory.map(p => ({ t: p.t, valve: p.valve }))
 
-  const displayName = name
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+  const displayName = roomLabelTitleCase(name, room)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
