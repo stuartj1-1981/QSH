@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, screen } from '@testing-library/react'
 import { OccupancyTimeline } from '../OccupancyTimeline'
 
 describe('OccupancyTimeline', () => {
@@ -168,5 +168,26 @@ describe('OccupancyTimeline', () => {
     expect(() => fireEvent.mouseMove(segment)).not.toThrow()
     // Tree still intact.
     expect(container.querySelector('[title]')).not.toBeNull()
+  })
+
+  it('renders a room display_name instead of the humanised key when roomConfigs is supplied', () => {
+    const t0 = Date.UTC(2026, 3, 15, 8, 0, 0) / 1000
+    const t1 = Date.UTC(2026, 3, 15, 14, 0, 0) / 1000
+    const roomHistory = {
+      living_room: [
+        { t: t0, occupancy: 'occupied' },
+        { t: t1, occupancy: 'occupied' },
+      ],
+    }
+
+    render(
+      <OccupancyTimeline
+        roomHistory={roomHistory}
+        hours={24}
+        roomConfigs={{ living_room: { display_name: 'Snug' } }}
+      />
+    )
+    expect(screen.getByText('Snug')).toBeInTheDocument()
+    expect(screen.queryByText('living room')).not.toBeInTheDocument()
   })
 })

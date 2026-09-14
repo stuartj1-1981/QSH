@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-09-14
+
+### Added
+- Rooms accept an optional display name, a label shown on the room pages;
+  the room's configured name remains its identity and is unchanged by it.
+  No existing configuration needs changing — the field is optional.
+- Room pages now show a room's display name where one is set, and it can be
+  set from Settings → Rooms. Engineering pages, the setup wizard and the
+  historian's own records continue to show the configured room name.
+
+### Changed
+- Room settings saved from the web interface are now validated by the
+  server before they are written, on the same rules as the room API.
+- The web interface's build and test dependencies were updated. No
+  user-visible behaviour changes.
+
+### Fixed
+- On an install whose history is kept in the built-in store, the start-up
+  log no longer prints an InfluxDB address as though history were going
+  there — it now says which backend is configured and labels the address
+  as configuration, and the Historian line a few seconds later still names
+  the sink that is actually recording.
+- The shutdown line now says which backend was in use and reports how many
+  rows the built-in store wrote, alongside the InfluxDB and mirror figures,
+  each labelled; previously it reported one unlabelled total that counted
+  InfluxDB writes only, so an install using the built-in store always read
+  zero. Nothing needs changing on any install, and no data was ever
+  missing — the rows were being written, the log was describing them
+  wrongly.
+- A measurement the built-in store has never written — for example the
+  Forecast page's RL blend chart before it has ever run — now loads as an
+  empty chart instead of a catalog-error banner, matching how it behaved
+  under InfluxDB.
+- The built-in store's read path now matches its sealed history to the live
+  table by column name rather than by position, so adding a field no longer
+  breaks reads of that measurement until the day seals, and a rebuilt or
+  restored store can no longer silently swap two fields' values in a read.
+
 ## [1.6.1] — 2026-09-12
 
 ### Added

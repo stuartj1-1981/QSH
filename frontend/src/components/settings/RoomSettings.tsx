@@ -17,6 +17,10 @@ const PROPERTY_AREA_MAX_M2 = 1000
 const BEDROOMS_MIN = 0
 const BEDROOMS_MAX = 12
 const AREA_RECONCILIATION_TOLERANCE = 0.25
+// INSTRUCTION-526B T4 — the server bound is qsh/api/routes/rooms.py's
+// ROOM_DISPLAY_NAME_MAX (INSTRUCTION-526A T1); TypeScript cannot import it,
+// so it is restated here. This client value must never exceed the server's.
+const ROOM_DISPLAY_NAME_MAX = 64
 
 // INSTRUCTION-369 — build-year soft band (mirrors the backend 368 loader
 // _resolve_building_class [1700, current_year]). Soft on both layers: the
@@ -115,6 +119,18 @@ function rebuildBatteryDevices(
   return out
 }
 
+/** Drop `display_name` when blank — an emptied field is removed from the
+ *  saved room object, not written as `""` (INSTRUCTION-526B T4). Also
+ *  handles the case where the field was explicitly cleared to `undefined`
+ *  in local state (still an own key until stripped here). */
+function stripEmptyDisplayName(room: RoomConfigYaml): RoomConfigYaml {
+  if (room.display_name && room.display_name.trim()) return room
+  if (!('display_name' in room)) return room
+  const copy = { ...room }
+  delete copy.display_name
+  return copy
+}
+
 /** Apply the on-save room transforms to a whole rooms map. Used both for the
  *  PATCH payload and — applied to BOTH sides — for the dirty compare, so the
  *  gate is like-with-like (INSTRUCTION-335 §8 handoff-1) rather than reading
@@ -125,7 +141,7 @@ function cleanRoomsMap(
   return Object.fromEntries(
     Object.entries(m).map(([n, r]) => [
       n,
-      stripFixedSetpointForControlMode(stripEmptyMqttTopics(r)),
+      stripEmptyDisplayName(stripFixedSetpointForControlMode(stripEmptyMqttTopics(r))),
     ]),
   )
 }
@@ -878,6 +894,24 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
               >
                 <Trash2 size={14} />
               </button>
+            </div>
+            <div>
+              <label className="block text-xs text-[var(--text-muted)] mb-1">
+                Display name
+              </label>
+              <input
+                type="text"
+                value={room.display_name ?? ''}
+                maxLength={ROOM_DISPLAY_NAME_MAX}
+                onChange={(e) =>
+                  updateRoom(name, { display_name: e.target.value || undefined })
+                }
+                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              />
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Shown on the room pages. The room's configured name is unchanged and is what the system uses.
+                {' '}({(room.display_name ?? '').length}/{ROOM_DISPLAY_NAME_MAX})
+              </p>
             </div>
             <div className="grid grid-cols-4 gap-3">
               <div>

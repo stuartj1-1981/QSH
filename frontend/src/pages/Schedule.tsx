@@ -1,11 +1,13 @@
 import { useState, useCallback, useReducer, useEffect } from 'react'
 import { useSchedules, useUpdateSchedule, useApplyPreset, useCopySchedule } from '../hooks/useSchedule'
+import { useRooms } from '../hooks/useRooms'
 import type { WeekSchedule, PresetName, DayName } from '../types/schedule'
 import { ALL_DAYS } from '../types/schedule'
 import { WeeklyGrid } from '../components/schedule/WeeklyGrid'
 import { ScheduleToolbar } from '../components/schedule/ScheduleToolbar'
 import { ComfortScheduleEditor } from '../components/schedule/ComfortScheduleEditor'
 import { apiUrl } from '../lib/api'
+import { roomLabel } from '../lib/roomLabel'
 import type { HealthResponse } from '../types/api'
 
 /** INSTRUCTION-327 — surface the backend-resolved schedule timezone where the
@@ -78,6 +80,7 @@ export function Schedule() {
   const { update, loading: saving } = useUpdateSchedule()
   const { apply, loading: applyingPreset } = useApplyPreset()
   const { copy, loading: copying } = useCopySchedule()
+  const { data: roomsData } = useRooms()
 
   const rooms = data ? Object.keys(data.rooms) : []
 
@@ -220,6 +223,7 @@ export function Schedule() {
       {/* Per-room occupancy schedules */}
       <ScheduleToolbar
         rooms={rooms}
+        roomConfigs={roomsData?.rooms}
         selectedRoom={selectedRoom}
         onRoomChange={setSelectedRoom}
         onPreset={hasSensor ? undefined : handlePreset}
@@ -240,7 +244,7 @@ export function Schedule() {
       {roomData && !roomData.has_occupancy_sensor && !roomData.enabled && (
         <div className="mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
           <p className="text-sm text-amber-800 dark:text-amber-200">
-            <strong>{selectedRoom.replace(/_/g, ' ')}</strong> has no occupancy sensor and the schedule is currently disabled.
+            <strong>{roomLabel(selectedRoom, roomsData?.rooms?.[selectedRoom])}</strong> has no occupancy sensor and the schedule is currently disabled.
             If you previously relied on a sensor for this room, enable and review the schedule
             to make sure it reflects your routine.
           </p>

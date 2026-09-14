@@ -36,4 +36,21 @@ describe('MultiRoomTempChart', () => {
     const { container } = render(<MultiRoomTempChart roomHistory={{}} />)
     expect(container).toBeEmptyDOMElement()
   })
+
+  it('renders a room display_name instead of the humanised key when rooms is supplied', () => {
+    const roomHistory: RoomHistoryData = {
+      living_room: [
+        { t: 1000, temp: 18.2 },
+        { t: 2000, temp: 18.9 },
+      ],
+    }
+    render(
+      <MultiRoomTempChart
+        roomHistory={roomHistory}
+        rooms={{ living_room: { display_name: 'Snug' } }}
+      />
+    )
+    expect(screen.getByText('Snug')).toBeInTheDocument()
+    expect(screen.queryByText('living room')).not.toBeInTheDocument()
+  })
 })

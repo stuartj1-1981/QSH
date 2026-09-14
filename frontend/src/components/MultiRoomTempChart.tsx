@@ -4,9 +4,15 @@ import {
 } from 'recharts'
 import type { RoomHistoryData } from '../hooks/useHistory'
 import { tempDomain } from '../lib/chartDomain'
+import { roomLabel } from '../lib/roomLabel'
 
 interface MultiRoomTempChartProps {
   roomHistory: RoomHistoryData
+  // INSTRUCTION-526B — optional: the mounting page (Rooms.tsx) does not
+  // currently hold a keyed room-config map to pass here, so this component
+  // falls back to the raw key when omitted (see the instruction's landing
+  // record for the disclosure this is expected).
+  rooms?: Record<string, { display_name?: string | null }>
 }
 
 const ROOM_COLORS = [
@@ -19,7 +25,7 @@ function formatTime(ts: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export const MultiRoomTempChart = memo(function MultiRoomTempChart({ roomHistory }: MultiRoomTempChartProps) {
+export const MultiRoomTempChart = memo(function MultiRoomTempChart({ roomHistory, rooms }: MultiRoomTempChartProps) {
   const roomNames = Object.keys(roomHistory)
   if (roomNames.length === 0) return null
 
@@ -67,7 +73,7 @@ export const MultiRoomTempChart = memo(function MultiRoomTempChart({ roomHistory
             labelFormatter={(label) => formatTime(Number(label))}
             formatter={(value, name) => [
               typeof value === 'number' ? `${value.toFixed(1)}°C` : '—',
-              String(name).replace(/_/g, ' '),
+              roomLabel(String(name), rooms?.[String(name)]),
             ]}
           />
           {roomNames.map((room, i) => (
@@ -91,7 +97,7 @@ export const MultiRoomTempChart = memo(function MultiRoomTempChart({ roomHistory
               className="w-2.5 h-2.5 rounded-full"
               style={{ backgroundColor: ROOM_COLORS[i % ROOM_COLORS.length] }}
             />
-            {room.replace(/_/g, ' ')}
+            {roomLabel(room, rooms?.[room])}
           </div>
         ))}
       </div>

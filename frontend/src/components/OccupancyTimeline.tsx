@@ -4,12 +4,14 @@
 import { useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { HistoryPoint } from '../hooks/useHistory'
-import { formatTimeRange } from '../lib/utils'
+import { cn, formatTimeRange } from '../lib/utils'
 import { computePopoverCoords, type PopoverCoords } from '../lib/popover'
+import { roomLabel } from '../lib/roomLabel'
 
 interface OccupancyTimelineProps {
   roomHistory: Record<string, HistoryPoint[]>
   hours: number
+  roomConfigs?: Record<string, { display_name?: string | null }>
 }
 
 interface TooltipState {
@@ -45,7 +47,7 @@ function captureAnchor(e: React.MouseEvent<HTMLDivElement>): { anchorX: number; 
   return { anchorX: e.clientX, triggerTop: r.top, triggerBottom: r.bottom }
 }
 
-export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps) {
+export function OccupancyTimeline({ roomHistory, hours, roomConfigs }: OccupancyTimelineProps) {
   const rooms = Object.keys(roomHistory)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const [coords, setCoords] = useState<PopoverCoords | null>(null)
@@ -81,11 +83,15 @@ export function OccupancyTimeline({ roomHistory, hours }: OccupancyTimelineProps
         {rooms.map(room => {
           const points = roomHistory[room]
           const segments = mergeTinySegments(buildSegments(points, maxT))
-          const displayName = room.replace(/_/g, ' ')
+          const roomConfig = roomConfigs?.[room]
+          const displayName = roomLabel(room, roomConfig)
 
           return (
             <div key={room} className="flex items-center gap-3 relative">
-              <span className="text-xs text-[var(--text-muted)] w-24 truncate capitalize">
+              <span className={cn(
+                'text-xs text-[var(--text-muted)] w-24 truncate',
+                roomConfig?.display_name?.trim() ? '' : 'capitalize',
+              )}>
                 {displayName}
               </span>
               {/* Strip wrapper: positions the strip itself. Tooltip is portaled to

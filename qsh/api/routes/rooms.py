@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 from typing import Any, Optional, Union, Dict, List
 
-from qsh.config import validate_auxiliary_output_block
+from qsh.config import ROOM_DISPLAY_NAME_MAX, validate_auxiliary_output_block
 
 from .config import read_modify_write
 
@@ -35,6 +35,11 @@ T1_NEW_ROOM_KEYS = frozenset({
     "mqtt_topics", "trv_name", "occupancy_sensor", "occupancy_debounce",
     "occupancy_fallback", "last_known_timeout_s", "occupancy_class",
     "predictive_occupancy", "away_active_internal", "away_days_internal",
+    # INSTRUCTION-526A — a caller that does not send display_name must not
+    # have it cleared by update_room's cleared_by_caller difference; PUT is
+    # not the path the Settings screen uses, and a partial PUT from
+    # elsewhere would otherwise destroy a label set in Settings.
+    "display_name",
 })
 RESERVED_FACE_KEYWORDS = {"external", "ground", "roof", "unheated"}
 
@@ -207,6 +212,22 @@ class RoomConfig(BaseModel):
     predictive_occupancy: Optional[bool] = None
     away_active_internal: Optional[bool] = None
     away_days_internal: Optional[int] = None
+    # INSTRUCTION-526A — a label, not an identity. The YAML mapping key
+    # remains the room's sole identity; this field never reaches it.
+    display_name: Optional[str] = None
+
+    @field_validator("display_name")
+    @classmethod
+    def display_name_not_blank_or_over_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("display_name must not be blank")
+        if len(v) > ROOM_DISPLAY_NAME_MAX:
+            raise ValueError(
+                f"display_name must be at most {ROOM_DISPLAY_NAME_MAX} characters, got {len(v)}"
+            )
+        return v
 
     @field_validator("floor")
     @classmethod

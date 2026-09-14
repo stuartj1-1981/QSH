@@ -569,6 +569,8 @@ class SharedState:
         room_areas = config.get('rooms', {})
         facings_map = config.get('facings', {})
         ceiling_map = config.get('ceiling_heights', {})
+        # INSTRUCTION-526A — optional per-room label, read-only downstream.
+        display_name_map = config.get('room_display_names', {})
 
         # INSTRUCTION-131C V6 — aux derivation prerequisites pulled once.
         aux_outputs_cfg_all = config.get("auxiliary_outputs", {}) or {}
@@ -662,6 +664,10 @@ class SharedState:
                 'facing': facings_map.get(room_name, 0.2),
                 'area_m2': room_areas.get(room_name, 0),
                 'ceiling_m': ceiling_map.get(room_name, 2.4),
+                # INSTRUCTION-526A — None when the room declares no label, not
+                # the key and not an empty string (526B's Historian filter
+                # needs to distinguish labelled from unlabelled).
+                'display_name': display_name_map.get(room_name),
 
                 # INSTRUCTION-131C V6 — auxiliary output (tri-state per V4/C5)
                 'aux_state': aux_state_val,

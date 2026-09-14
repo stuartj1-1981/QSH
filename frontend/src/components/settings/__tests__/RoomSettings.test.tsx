@@ -1340,3 +1340,60 @@ describe('RoomSettings occupancy parity (INSTRUCTION-480B)', () => {
     expect(payload.lounge.occupancy_class).toBe('presence')
   })
 })
+
+// =============================================================================
+// INSTRUCTION-526B T4/T5 — Display name edit control
+// =============================================================================
+
+describe('RoomSettings display name (INSTRUCTION-526B)', () => {
+  const roomsBase = {
+    living_room: { area_m2: 20, facing: 'S', ceiling_m: 2.4 },
+  }
+
+  function getDisplayNameInput(): HTMLInputElement {
+    return screen.getByText('Display name').parentElement!.querySelector('input') as HTMLInputElement
+  }
+
+  it('renders the Display name input', () => {
+    render(<RoomSettings rooms={roomsBase} driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByText('Display name')).toBeInTheDocument()
+    expect(getDisplayNameInput().value).toBe('')
+  })
+
+  it('typing updates local state', () => {
+    render(<RoomSettings rooms={roomsBase} driver="ha" onRefetch={() => {}} />)
+    const input = getDisplayNameInput()
+    fireEvent.change(input, { target: { value: 'Snug' } })
+    expect(getDisplayNameInput().value).toBe('Snug')
+  })
+
+  it('an emptied input removes display_name from the saved payload', async () => {
+    patchMock.mockClear()
+    const rooms = {
+      living_room: { area_m2: 20, facing: 'S', ceiling_m: 2.4, display_name: 'Snug' },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    const input = getDisplayNameInput()
+    expect(input.value).toBe('Snug')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const [section, payload] = patchMock.mock.calls.at(-1)!
+    expect(section).toBe('rooms')
+    expect(payload.living_room).not.toHaveProperty('display_name')
+  })
+
+  it('keeps the card heading on the room key, not the label', () => {
+    const rooms = {
+      living_room: { area_m2: 20, facing: 'S', ceiling_m: 2.4, display_name: 'Snug' },
+    }
+    render(<RoomSettings rooms={rooms} driver="ha" onRefetch={() => {}} />)
+    expect(screen.getByText('living room')).toBeInTheDocument()
+    expect(screen.queryByText('Snug', { selector: 'h3' })).toBeNull()
+  })
+
+  it('the client length constant equals the value this instruction states (64)', () => {
+    render(<RoomSettings rooms={roomsBase} driver="ha" onRefetch={() => {}} />)
+    expect(getDisplayNameInput().maxLength).toBe(64)
+  })
+})

@@ -8,6 +8,7 @@ import type { CycleMessage, RoomState } from '../types/api'
 import type { RoomEnvelopeYaml, FaceValue } from '../types/config'
 import { normaliseFaceRefs } from '../types/config'
 import { cn } from '../lib/utils'
+import { roomLabelTitleCase } from '../lib/roomLabel'
 
 interface Building3DViewProps {
   engineRef: RefObject<BuildingEngine | null>
@@ -190,7 +191,7 @@ export function Building3DView({ engineRef, dark = true }: Building3DViewProps) 
           <>
             <div className="flex items-start justify-between">
               <h3 className="text-base font-semibold text-[var(--text)]">
-                {selectedRoom.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                {roomLabelTitleCase(selectedRoom, roomData)}
               </h3>
               <button
                 onClick={() => setSelectedRoom(null)}
