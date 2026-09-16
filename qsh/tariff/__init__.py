@@ -9,7 +9,9 @@ modules.
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Literal, Protocol, Tuple, runtime_checkable
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,45 @@ SUPPORTED_PROVIDER_KINDS: tuple[ProviderKind, ...] = (
 #   150B uses: f"{_SILVER_PREFIX_BASE}-ELEC" → "SILVER-FLEX-ELEC"
 #   150C uses: f"{_SILVER_PREFIX_BASE}-GAS"  → "SILVER-FLEX-GAS"
 _SILVER_PREFIX_BASE: str = "SILVER-FLEX"
+
+
+# INSTRUCTION-534A — the half-hour settlement slot, and the index of the slot a
+# timestamp falls in. An INDEX, not an elapsed-time comparison: a gate written as
+# `slot_index(now) != last_slot` fires on the boundary itself, so every install
+# re-resolves at the same two instants an hour regardless of when the process
+# started. An interval gate (`now - last > 1800`) has an arbitrary phase.
+HALF_HOUR_SECONDS = 1800
+
+# INSTRUCTION-537B — the UK local zone, one object for the package (CAPA-F F1).
+# Gas Tracker rollover (INSTRUCTION-271 V2 C-H1) and the day/night slot
+# synthesis both read it; a second construction of the same zone elsewhere
+# is a second implementation of one fact.
+LONDON_TZ = ZoneInfo("Europe/London")
+
+
+def slot_index(ts: float) -> int:
+    """The half-hour settlement slot `ts` falls in, as an integer index."""
+    return int(ts) // HALF_HOUR_SECONDS
+
+
+def parse_iso_utc(s):
+    """Parse an Octopus ISO-8601 timestamp to an aware UTC datetime, or None.
+
+    Octopus sends a trailing `Z`, which datetime.fromisoformat rejected before
+    Python 3.11 and which is normalised here regardless, so a future format
+    drift has one place to absorb it. A naive result is assumed UTC. Returns
+    None - never raises - on anything unparseable, empty or absent.
+    """
+    if not s:
+        return None
+    try:
+        normalised = s.replace("Z", "+00:00") if isinstance(s, str) else s
+        parsed = datetime.fromisoformat(normalised)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class ConfigurationError(Exception):
@@ -266,6 +307,34 @@ _OCTOPUS_CREDS_INCOMPLETE_SPEC = EventSpec(
 )
 get_annunciator().register(_OCTOPUS_CREDS_INCOMPLETE_SPEC)
 
+# INSTRUCTION-534A — the running tariff code changed under the provider. OCCURRED,
+# not LATCHED: a supplier switch is an event, not a fault state, and under the
+# owner's method-2 decision the resulting divergence from qsh.yaml is a normal
+# operating condition rather than an in-fault one.
+_TARIFF_CODE_CHANGED_SPEC = EventSpec(
+    name="TARIFF.tariff_code_changed",
+    kind=EventKind.OCCURRED,
+    payload_fields=("fuel", "from_code", "to_code"),
+    latch_key=(),
+    default_level=logging.WARNING,
+)
+get_annunciator().register(_TARIFF_CODE_CHANGED_SPEC)
+
+# INSTRUCTION-537A — the account's in-force code is one QSH cannot price: the
+# product publishes no standard unit rates in the fetch window. LATCHED: it is
+# an in-fault state that persists until the candidate becomes priceable, the
+# candidate withdraws (the walk returns the held code), or the held code
+# changes; it must not be able to fire once per slot. Keyed on
+# fuel AND direction because the import and export instances share a fuel.
+_TARIFF_CODE_UNPRICEABLE_SPEC = EventSpec(
+    name="TARIFF.tariff_code_unpriceable",
+    kind=EventKind.LATCHED,
+    payload_fields=("fuel", "direction", "held_code", "candidate_code"),
+    latch_key=("fuel", "direction"),
+    default_level=logging.WARNING,
+)
+get_annunciator().register(_TARIFF_CODE_UNPRICEABLE_SPEC)
+
 
 def _normalise_legacy_config(energy_config: dict, fuel: Fuel) -> dict | None:
     """V2 L3 read-side compatibility.
@@ -471,6 +540,11 @@ def create_export_provider(
             "octopus_tariff_code": export_code,
             "ha_rate_entity": export_entity,
             "fallback_rate": static_export,
+            # INSTRUCTION-534A §3.3 — this synthesised section is the only place
+            # that knows the instance it produces is export-directed; the flag
+            # tells the provider's re-resolution filter to match export meter
+            # points rather than import ones.
+            "octopus_is_export": True,
         }
     }
     from qsh.tariff.octopus_electricity import OctopusElectricityProvider
@@ -568,6 +642,10 @@ __all__ = [
     "CredentialedProvider",
     "ConfigurationError",
     "TARIFF_HTTP_TIMEOUT_SECONDS",
+    "HALF_HOUR_SECONDS",
+    "LONDON_TZ",
+    "slot_index",
+    "parse_iso_utc",
     "SUPPORTED_PROVIDER_KINDS",
     "VALID_ELECTRICITY_PROVIDERS",
     "ELECTRICITY_FIXED_RATE_REQUIRED_MSG",

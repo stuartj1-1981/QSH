@@ -385,6 +385,51 @@ def _copy_forward(
             block[new_key] = legacy_val
 
 
+# INSTRUCTION-537C — the credential keys an untouched save may omit: the
+# octopus_-prefixed members of the forward map, per fuel. rates_entity is an
+# entity id, not a credential, and is excluded on purpose (§3.2).
+_ABSENT_CARRY_KEYS: Dict[str, Tuple[str, ...]] = {
+    fuel: tuple(k for k in keys if k.startswith("octopus_"))
+    for fuel, keys in _FUEL_FORWARD_NEW_KEYS.items()
+}
+
+
+def preserve_absent_credentials(existing_energy: dict, incoming_energy: dict) -> dict:
+    """INSTRUCTION-537C T1 — an absent credential key in a submitted fuel block
+    is an UNTOUCHED one.
+
+    The Settings and wizard surfaces omit a secret that still carries the
+    redaction sentinel (stripSentinels), while restoration acts only on keys
+    that arrive. For each fuel block present in `incoming_energy` whose
+    `provider` is absent or 'octopus' (the copy-forward's own eligibility),
+    every key in the carry set for that fuel — the octopus_-prefixed
+    members of the forward map, i.e. the three credentials and not
+    rates_entity — that is absent from the incoming block and real
+    (_is_real) in the on-disk block is copied into the incoming block.
+    An explicit empty value is NOT absent and is left to clear the key
+    (§3.1); a sentinel is NOT absent and is left to restoration. A
+    fixed / ha_entity / edf_freephase block carries nothing.
+
+    PURE FUNCTIONAL — returns a NEW mapping; mutates neither argument.
+    """
+    result = copy.deepcopy(incoming_energy) if isinstance(incoming_energy, dict) else {}
+    if not isinstance(existing_energy, dict):
+        return result
+    for fuel, new_keys in _ABSENT_CARRY_KEYS.items():
+        incoming_block = result.get(fuel)
+        existing_block = existing_energy.get(fuel)
+        if not isinstance(incoming_block, dict) or not isinstance(existing_block, dict):
+            continue
+        if incoming_block.get("provider") not in (None, "octopus"):
+            continue
+        for key in new_keys:
+            if key in incoming_block:
+                continue
+            if _is_real(existing_block.get(key)):
+                incoming_block[key] = existing_block[key]
+    return result
+
+
 def _fuel_resolves_octopus(energy: dict, fuel: str) -> bool:
     """Whether building `fuel`'s provider from `energy` resolves to Octopus —
     declared (energy.<fuel>.provider == 'octopus') or synthesised from the legacy
@@ -890,6 +935,15 @@ def patch_config_section(section: str, body=Body(...)):
                 if key not in preserved:
                     preserved[key] = copy.deepcopy(value)
             local_incoming = preserved
+        # INSTRUCTION-537C T2(a) — the omitted-key half of the sentinel contract.
+        # Runs AFTER the D9 top-level preserve and BEFORE restoration, so a
+        # carried-forward real value is restored as a real value (§3.3).
+        if (
+            section == "energy"
+            and isinstance(local_incoming, dict)
+            and isinstance(existing_section, dict)
+        ):
+            local_incoming = preserve_absent_credentials(existing_section, local_incoming)
         # Restore redacted fields so secrets aren't overwritten with the sentinel
         if section == "energy" and isinstance(existing_section, dict) and isinstance(local_incoming, dict):
             raw[section] = restore_redacted_energy(existing_section, local_incoming)

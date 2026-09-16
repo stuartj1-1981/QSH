@@ -2031,6 +2031,16 @@ def deploy_config(req: WizardDeployRequest):
             detail="heat_sources must contain at least one entry (empty list is malformed)",
         )
 
+    # INSTRUCTION-537C T2(b) — the wizard's tariff step omits an untouched
+    # secret exactly as Settings does; carry it forward from disk BEFORE
+    # validation. A declared provider="octopus" block with an omitted
+    # (untouched) credential is otherwise rejected by the credential-
+    # completeness check below even though the value is recoverable from disk.
+    from .config import _load_raw_yaml, preserve_absent_credentials
+    existing = _load_raw_yaml() or {}
+    if isinstance(req.config.get("energy"), dict) and isinstance(existing.get("energy"), dict):
+        req.config["energy"] = preserve_absent_credentials(existing["energy"], req.config["energy"])
+
     # 1. Final validation
     validation = validate_config(
         WizardValidateRequest(config=req.config, step=None)
@@ -2071,9 +2081,9 @@ def deploy_config(req: WizardDeployRequest):
 
     # Hydrate redacted secrets and run the section-preservation guard against
     # the on-disk YAML BEFORE any write. The 409 path must short-circuit before
-    # yaml.dump, the file write, and the restart-flag write.
-    from .config import _load_raw_yaml, restore_redacted, preserve_singular_dhw_sensors
-    existing = _load_raw_yaml() or {}
+    # yaml.dump, the file write, and the restart-flag write. `existing` was
+    # already loaded above (INSTRUCTION-537C T2(b), ahead of validation).
+    from .config import restore_redacted, preserve_singular_dhw_sensors
 
     # Sentinel restore — secrets that the wizard read via /api/config/raw
     # arrive as ***REDACTED*** and would clobber the real value on write.
