@@ -2,6 +2,65 @@
 
 ## [Unreleased]
 
+## [1.6.3] — 2026-09-16
+
+### Changed
+- Octopus electricity rates are now fetched once per half-hour settlement
+  slot instead of once a minute. The one-minute floor is retained as the
+  retry bound when a fetch fails, so a failing upstream is still retried
+  promptly. The tariff panel's *stale* indicator can now appear during a
+  sustained upstream outage, where previously it effectively could not —
+  the flag is working, not newly broken.
+- The default sans-serif font stack changes with Tailwind CSS 4.3.3, from
+  `ui-sans-serif, system-ui, sans-serif, …` to `-apple-system,
+  BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans",
+  Arial, sans-serif, …`. Text can render in a different face on some
+  platforms. This is an upstream change: it stops CJK text ignoring the
+  page's `lang` attribute on Windows.
+- The web interface's build dependencies were updated. No user-visible
+  behaviour changes beyond the font stack noted above.
+
+### Fixed
+- Octopus import, export and gas tariff codes are now re-resolved from the
+  account's in-force agreement at each half-hour settlement slot, so a
+  supplier switch is picked up without pressing Test Connection and without
+  a restart; agreement selection now filters on the agreement window, so a
+  future-dated agreement is no longer adopted early, and the change is
+  annunciated. The resolved code is held in memory — `qsh.yaml` is not
+  written, so the configured and running tariff can differ until the next
+  Test Connection or restart.
+- Saving the Tariff settings, or re-deploying from the setup wizard, without
+  changing the Octopus API key no longer removes it from the configuration
+  on installs that have already migrated to the per-fuel tariff blocks.
+  Previously, a save that left the key untouched — because the web interface
+  omits a field still carrying the redaction placeholder rather than
+  re-submitting it — silently dropped that key from `qsh.yaml` on the second
+  such save. On a Cosy heat pump the loss also switched heat-pump control
+  from the Octopus API to the Home Assistant service path until the key was
+  re-entered. No key that was typed in was ever lost — the drop applied only
+  to a key left untouched.
+- Intelligent Octopus Go tariffs re-issued by Octopus under `IOG-SMB` product
+  codes are now priced. Those products publish a flat day rate and night rate
+  instead of timed half-hourly rows, which QSH could not read at all: the
+  tariff showed the configured fallback rate. QSH now builds the half-hour
+  schedule itself from the pair and the tariff's 23:30-05:30 off-peak window.
+  **Limit:** the smart-charge slots Octopus schedules outside that window are
+  not visible on the direct API path and are priced at the day rate, so a
+  charge that lands outside 23:30-05:30 is costed high; installs that need
+  them should use the Home Assistant Octopus integration's rate entity, as
+  before.
+- When the account's in-force Octopus tariff moves to a product that
+  publishes no standard unit rates — as Intelligent Octopus Go did on
+  5 July 2026 under its `IOG-SMB` codes — the running tariff code is no
+  longer replaced with one QSH cannot price, and Test Connection no longer
+  persists one. The held code is kept, and the tariff panel raises an alarm
+  naming both codes. `IOG-SMB` itself is priced from this release by the
+  day/night change above, so the alarm now applies to a product QSH can read
+  no rates from at all.
+- The web interface's Tailwind CSS toolchain is now on a single version. The
+  stylesheet was being built from a 4.3.3 source against a 4.2.2 compiler —
+  an output matching neither version.
+
 ## [1.6.2] — 2026-09-14
 
 ### Added
