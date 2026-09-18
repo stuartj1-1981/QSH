@@ -80,6 +80,13 @@ def query_historian(
         hw_active=hw_active,
         aggregation=aggregation,
         interval=interval,
+        # INSTRUCTION-541 D13 — the ONLY site in the repository that asks
+        # for the derived guard. This route renders a chart, where a last
+        # value is a usable trace and a binder error is a 500. Every other
+        # caller computes, and a computed figure needs the error. If a
+        # second production caller ever adds this argument, OB-10 is no
+        # longer true and the tier argument goes with it.
+        derive_types=True,
     )
 
 
@@ -109,10 +116,21 @@ def list_fields(
     """
     h = _get_active_historian()
     if h is None:
-        return {"available": False, "fields": []}
+        return {"available": False, "fields": [], "field_types": {}}
 
     fields = h.get_fields(measurement)
-    return {"available": True, "fields": fields}
+    # INSTRUCTION-541 T4 — additive. A backend that cannot supply types, a
+    # test double whose attribute raises, and one whose attribute is not a
+    # dict all yield {} rather than a 500 or an unserialisable body; the
+    # picker then behaves as it did before 541B. §2.2 names three existing
+    # suites that depend on one branch or the other.
+    try:
+        field_types = h.get_field_types(measurement)
+        if not isinstance(field_types, dict):
+            field_types = {}
+    except Exception:  # noqa: BLE001 — the field list must still be served
+        field_types = {}
+    return {"available": True, "fields": fields, "field_types": field_types}
 
 
 class CutoverBody(BaseModel):

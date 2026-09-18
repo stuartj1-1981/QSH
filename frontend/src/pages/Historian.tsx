@@ -19,6 +19,7 @@ import {
 } from '../hooks/useHistorian'
 import { useStatus } from '../hooks/useStatus'
 import { useRooms } from '../hooks/useRooms'
+import type { HistorianFieldClass } from '../types/api'
 
 const LINE_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b']
 
@@ -77,7 +78,7 @@ export function Historian() {
   const { rooms: roomTags, emitters } = useHistorianTags(measurement)
   const { data: roomsData } = useRooms()
   const rooms = roomsData?.rooms ?? {}
-  const { fields: rawFields, loading: fieldsLoading } = useHistorianFields(measurement)
+  const { fields: rawFields, fieldTypes, loading: fieldsLoading } = useHistorianFields(measurement)
   // INSTRUCTION-224E — emitter filter. Surfaces the emitter tag list for
   // qsh_emitter so operators can narrow trends to a single physical TRV.
   // Backend query API filters by `room` only today; emitter selection is
@@ -106,6 +107,13 @@ export function Historian() {
   const canonicalField = useCallback(
     (label: string): string => label.replace(/ \(legacy\)$/, ''),
     [],
+  )
+
+  // INSTRUCTION-541B — `undefined` when the backend reports no classes (D1),
+  // which renders no badge and leaves the picker as it was.
+  const fieldClass = useCallback(
+    (label: string): HistorianFieldClass | undefined => fieldTypes[canonicalField(label)],
+    [fieldTypes, canonicalField],
   )
 
   const { data: queryData, loading: queryLoading, error: queryError, refetch } = useHistorianQuery(
@@ -163,7 +171,14 @@ export function Historian() {
     const headers = ['timestamp', ...selectedFields]
     const rows = chartData.map((p) => {
       const ts = new Date(p.t * 1000).toISOString()
-      const vals = selectedFields.map((f) => p[f] ?? '')
+      const vals = selectedFields.map((f) => {
+        const v = p[f]
+        if (v === null || v === undefined) return ''
+        const s = String(v)
+        // INSTRUCTION-541B — 541A makes text fields queryable, and
+        // payload_json / diff_payload carry commas. RFC 4180 quoting.
+        return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      })
       return [ts, ...vals].join(',')
     })
     const csv = [headers.join(','), ...rows].join('\n')
@@ -361,6 +376,12 @@ export function Historian() {
                     )}
                   >
                     {label}
+                    {fieldClass(label) === 'text' && (
+                      <span className="ml-1 text-[10px] uppercase opacity-60">txt</span>
+                    )}
+                    {fieldClass(label) === 'boolean' && (
+                      <span className="ml-1 text-[10px] uppercase opacity-60">bool</span>
+                    )}
                   </button>
                 )
               })}
@@ -398,6 +419,20 @@ export function Historian() {
       {queryError && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400">
           {queryError}
+        </div>
+      )}
+
+      {queryData?.coerced_fields && Object.keys(queryData.coerced_fields).length > 0 && (
+        <div
+          data-testid="historian-coercion-note"
+          className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2 text-xs text-[var(--text-muted)]"
+        >
+          {Object.entries(queryData.coerced_fields).map(([field, c]) => (
+            <div key={field}>
+              <span className="font-mono">{field}</span>
+              {` — ${c.applied} value shown in place of ${c.requested}.`}
+            </div>
+          ))}
         </div>
       )}
 
