@@ -567,9 +567,19 @@ export interface HistorianMeasurementsResponse {
   measurements: HistorianMeasurement[]
 }
 
+// INSTRUCTION-541 — a field's type class, as /api/historian/fields reports it.
+// `text` and `boolean` columns a numeric aggregator cannot bind are rewritten
+// to `last` by the backend, which says so on `coerced_fields`. Not every `text`
+// column: a temporal one is badged `text` because a chart cannot draw it, and
+// `avg()` binds on it, so it is neither rewritten nor noted (541A D11).
+export type HistorianFieldClass = 'numeric' | 'text' | 'boolean'
+
 export interface HistorianQueryPoint {
   t: number
-  [field: string]: number | null
+  // Widened at INSTRUCTION-541B. A coerced text field returns a string here
+  // and a boolean field a boolean; the previous declaration was wrong before
+  // 541A and is reachable in normal use after it.
+  [field: string]: number | string | boolean | null
 }
 
 export interface HistorianQueryResponse {
@@ -580,6 +590,8 @@ export interface HistorianQueryResponse {
   aggregation?: string
   interval?: string
   error?: string
+  // Present only when the backend rewrote an aggregation (INSTRUCTION-505B).
+  coerced_fields?: Record<string, { requested: string; applied: string }>
 }
 
 export interface HistorianTagsResponse {
@@ -590,6 +602,8 @@ export interface HistorianTagsResponse {
 export interface HistorianFieldsResponse {
   available: boolean
   fields: string[]
+  // Absent on a backend older than INSTRUCTION-541A (D1).
+  field_types?: Record<string, HistorianFieldClass>
 }
 
 // Control source (external value visibility — 36C Task 4)

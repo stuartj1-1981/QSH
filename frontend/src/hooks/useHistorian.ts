@@ -5,6 +5,7 @@ import type {
   HistorianQueryResponse,
   HistorianTagsResponse,
   HistorianFieldsResponse,
+  HistorianFieldClass,
 } from '../types/api'
 
 interface UseHistorianMeasurementsResult {
@@ -157,11 +158,14 @@ export function useHistorianTags(measurement: string): UseHistorianTagsResult {
 
 interface UseHistorianFieldsResult {
   fields: string[]
+  // INSTRUCTION-541B — empty on a backend that does not report classes (D1).
+  fieldTypes: Record<string, HistorianFieldClass>
   loading: boolean
 }
 
 export function useHistorianFields(measurement: string): UseHistorianFieldsResult {
   const [fields, setFields] = useState<string[]>([])
+  const [fieldTypes, setFieldTypes] = useState<Record<string, HistorianFieldClass>>({})
   const [loading, setLoading] = useState(() => Boolean(measurement))
 
   useEffect(() => {
@@ -173,6 +177,7 @@ export function useHistorianFields(measurement: string): UseHistorianFieldsResul
       .then((r) => r.json())
       .then((json: HistorianFieldsResponse) => {
         setFields(json.fields ?? [])
+        setFieldTypes(json.field_types ?? {})
         setLoading(false)
       })
       .catch((e) => {
@@ -183,5 +188,5 @@ export function useHistorianFields(measurement: string): UseHistorianFieldsResul
     return () => controller.abort()
   }, [measurement])
 
-  return { fields, loading }
+  return { fields, fieldTypes, loading }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { Historian } from '../Historian'
 
 // Mock recharts to avoid canvas issues in jsdom
@@ -109,6 +109,7 @@ describe('Historian page', () => {
       'api/historian/fields?measurement=qsh_system': {
         available: true,
         fields: ['outdoor_temp'],
+        field_types: { outdoor_temp: 'numeric' },
       },
       'api/historian/tags?measurement=qsh_system': {
         available: true,
@@ -134,6 +135,7 @@ describe('Historian page', () => {
       'api/historian/fields?measurement=qsh_emitter': {
         available: true,
         fields: ['valve_open'],
+        field_types: { valve_open: 'boolean' },
       },
       'api/historian/tags?measurement=qsh_emitter': {
         available: true,
@@ -174,6 +176,7 @@ describe('Historian page', () => {
       'api/historian/fields?measurement=qsh_emitter': {
         available: true,
         fields: ['valve_open'],
+        field_types: { valve_open: 'boolean' },
       },
       'api/historian/tags?measurement=qsh_emitter': {
         available: true,
@@ -219,6 +222,7 @@ describe('Historian page', () => {
       'api/historian/fields?measurement=qsh_system': {
         available: true,
         fields: ['outdoor_temp'],
+        field_types: { outdoor_temp: 'numeric' },
       },
       'api/historian/tags?measurement=qsh_system': {
         available: true,
@@ -237,5 +241,231 @@ describe('Historian page', () => {
     expect(await screen.findByRole('option', { name: 'Snug' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'kitchen' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'retired_room' })).toBeInTheDocument()
+  })
+
+  // ===========================================================================
+  // INSTRUCTION-541B — the field-class badge and the coercion note
+  // ===========================================================================
+
+  // G1
+  it('labels a text field, and leaves a numeric field unlabelled', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['outdoor_temp', 'fabric_loss_basis'] }],
+        fields: ['outdoor_temp', 'fabric_loss_basis'],
+        field_types: { outdoor_temp: 'numeric', fabric_loss_basis: 'text' },
+        tags: {},
+      }),
+    } as Response)
+
+    render(<Historian />)
+
+    const textButton = await screen.findByRole('button', { name: /fabric_loss_basis/i })
+    expect(within(textButton).getByText('txt')).toBeInTheDocument()
+
+    const numericButton = screen.getByRole('button', { name: /outdoor_temp/i })
+    expect(within(numericButton).queryByText('txt')).not.toBeInTheDocument()
+    expect(within(numericButton).queryByText('bool')).not.toBeInTheDocument()
+  })
+
+  // G2
+  it('labels a boolean field', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['outdoor_temp', 'saturation_active'] }],
+        fields: ['outdoor_temp', 'saturation_active'],
+        field_types: { outdoor_temp: 'numeric', saturation_active: 'boolean' },
+        tags: {},
+      }),
+    } as Response)
+
+    render(<Historian />)
+
+    const boolButton = await screen.findByRole('button', { name: /saturation_active/i })
+    expect(within(boolButton).getByText('bool')).toBeInTheDocument()
+  })
+
+  // G3 — D1's evidence, and the degrade path 541A produces for a backend
+  // that reports no types.
+  it('renders no badge anywhere when the fields response carries no field_types', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['outdoor_temp'] }],
+        fields: ['outdoor_temp'],
+        tags: {},
+      }),
+    } as Response)
+
+    render(<Historian />)
+
+    const button = await screen.findByRole('button', { name: /outdoor_temp/i })
+    expect(within(button).queryByText('txt')).not.toBeInTheDocument()
+    expect(within(button).queryByText('bool')).not.toBeInTheDocument()
+  })
+
+  // G4 — a field must be toggled first: the query hook returns early while
+  // fieldsKey is empty, so queryData is null and the note never mounts.
+  it('renders the coercion note only when the response carries coerced_fields', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['fabric_loss_basis'] }],
+        fields: ['fabric_loss_basis'],
+        field_types: { fabric_loss_basis: 'text' },
+        tags: {},
+        points: [{ t: 1700000000, fabric_loss_basis: 'solar' }],
+        coerced_fields: { fabric_loss_basis: { requested: 'mean', applied: 'last' } },
+      }),
+    } as Response)
+
+    render(<Historian />)
+
+    expect(screen.queryByTestId('historian-coercion-note')).not.toBeInTheDocument()
+
+    const button = await screen.findByRole('button', { name: /fabric_loss_basis/i })
+    fireEvent.click(button)
+
+    const note = await screen.findByTestId('historian-coercion-note')
+    expect(note).toHaveTextContent('fabric_loss_basis')
+    expect(note).toHaveTextContent('last value shown in place of mean.')
+  })
+
+  // G5 — all three aggregations the selector offers, and D6's evidence: the
+  // note names the substitution, never a binding rule (§1.4). D4: the note
+  // is driven by the response, not the selection — so the mocked response's
+  // own `requested` value is what the assertion checks, independent of
+  // whichever aggregation is actually selected on screen.
+  it('renders the coercion note for max and for min, naming the substitution', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['fabric_loss_basis'] }],
+        fields: ['fabric_loss_basis'],
+        field_types: { fabric_loss_basis: 'text' },
+        tags: {},
+        points: [{ t: 1700000000, fabric_loss_basis: 'solar' }],
+        coerced_fields: { fabric_loss_basis: { requested: 'max', applied: 'last' } },
+      }),
+    } as Response)
+
+    const { unmount } = render(<Historian />)
+    const maxButton = await screen.findByRole('button', { name: /fabric_loss_basis/i })
+    fireEvent.click(maxButton)
+    await waitFor(() => {
+      expect(screen.getByTestId('historian-coercion-note')).toHaveTextContent(
+        'last value shown in place of max.',
+      )
+    })
+    unmount()
+    vi.restoreAllMocks()
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [{ name: 'qsh_system', fields: ['fabric_loss_basis'] }],
+        fields: ['fabric_loss_basis'],
+        field_types: { fabric_loss_basis: 'text' },
+        tags: {},
+        points: [{ t: 1700000000, fabric_loss_basis: 'solar' }],
+        coerced_fields: { fabric_loss_basis: { requested: 'min', applied: 'last' } },
+      }),
+    } as Response)
+
+    render(<Historian />)
+    const minButton = await screen.findByRole('button', { name: /fabric_loss_basis/i })
+    fireEvent.click(minButton)
+    await waitFor(() => {
+      expect(screen.getByTestId('historian-coercion-note')).toHaveTextContent(
+        'last value shown in place of min.',
+      )
+    })
+  })
+
+  // G6 — pins T3(e); without it a single JSON value silently adds columns.
+  it('quotes CSV cells containing commas, so a JSON-valued field cannot add a column', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available: true,
+        measurements: [
+          { name: 'qsh_system', fields: ['fabric_loss_basis', 'outdoor_temp', 'target'] },
+        ],
+        fields: ['fabric_loss_basis', 'outdoor_temp', 'target'],
+        field_types: { fabric_loss_basis: 'text', outdoor_temp: 'numeric', target: 'numeric' },
+        tags: {},
+        points: [{ t: 1700000000, fabric_loss_basis: '{"a":1,"b":2}', outdoor_temp: 10.5, target: 20 }],
+      }),
+    } as Response)
+
+    render(<Historian />)
+
+    for (const name of [/fabric_loss_basis/i, /^outdoor_temp$/i, /^target$/i]) {
+      const btn = await screen.findByRole('button', { name })
+      fireEvent.click(btn)
+    }
+
+    const exportButton = await screen.findByText('CSV')
+
+    let capturedBlob: Blob | null = null
+    const createObjectURLSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockImplementation((obj: Blob | MediaSource) => {
+        capturedBlob = obj as Blob
+        return 'blob:mock'
+      })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    fireEvent.click(exportButton)
+
+    expect(capturedBlob).not.toBeNull()
+    const csv = await (capturedBlob as unknown as Blob).text()
+    const lines = csv.trim().split('\n')
+    const dataRow = lines[1]
+
+    // RFC 4180 parse — a naive split on ',' would give five cells here,
+    // because the quoted cell's own content contains a comma (R18(c)).
+    const cells: string[] = []
+    let i = 0
+    while (i <= dataRow.length) {
+      if (dataRow[i] === '"') {
+        let j = i + 1
+        let value = ''
+        while (j < dataRow.length) {
+          if (dataRow[j] === '"') {
+            if (dataRow[j + 1] === '"') {
+              value += '"'
+              j += 2
+              continue
+            }
+            j += 1
+            break
+          }
+          value += dataRow[j]
+          j += 1
+        }
+        cells.push(value)
+        i = j + 1
+      } else {
+        let j = dataRow.indexOf(',', i)
+        if (j === -1) j = dataRow.length
+        cells.push(dataRow.slice(i, j))
+        i = j + 1
+      }
+    }
+
+    expect(cells).toHaveLength(4)
+    expect(cells[1]).toBe('{"a":1,"b":2}')
+
+    createObjectURLSpy.mockRestore()
   })
 })
