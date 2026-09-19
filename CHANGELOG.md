@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [1.6.4] — 2026-09-19
+
+### Changed
+- A setback is now only as deep as the flow temperature allows. A set-back
+  room whose temperature shows heat bleeding in from a warmer occupied
+  neighbour that is running saturated below its target has its setback
+  reduced to one step above the room's temperature, then in 0.5 °C steps, at
+  most one step per 30 minutes, while that neighbour stays saturated and
+  warmer, and restored in 0.5 °C steps, at most one per hour, once it is
+  satisfied; a cap ends with the setback period. No room is set back deeper
+  than its measured heat-up rate can recover in half the unoccupied time,
+  judged once at the start of the period and never from an assumed rate. A
+  room recovering under optimum start no longer raises the flow setpoint —
+  its recovery is paced by the schedule at the weather-compensated flow —
+  and the slow-heat-up boost now judges the occupied rooms alone. Caps
+  survive a restart.
+- Historian page: text and boolean fields are labelled in the field picker,
+  and a note under the chart names any field whose aggregation the backend
+  substituted, with the value shown and the value asked for.
+
+### Added
+- Every optimum start is now scored. When a room reaches the target it was
+  pre-heated for, QSH records how many minutes early (negative) or late
+  (positive) it arrived, the lead time used and the heat-up rate the plan
+  assumed. On the Historian page choose the measurement
+  `qsh_recovery_arrival`, the field `arrival_offset_min`, a room and the
+  30-day range to watch the start converge. A start that has not arrived two
+  hours after the transition is recorded as not reached.
+- Historian: the fields endpoint reports each field's type class
+  (numeric / text / boolean).
+
+### Fixed
+- Historian: trends for non-numeric fields (`fabric_loss_basis`,
+  `payload_json`, `saturation_active` and others) returned a binder error at
+  the default `mean` aggregation, and were silently empty at `max`/`min`.
+  The local store now derives the aggregation guard from the column type; on
+  InfluxDB, a refused aggregation is retried once against the field types the
+  server reports.
+- Historian page: CSV export now quotes values, so a field containing a comma
+  no longer shifts the remaining columns.
+
 ## [1.6.3] — 2026-09-16
 
 ### Changed
