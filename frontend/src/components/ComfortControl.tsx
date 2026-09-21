@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, memo } from 'react'
 import { Thermometer, Minus, Plus, AlertTriangle, ShieldCheck } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { ControlValueDisplay } from './settings/ControlValueDisplay'
+import type { ControlSource } from '../types/api'
 
 interface ComfortControlProps {
   comfortTemp: number
@@ -13,8 +15,13 @@ interface ComfortControlProps {
   writebackUnverified?: boolean
   writebackUnverifiedCycles?: number
   engineering?: boolean
-  onComfortTempChange: (value: number) => void
+  onComfortTempChange: (value: number) => Promise<void>
   onControlModeChange: (enabled: boolean) => void
+  // INSTRUCTION-544B — owner ruling 2: an operator-editable control whose
+  // value something else owns must render read-only and name the source
+  // (P34), rather than the FlowLimits-style silent read-only display.
+  readOnly?: boolean
+  controlSource?: ControlSource
 }
 
 export const ComfortControl = memo(function ComfortControl({
@@ -30,10 +37,14 @@ export const ComfortControl = memo(function ComfortControl({
   engineering,
   onComfortTempChange,
   onControlModeChange,
+  readOnly = false,
+  controlSource,
 }: ComfortControlProps) {
   const [localTemp, setLocalTemp] = useState(comfortTemp)
+  const [hasError, setHasError] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   // Sync local temp when server value changes (but not during user interaction)
   useEffect(() => {
@@ -50,15 +61,32 @@ export const ComfortControl = memo(function ComfortControl({
     return () => document.removeEventListener('keydown', handleKey)
   }, [showModal])
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+    }
+  }, [])
+
   const adjustTemp = (delta: number) => {
     const newTemp = Math.round((localTemp + delta) * 2) / 2 // Snap to 0.5 steps
     const clamped = Math.max(15, Math.min(25, newTemp))
+    const prev = localTemp
     setLocalTemp(clamped)
 
     // Debounce API call
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      onComfortTempChange(clamped)
+      onComfortTempChange(clamped).catch(() => {
+        // INSTRUCTION-544B T9(c) — a write the backend refused is
+        // annunciated: revert and flash, mirroring the Stepper pattern
+        // already used by SeasonalTuningSettings and FlowLimits.
+        setLocalTemp(prev)
+        setHasError(true)
+        if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+        errorTimerRef.current = setTimeout(() => setHasError(false), 1500)
+      })
     }, 500)
   }
 
@@ -101,25 +129,45 @@ export const ComfortControl = memo(function ComfortControl({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => adjustTemp(-0.5)}
-                disabled={saving || localTemp <= 15}
-                className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] disabled:opacity-40"
-              >
-                <Minus size={14} />
-              </button>
-              <span className="text-xl font-bold w-16 text-center">
-                {localTemp.toFixed(1)}°
-              </span>
-              <button
-                onClick={() => adjustTemp(0.5)}
-                disabled={saving || localTemp >= 25}
-                className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] disabled:opacity-40"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
+            {readOnly ? (
+              <div className="w-56">
+                <ControlValueDisplay
+                  label="Comfort Temperature"
+                  controlSource={controlSource}
+                  internalValue={comfortTemp}
+                  onInternalChange={(v) => {
+                    if (typeof v === 'number') onComfortTempChange(v).catch(() => {})
+                  }}
+                  unit="°C"
+                  min={15}
+                  max={25}
+                  step={0.5}
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => adjustTemp(-0.5)}
+                  disabled={saving || localTemp <= 15}
+                  className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] disabled:opacity-40"
+                >
+                  <Minus size={14} />
+                </button>
+                <span className={cn(
+                  'text-xl font-bold w-16 text-center transition-colors',
+                  hasError && 'text-red-500'
+                )}>
+                  {localTemp.toFixed(1)}°
+                </span>
+                <button
+                  onClick={() => adjustTemp(0.5)}
+                  disabled={saving || localTemp >= 25}
+                  className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--bg)] disabled:opacity-40"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Shadow / Live mode toggle button */}

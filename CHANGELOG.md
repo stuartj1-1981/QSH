@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.6.5] — 2026-09-21
+
+### Fixed
+- Setpoint edits now stick. Comfort, the antifrost and shoulder thresholds,
+  and overtemp protection take effect immediately and survive a restart, on
+  every driver. Previously a restart soon after an edit could revert it to
+  the old value until the next cycle re-applied it.
+- The four setpoint controls now show the new value within the round trip
+  instead of holding the pre-edit number until the next cycle. A write the
+  backend refuses is reverted on screen and flagged as an error rather than
+  appearing to succeed.
+- Where an external entity is bound, or the install has more than one heat
+  source, these controls render read-only and name the source rather than
+  offering an edit that something else would immediately overwrite.
+
 ## [1.6.4] — 2026-09-19
 
 ### Changed

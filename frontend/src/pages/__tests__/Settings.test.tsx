@@ -20,6 +20,13 @@ vi.mock('../../hooks/useConfig', () => ({
     loading: false,
     refetch: vi.fn(),
   }),
+  // INSTRUCTION-544B T10(a)/T11(b) — Settings now also reads the processed
+  // config for antifrost/shoulder/overtemp.
+  useConfig: () => ({
+    data: {},
+    loading: false,
+    refetch: vi.fn(),
+  }),
   usePatchConfig: () => ({ patch: vi.fn(), saving: false, error: null }),
   patchOrDelete: vi.fn().mockResolvedValue({}),
 }))

@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useRawConfig } from '../hooks/useConfig'
-import { useLive } from '../hooks/useLive'
+import { useState, useEffect } from 'react'
+import { useRawConfig, useConfig } from '../hooks/useConfig'
 import { apiUrl } from '../lib/api'
 import { SettingsLayout, type SettingsSection } from '../components/settings/SettingsLayout'
 import { RoomSettings } from '../components/settings/RoomSettings'
@@ -29,29 +28,18 @@ interface SettingsProps {
 export function Settings({ onRunWizard }: SettingsProps) {
   const [section, setSection] = useState<SettingsSection>('rooms')
   const { data, loading, refetch } = useRawConfig()
-  const { data: live } = useLive()
-
-  // Shoulder threshold — not in YAML raw config, fetch from control API
-  const [shoulderThreshold, setShoulderThreshold] = useState<number | null>(null)
-  const [shoulderTick, setShoulderTick] = useState(0)
-  useEffect(() => {
-    let cancelled = false
-    fetch(apiUrl('api/control/shoulder-threshold'))
-      .then((resp) => resp.ok ? resp.json() : null)
-      .then((json) => {
-        if (!cancelled && json) setShoulderThreshold(json.hp_min_output_kw ?? null)
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [shoulderTick])
+  // INSTRUCTION-544B T10(a)/T11(b) — antifrost, shoulder and overtemp now
+  // read from the processed config (defaults merged) rather than from the
+  // WebSocket engineering block or a bespoke control-API fetch, so the
+  // screen self-corrects within the round trip after a write (P19, P35).
+  const { data: procConfig, refetch: refetchProcConfig } = useConfig()
 
   // INSTRUCTION-351B — octopus_dhw_signal_available is a derived runtime flag on
   // the PROCESSED /api/config (351A Task 4), not a raw-YAML key, so it is absent
-  // from useRawConfig's data. Fetch it directly — the same pattern as
-  // shoulderThreshold above (a non-YAML derived value). Re-read whenever the raw
-  // config reloads (i.e. after any Save → refetch), so configuring the Octopus
-  // API in Tariff settings flips the flag without a manual page reload. Gates the
-  // Hot Water → Schedule Source "Octopus" radio.
+  // from useRawConfig's data. Fetch it directly — a non-YAML derived value.
+  // Re-read whenever the raw config reloads (i.e. after any Save → refetch),
+  // so configuring the Octopus API in Tariff settings flips the flag without
+  // a manual page reload. Gates the Hot Water → Schedule Source "Octopus" radio.
   const [octopusDhwAvailable, setOctopusDhwAvailable] = useState(false)
   useEffect(() => {
     let cancelled = false
@@ -63,11 +51,6 @@ export function Settings({ onRunWizard }: SettingsProps) {
       .catch(() => {})
     return () => { cancelled = true }
   }, [data])
-
-  const handleSeasonalRefetch = useCallback(() => {
-    setShoulderTick((t) => t + 1)
-    refetch()
-  }, [refetch])
 
   if (loading) {
     return (
@@ -126,6 +109,9 @@ export function Settings({ onRunWizard }: SettingsProps) {
             rooms={Object.keys(data.rooms || {})}
             driver={driver}
             onRefetch={refetch}
+            heatSources={data.heat_sources}
+            overtempThreshold={procConfig?.overtemp_protection_internal ?? null}
+            onRefetchProcessed={refetchProcConfig}
           />
         )
       case 'control':
@@ -135,10 +121,12 @@ export function Settings({ onRunWizard }: SettingsProps) {
       case 'seasonal_tuning':
         return (
           <SeasonalTuningSettings
-            antifrostThreshold={live?.engineering?.antifrost_threshold ?? null}
-            shoulderThreshold={shoulderThreshold}
+            antifrostThreshold={procConfig?.antifrost_oat_threshold_internal ?? null}
+            shoulderThreshold={procConfig?.hp_min_output_kw_internal ?? null}
+            heatSources={data.heat_sources}
             driver={driver}
-            onRefetch={handleSeasonalRefetch}
+            onRefetch={refetch}
+            onRefetchProcessed={refetchProcConfig}
           />
         )
       case 'outdoor_weather':

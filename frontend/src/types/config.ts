@@ -565,6 +565,12 @@ export interface QshConfigYaml {
   flow_min_internal?: number
   flow_max_internal?: number
   pid_target_internal?: number
+  // INSTRUCTION-544A operator keys (T9(e)) — the three setpoints besides
+  // comfort that the setpoint routes write, resolvable from the processed
+  // config once 544A has landed. Absent on a pre-544A backend.
+  antifrost_oat_threshold_internal?: number
+  hp_min_output_kw_internal?: number
+  overtemp_protection_internal?: number
   publish_mqtt_shadow?: boolean
 
   // Vendor write-budget knobs (216A/B). Integers in [3, 6]; default 6.

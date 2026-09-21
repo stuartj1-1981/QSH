@@ -1538,41 +1538,20 @@ def _ha_get_state(config: Dict, entity_id: str):
 # EXTERNAL SETPOINT RESOLUTION (INSTRUCTION-42A)
 # =========================================================================
 
-# Module-level snapshot of original YAML values — populated on first call.
-# Ensures entity-unavailable always falls back to the true YAML value,
-# not a stale external value from a previous cycle's config mutation.
-_setpoint_originals: Dict[str, float] = {}
-
-
 def resolve_external_setpoints(config: Dict) -> None:
     """Resolve external entity overrides for setpoints that controllers
     read via config.get(). Writes resolved values back into config dict
     so downstream code is unchanged.
 
     Called once per cycle from HADriver.read_inputs().
-
-    Safety: On first call, snapshots the original YAML-loaded values
-    for each setpoint. Subsequent calls use the snapshot as the fallback
-    default, ensuring entity-unavailable reverts to the true YAML value
-    rather than latching a stale external value.
     """
-    global _setpoint_originals
-
-    # Snapshot originals on first call only
-    if not _setpoint_originals:
-        _setpoint_originals = {
-            "comfort_temp": config.get("comfort_temp") or 20.0,
-            "antifrost_oat_threshold": config.get("antifrost", {}).get("oat_threshold", 7.0),
-            "hp_min_output_kw": config.get("hp_min_output_kw", 2.0),
-            "overtemp_protection": config.get("overtemp_protection", 23.0),
-        }
 
     # --- Comfort temperature ---
-    # internal_key=None for all 4 setpoints. The snapshot is the sole trusted
-    # fallback source — prevents resolve_value() from reading back a stale
-    # external value that was written into config on a previous cycle.
-    # API endpoints call update_setpoint_original() to keep the snapshot
-    # in sync when users change internal values.
+    # Each of the four setpoints has its own operator key that no per-cycle
+    # path writes — pid_target_internal, antifrost_oat_threshold_internal,
+    # hp_min_output_kw_internal, overtemp_protection_internal. The resolver
+    # reads the operator key live as its internal fallback, the same pattern
+    # get_flow_temp_limits() below already uses for the flow limits.
     #
     # INSTRUCTION-356 — driver parity: control.pid_target_entity
     # (entities.pid_target_temperature) is the HA counterpart to the MQTT
@@ -1588,26 +1567,26 @@ def resolve_external_setpoints(config: Dict) -> None:
     comfort_rv = resolve_value(
         config,
         entity_key=_comfort_entity_key,
-        internal_key=None,
-        default=_setpoint_originals["comfort_temp"],
+        internal_key="pid_target_internal",
+        default=20.0,
         read_fn=_ha_get_state,
     )
     config["comfort_temp"] = safe_float(
         comfort_rv.value,
-        _setpoint_originals["comfort_temp"],
+        20.0,
     )
 
     # --- Antifrost OAT threshold ---
     antifrost_rv = resolve_value(
         config,
         entity_key="entities.antifrost_oat_threshold",
-        internal_key=None,
-        default=_setpoint_originals["antifrost_oat_threshold"],
+        internal_key="antifrost_oat_threshold_internal",
+        default=7.0,
         read_fn=_ha_get_state,
     )
     config.setdefault("antifrost", {})["oat_threshold"] = safe_float(
         antifrost_rv.value,
-        _setpoint_originals["antifrost_oat_threshold"],
+        7.0,
     )
 
     # --- Shoulder shutdown threshold (hp_min_output_kw) ---
@@ -1617,50 +1596,33 @@ def resolve_external_setpoints(config: Dict) -> None:
     # entities.shoulder_threshold is configured, in which case SSC's stamp is
     # gated off and the entity value resolved here owns the floor fleet-wide
     # across source switches (operator-explicit > program). The
-    # entity-unavailable case falls back to the boot snapshot below per the
-    # docstring — that remains the operator channel's own fallback, NOT an SSC
+    # entity-unavailable case falls back to the operator key below —
+    # that remains the operator channel's own fallback, NOT an SSC
     # stamping opportunity (the gate stays closed whenever the entity exists).
     shoulder_rv = resolve_value(
         config,
         entity_key="entities.shoulder_threshold",
-        internal_key=None,
-        default=_setpoint_originals["hp_min_output_kw"],
+        internal_key="hp_min_output_kw_internal",
+        default=2.0,
         read_fn=_ha_get_state,
     )
     config["hp_min_output_kw"] = safe_float(
         shoulder_rv.value,
-        _setpoint_originals["hp_min_output_kw"],
+        2.0,
     )
 
     # --- Overtemp protection ---
     overtemp_rv = resolve_value(
         config,
         entity_key="entities.overtemp_protection",
-        internal_key=None,
-        default=_setpoint_originals["overtemp_protection"],
+        internal_key="overtemp_protection_internal",
+        default=23.0,
         read_fn=_ha_get_state,
     )
     config["overtemp_protection"] = safe_float(
         overtemp_rv.value,
-        _setpoint_originals["overtemp_protection"],
+        23.0,
     )
-
-
-def update_setpoint_original(key: str, value: float) -> None:
-    """Update the snapshot of a YAML-origin setpoint value.
-
-    Called by API endpoints when the user changes an internal setpoint
-    value. This keeps the snapshot in sync with the user's intent, so
-    entity-unavailable falls back to the user's chosen value, not the
-    value from the initial config load.
-    """
-    if _setpoint_originals:
-        _setpoint_originals[key] = value
-    else:
-        logging.debug(
-            "Setpoint snapshot not yet initialised — update for '%s' "
-            "deferred to first cycle", key
-        )
 
 
 def get_flow_temp_limits(config: Dict) -> Tuple[float, float]:

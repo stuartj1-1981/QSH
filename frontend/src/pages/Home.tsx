@@ -45,6 +45,12 @@ interface HomeProps {
 export function Home({ engineering, onNavigate }: HomeProps) {
   const { data: live, isConnected } = useLive()
   const { data: initial } = useStatus()
+  // Raw + processed config, hoisted above their first use (comfortTemp, T9(a))
+  // rather than declared beside the flow-limit block that originally owned
+  // them (INSTRUCTION-377B). See that block below for the flow-limit-specific
+  // derived values that still live there.
+  const { data: configData } = useRawConfig()
+  const { data: procConfig, refetch: refetchConfig } = useConfig()
   const { version } = useVersion()
   const { data: awayData, refetch: refetchAway } = useAwayState()
   const { setAway } = useSetAway()
@@ -131,7 +137,12 @@ export function Home({ engineering, onNavigate }: HomeProps) {
 
   const [writebackUnverifiedCycles, setWritebackUnverifiedCycles] = useState(0)
 
-  const comfortTemp = status?.comfort_temp ?? initial?.comfort_temp ?? 21.0
+  // INSTRUCTION-544B T9(a) — the operator setpoint, read from the processed
+  // config exactly as the flow-limit setpoint already is (P17), not from the
+  // cycle snapshot (comfortTempActive below stays on the snapshot; it shows
+  // what the pipeline is running, a different quantity from what the
+  // operator commanded).
+  const comfortTemp = procConfig?.pid_target_internal ?? 21.0
   const appliedFlow = status?.applied_flow ?? initial?.applied_flow ?? 0
   const appliedMode = status?.applied_mode ?? initial?.applied_mode ?? 'off'
   const readbackMismatchCount = status?.readback_mismatch_count ?? initial?.readback_mismatch_count ?? 0
@@ -224,15 +235,23 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const handleComfortTempChange = useCallback(async (value: number) => {
     setSaving(true)
     try {
-      await fetch(apiUrl('api/control/comfort-temp'), {
+      const resp = await fetch(apiUrl('api/control/comfort-temp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value }),
       })
+      // INSTRUCTION-544B T9(b) — refetch the processed config so the screen
+      // is right within the round trip, as the two flow writes already do.
+      await refetchConfig()
+      // T9(c) — 544A lets the 5xx out of every setpoint route; read it here
+      // so a refused write is annunciated rather than silently ignored.
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`)
+      }
     } finally {
       setSaving(false)
     }
-  }, [])
+  }, [refetchConfig])
 
   const handleControlModeChange = useCallback(async (enabled: boolean) => {
     // Optimistic flip — user intent is visible instantly. Reconciled via
@@ -260,12 +279,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   // flow-limit entity is selected OR the install is multi-source (per-source
   // caps are authoritative there and edited in Settings).
   // "External selected" reuses the Settings signal (HeatSourceSettings.tsx:951).
-  const { data: configData } = useRawConfig()
-  // The editable setpoint binds to the PROCESSED config (defaults merged), not
-  // the raw YAML: flow_*_internal are runtime-default keys the wizard does not
-  // write, so the raw config omits them on most installs and the steppers would
-  // render "--". useConfig() carries the value the backend operates on.
-  const { data: procConfig, refetch: refetchConfig } = useConfig()
+  // configData/procConfig/refetchConfig are declared near the top of the
+  // component now (T9(a) needs procConfig before this block runs).
   const flowExternal = !!(
     configData?.heat_sources?.[0]?.flow_min_entity ||
     configData?.heat_sources?.[0]?.flow_max_entity
@@ -277,6 +292,14 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   const setpointFlowMin = procConfig?.flow_min_internal ?? null
   const setpointFlowMax = procConfig?.flow_max_internal ?? null
   const entityMap = useMemo(() => buildEntityMap(configData), [configData])
+
+  // INSTRUCTION-544B T9(d) — the same singleSource-and-not-external shape
+  // owner ruling 2 gives the flow limits, applied to comfort. controlSource
+  // selected by key from the status snapshot's resolved-control list, as
+  // HeatSourceSettings.tsx:1087 does (P31).
+  const comfortSource = initial?.control_sources?.find((cs) => cs.key === 'pid_target_internal')
+  const comfortExternal = !!comfortSource?.external_id
+  const comfortEditable = singleSource && !comfortExternal
 
   return (
     <div className="max-w-4xl">
@@ -363,6 +386,8 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         engineering={engineering}
         onComfortTempChange={handleComfortTempChange}
         onControlModeChange={handleControlModeChange}
+        readOnly={!comfortEditable}
+        controlSource={comfortSource}
       />
 
       {/* INSTRUCTION-265 — schedule diagnostic sub-line. Always rendered to
