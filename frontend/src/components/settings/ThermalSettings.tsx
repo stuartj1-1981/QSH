@@ -1,8 +1,12 @@
 // Driver-agnostic: this component exposes no HA entity IDs or MQTT topics. Audited INSTRUCTION-88D.
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Save, Loader2, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
-import type { ThermalYaml, ShoulderYaml, SummerYaml, Driver } from '../../types/config'
+import { useStatus } from '../../hooks/useStatus'
+import { apiUrl } from '../../lib/api'
+import { cn } from '../../lib/utils'
+import { ControlValueDisplay } from './ControlValueDisplay'
+import type { ThermalYaml, ShoulderYaml, SummerYaml, Driver, HeatSourceYaml } from '../../types/config'
 
 interface ThermalSettingsProps {
   thermal: ThermalYaml
@@ -16,6 +20,25 @@ interface ThermalSettingsProps {
   rooms: string[]
   driver: Driver
   onRefetch: () => void
+  // INSTRUCTION-544B T11(d) — the source count, a prop for the same reason
+  // it is one at SeasonalTuningSettings (T10(b), P29). Optional so
+  // pre-existing callers still type-check.
+  heatSources?: HeatSourceYaml[]
+  // T11(b) — the operator key, resolved from the processed config once
+  // 544A has landed. Optional for the same reason.
+  overtempThreshold?: number | null
+  // T11(c) — the processed-config refetch, distinct from onRefetch (raw
+  // config, shared verbatim with every sibling settings component).
+  onRefetchProcessed?: () => void
+}
+
+// Removes overtemp_protection from a ThermalYaml without introducing an
+// unused destructured binding (T11(c) — the key must not ride the
+// whole-section thermal payload once it has its own write route, OB-13).
+function withoutOvertemp(t: ThermalYaml): ThermalYaml {
+  const rest = { ...t }
+  delete rest.overtemp_protection
+  return rest
 }
 
 // driver threaded in 88B; consumed in 88C/88D via rename to `driver`
@@ -26,19 +49,81 @@ export function ThermalSettings({
   rooms,
   driver: _driver,
   onRefetch,
+  heatSources,
+  overtempThreshold,
+  onRefetchProcessed,
 }: ThermalSettingsProps) {
-  const [thermal, setThermal] = useState<ThermalYaml>(initialThermal)
+  const [thermal, setThermal] = useState<ThermalYaml>(() => withoutOvertemp(initialThermal))
   const [shoulder, setShoulder] = useState<ShoulderYaml>(initialShoulder ?? {})
   const [summer, setSummer] = useState<SummerYaml>(initialSummer ?? {})
   const [saveError, setSaveError] = useState<string | null>(null)
   const { patch, saving } = usePatchConfig()
+
+  // T11(d) — the ControlSource row is read inside the component, as
+  // HeatSourceSettings.tsx does at :143/:1087 and as T10(c) does.
+  const { data: statusData } = useStatus()
+  const overtempSource = statusData?.control_sources?.find((cs) => cs.key === 'overtemp_protection_internal')
+  const overtempExternal = !!overtempSource?.external_id
+  const singleSource = (heatSources?.length ?? 1) <= 1
+  const overtempReadOnly = !singleSource || overtempExternal
+
+  const [overtempLocal, setOvertempLocal] = useState<number | null>(overtempThreshold ?? null)
+  const [overtempError, setOvertempError] = useState(false)
+  const overtempDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const overtempErrorTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  useEffect(() => { setOvertempLocal(overtempThreshold ?? null) }, [overtempThreshold])
+
+  useEffect(() => {
+    return () => {
+      if (overtempDebounceRef.current) clearTimeout(overtempDebounceRef.current)
+      if (overtempErrorTimerRef.current) clearTimeout(overtempErrorTimerRef.current)
+    }
+  }, [])
+
+  // T11(c) — the write. Routed through PATCH /api/control/overtemp-protection
+  // (the route 544A gives the two-arm handler) instead of the whole-section
+  // thermal PATCH. Refetches the processed config and reads resp.ok, as
+  // T9(b)/T9(c) do.
+  const handleOvertempChange = async (value: number) => {
+    const resp = await fetch(apiUrl('api/control/overtemp-protection'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    })
+    onRefetch()
+    onRefetchProcessed?.()
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+  }
+
+  const adjustOvertemp = (next: number) => {
+    const clamped = Math.max(18, Math.min(30, next))
+    const prev = overtempLocal
+    setOvertempLocal(clamped)
+
+    if (overtempDebounceRef.current) clearTimeout(overtempDebounceRef.current)
+    overtempDebounceRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          await handleOvertempChange(clamped)
+        } catch {
+          setOvertempLocal(prev)
+          setOvertempError(true)
+          if (overtempErrorTimerRef.current) clearTimeout(overtempErrorTimerRef.current)
+          overtempErrorTimerRef.current = setTimeout(() => setOvertempError(false), 1500)
+        }
+      })()
+    }, 500)
+  }
 
   // Prop resync (mirrors the original thermal effect). For shoulder/summer
   // this is also the dual-write guard (§6 handoff-4): a SeasonalTuning write
   // to shoulder.hp_min_output_kw lands in the parent's refetched config and
   // is pulled back into local state here, so the next whole-section shoulder
   // PATCH carries the fresh value rather than a stale one.
-  useEffect(() => { setThermal(initialThermal) }, [initialThermal])
+  useEffect(() => { setThermal(withoutOvertemp(initialThermal)) }, [initialThermal])
   useEffect(() => { setShoulder(initialShoulder ?? {}) }, [initialShoulder])
   useEffect(() => { setSummer(initialSummer ?? {}) }, [initialSummer])
 
@@ -61,7 +146,7 @@ export function ThermalSettings({
   // objects on both sides (like-with-like, no transform), so the structural
   // compare is sound. Whole-section writes preserve co-resident keys through
   // the backend's incoming-keys-only overwrite.
-  const thermalDirty = JSON.stringify(thermal) !== JSON.stringify(initialThermal)
+  const thermalDirty = JSON.stringify(thermal) !== JSON.stringify(withoutOvertemp(initialThermal))
   const shoulderDirty = JSON.stringify(shoulder) !== JSON.stringify(initialShoulder ?? {})
   const summerDirty = JSON.stringify(summer) !== JSON.stringify(initialSummer ?? {})
 
@@ -180,18 +265,50 @@ export function ThermalSettings({
           </div>
         </div>
 
+        {/* INSTRUCTION-544B T11 — repointed off the whole-section thermal
+            payload (P39) onto its own control route (T11(c)), reading the
+            operator key rather than the section's consumer field (T11(b)).
+            Read-only + source-named when an entity is bound or the install
+            is multi-source (T11(d)), the same predicate owner ruling 2
+            gives the flow limits. */}
         <div>
-          <label className="block text-xs font-medium text-[var(--text)] mb-1">
-            Overtemp Protection
-          </label>
-          <input
-            type="number"
-            step="0.5"
-            value={thermal.overtemp_protection ?? ''}
-            onChange={(e) => update({ overtemp_protection: parseFloat(e.target.value) || undefined })}
-            placeholder="23.0"
-            className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
-          />
+          {overtempReadOnly ? (
+            <ControlValueDisplay
+              label="Overtemp Protection"
+              controlSource={overtempSource}
+              internalValue={overtempLocal ?? 0}
+              onInternalChange={(v) => {
+                if (typeof v === 'number') {
+                  setOvertempLocal(v)
+                  handleOvertempChange(v).catch(() => {})
+                }
+              }}
+              unit="°C"
+              min={18}
+              max={30}
+              step={0.5}
+            />
+          ) : (
+            <>
+              <label className="block text-xs font-medium text-[var(--text)] mb-1">
+                Overtemp Protection
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                value={overtempLocal ?? ''}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  if (!isNaN(v)) adjustOvertemp(v)
+                }}
+                placeholder="23.0"
+                className={cn(
+                  'w-full px-2 py-1.5 rounded border bg-[var(--bg)] text-sm text-[var(--text)]',
+                  overtempError ? 'border-red-500' : 'border-[var(--border)]'
+                )}
+              />
+            </>
+          )}
         </div>
 
         {rooms.length > 0 && (

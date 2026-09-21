@@ -13,7 +13,8 @@
  *    error surfaced.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import type { ControlSource } from '../../../types/api'
 
 const patch = vi.fn()
 
@@ -21,9 +22,20 @@ vi.mock('../../../hooks/useConfig', () => ({
   usePatchConfig: () => ({ patch, saving: false, error: null }),
 }))
 
+// INSTRUCTION-544B T11(d) — mirrors HeatSourceSettings.controlSources.test.tsx's
+// convention: mock useStatus directly rather than racing its internal fetch.
+const statusData: { control_sources?: ControlSource[] } = {}
+
+vi.mock('../../../hooks/useStatus', () => ({
+  useStatus: () => ({ data: statusData, error: null }),
+}))
+
 import { ThermalSettings } from '../ThermalSettings'
 
 const noop = () => {}
+
+const mockFetch = vi.fn()
+vi.stubGlobal('fetch', mockFetch)
 
 // Co-resident keys live alongside the two surfaced fields. Declared as consts
 // (not inline literals) so the extra keys clear TS excess-property checking
@@ -34,6 +46,9 @@ const summerWithNeighbour = { demand_threshold_kw: 0.3, outdoor_temp_threshold_c
 beforeEach(() => {
   patch.mockReset()
   patch.mockResolvedValue({ updated: 'ok', restart_required: true, message: 'ok' })
+  mockFetch.mockReset()
+  mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+  delete statusData.control_sources
 })
 
 afterEach(() => {
@@ -218,5 +233,129 @@ describe('ThermalSettings — seasonal fields (INSTRUCTION-334)', () => {
     // Ordered abort: summer (after shoulder) was never written.
     expect(patch.mock.calls.find((c) => c[0] === 'summer')).toBeUndefined()
     expect(onRefetch).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * INSTRUCTION-544B T11 — overtemp repointed off the whole-section thermal
+ * payload (P39) onto its own control route (T11(c)), reading the operator
+ * key (T11(b)) rather than thermal.overtemp_protection, and read-only +
+ * source-named on an entity-bound or multi-source install (T11(d)).
+ */
+describe('ThermalSettings — overtemp control route (INSTRUCTION-544B T11)', () => {
+  const overtempInput = () => screen.getByPlaceholderText('23.0') as HTMLInputElement
+
+  it('reads the value from overtempThreshold, not thermal.overtemp_protection', () => {
+    render(
+      <ThermalSettings
+        thermal={{ overtemp_protection: 19.0 }}
+        rooms={[]}
+        driver="ha"
+        onRefetch={noop}
+        overtempThreshold={26.0}
+      />,
+    )
+    expect(overtempInput()).toHaveValue(26)
+  })
+
+  it('writes through PATCH /api/control/overtemp-protection, not the whole-section thermal PATCH', async () => {
+    vi.useFakeTimers()
+    const onRefetch = vi.fn()
+    const onRefetchProcessed = vi.fn()
+    render(
+      <ThermalSettings
+        thermal={{}}
+        rooms={[]}
+        driver="ha"
+        onRefetch={onRefetch}
+        overtempThreshold={23.0}
+        onRefetchProcessed={onRefetchProcessed}
+      />,
+    )
+    fireEvent.change(overtempInput(), { target: { value: '24' } })
+    await act(async () => { vi.advanceTimersByTime(600) })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('api/control/overtemp-protection'),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ value: 24 }) }),
+    )
+    expect(onRefetch).toHaveBeenCalled()
+    expect(onRefetchProcessed).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('OB-13 — the whole-section thermal PATCH never carries overtemp_protection, even when thermal is otherwise dirty', async () => {
+    render(
+      <ThermalSettings
+        thermal={{ overtemp_protection: 23.0 }}
+        rooms={[]}
+        driver="ha"
+        onRefetch={noop}
+        overtempThreshold={23.0}
+      />,
+    )
+    fireEvent.change(screen.getByPlaceholderText('5.0'), { target: { value: '6' } })
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => {
+      expect(patch.mock.calls.find((c) => c[0] === 'thermal')).toBeDefined()
+    })
+    const thermalPayload = patch.mock.calls.find((c) => c[0] === 'thermal')![1]
+    expect(thermalPayload).not.toHaveProperty('overtemp_protection')
+    expect(thermalPayload).toMatchObject({ peak_loss_kw: 6 })
+  })
+
+  it('reverts and flashes an error when the write is refused', async () => {
+    vi.useFakeTimers()
+    mockFetch.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({}) })
+    render(
+      <ThermalSettings
+        thermal={{}}
+        rooms={[]}
+        driver="ha"
+        onRefetch={noop}
+        overtempThreshold={23.0}
+      />,
+    )
+    fireEvent.change(overtempInput(), { target: { value: '24' } })
+    await act(async () => { vi.advanceTimersByTime(600) })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(overtempInput()).toHaveValue(23)
+    vi.useRealTimers()
+  })
+
+  it('renders read-only with the source named when an external entity is bound', () => {
+    statusData.control_sources = [{
+      key: 'overtemp_protection_internal',
+      value: 24,
+      source: 'external',
+      external_id: 'input_number.overtemp_protection',
+      external_raw: '24',
+    }]
+    render(
+      <ThermalSettings
+        thermal={{}}
+        rooms={[]}
+        driver="ha"
+        onRefetch={noop}
+        overtempThreshold={24}
+      />,
+    )
+    expect(screen.getByText(/via input_number\.overtemp_protection/)).toBeDefined()
+  })
+
+  it('renders read-only on a multi-source install with no entity bound', () => {
+    render(
+      <ThermalSettings
+        thermal={{}}
+        rooms={[]}
+        driver="ha"
+        onRefetch={noop}
+        overtempThreshold={23.0}
+        heatSources={[{ type: 'heat_pump' }, { type: 'heat_pump' }]}
+      />,
+    )
+    expect(screen.queryByPlaceholderText('23.0')).toBeNull()
   })
 })

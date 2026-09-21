@@ -221,6 +221,76 @@ class HADriver:
             self._forecast_provider = HAForecastProvider(forecast_entity)
         return self._forecast_provider
 
+    def get_resolved_controls(self) -> List[Dict[str, Any]]:
+        """INSTRUCTION-544A (INSTRUCTION-438 D8 pattern) — ControlSource-shaped
+        provenance for the four setpoints and the two flow limits.
+
+        Resolves each control fresh against self._config_cache — set at
+        setup() and mutated in place every cycle by resolve_external_setpoints
+        / get_flow_temp_limits (same dict object), so this reads the current
+        operator-key/entity-derived values. Absent config_cache (called
+        before setup()) ⇒ [] — absence is reportable, fabrication forbidden.
+
+        The `key` vocabulary is fixed by an existing consumer:
+        HeatSourceSettings.tsx selects rows by cs.key === 'flow_min' /
+        'flow_max'; the four setpoint rows take the operator key names
+        resolve_external_setpoints reads as its internal_key (T1).
+        """
+        from .integration import fetch_ha_entity
+        from ...utils import safe_float
+        from ..resolve import resolve_value
+
+        config = getattr(self, "_config_cache", None)
+        if config is None:
+            return []
+
+        def _read_fn(_config: Dict, entity_id: str):
+            raw = fetch_ha_entity(entity_id, default=None)
+            if raw in (None, "unavailable", "unknown", ""):
+                return None
+            return safe_float(raw, None)
+
+        _pid_target_entity = (config.get("entities", {}) or {}).get("pid_target_temperature", "")
+        _comfort_entity_key = (
+            "entities.pid_target_temperature" if _pid_target_entity else "entities.comfort_temp"
+        )
+
+        specs = [
+            ("pid_target_internal", _comfort_entity_key, "pid_target_internal", 20.0),
+            (
+                "antifrost_oat_threshold_internal", "entities.antifrost_oat_threshold",
+                "antifrost_oat_threshold_internal", 7.0,
+            ),
+            (
+                "hp_min_output_kw_internal", "entities.shoulder_threshold",
+                "hp_min_output_kw_internal", 2.0,
+            ),
+            (
+                "overtemp_protection_internal", "entities.overtemp_protection",
+                "overtemp_protection_internal", 23.0,
+            ),
+            ("flow_min", "entities.flow_min_temp", "flow_min_internal", 25.0),
+            ("flow_max", "entities.flow_max_temp", "flow_max_internal", 50.0),
+        ]
+
+        out: List[Dict[str, Any]] = []
+        for key, entity_key, internal_key, default in specs:
+            rv = resolve_value(
+                config,
+                entity_key=entity_key,
+                internal_key=internal_key,
+                default=default,
+                read_fn=_read_fn,
+            )
+            out.append({
+                "key": key,
+                "value": rv.value,
+                "source": rv.source,
+                "external_id": rv.external_id if rv.external_id is not None else "",
+                "external_raw": rv.external_raw if rv.external_raw is not None else "",
+            })
+        return out
+
     @property
     def is_realtime(self) -> bool:
         return True

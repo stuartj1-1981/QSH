@@ -165,24 +165,25 @@ def set_antifrost_threshold(body: AntifrostThresholdBody):
             detail="Threshold must be between 0 and 15°C",
         )
 
-    # 1. Update in-memory config (live effect, no restart)
+    # 1. Update in-memory config (live effect, no restart). The operator
+    # key is the resolver's fallback (drivers/ha/sensor_fetcher.py); the
+    # consumer key is written too, in memory only, for immediate effect on
+    # drivers that do not run the resolver (INSTRUCTION-544A).
     config = shared_state.get_config()
     if config is not None:
-        antifrost = config.setdefault("antifrost", {})
-        antifrost["oat_threshold"] = body.value
+        config["antifrost_oat_threshold_internal"] = body.value
+        config.setdefault("antifrost", {})["oat_threshold"] = body.value
 
-    # 2. Persist to YAML (survives restart)
+    # 2. Persist the operator key to YAML (survives restart)
     try:
-        read_modify_write(_update_config_key("antifrost.oat_threshold", body.value))
+        read_modify_write(_update_config_key("antifrost_oat_threshold_internal", body.value))
+    except HTTPException:
+        raise  # safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist antifrost threshold: %s", e)
-
-    # Keep setpoint snapshot in sync (INSTRUCTION-42A)
-    try:
-        from ...drivers.ha.sensor_fetcher import update_setpoint_original
-        update_setpoint_original("antifrost_oat_threshold", body.value)
-    except ImportError:
-        pass
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to persist antifrost_oat_threshold_internal: {e}",
+        )
 
     return {"antifrost_threshold": body.value}
 
@@ -204,41 +205,41 @@ def set_comfort_temp(body: ComfortTempBody):
     if body.value < 15.0 or body.value > 25.0:
         raise HTTPException(status_code=400, detail="Temperature must be between 15 and 25°C")
 
-    # 1. Update in-memory config (live effect, no restart)
+    # 1. Update in-memory config (live effect, no restart). comfort_temp's
+    # operator key is pid_target_internal (owner ruling 1, INSTRUCTION-544A)
+    # — the MQTT driver's _resolve_mqtt_control() already falls back to it
+    # (INSTRUCTION-105). The consumer key is written too, in memory only,
+    # for immediate effect on drivers that do not run the resolver.
     config = shared_state.get_config()
     if config is not None:
         config["comfort_temp"] = body.value
-
-    # 2. Persist to YAML (survives restart)
-    try:
-        read_modify_write(_update_config_key("comfort_temp", body.value))
-    except Exception as e:
-        logger.warning("Failed to persist comfort_temp: %s", e)
-
-    # Keep pid_target_internal in sync for MQTT driver fallback (INSTRUCTION-105).
-    # The MQTT driver's _resolve_mqtt_control() reads control/comfort_temp from
-    # the broker cache and falls back to config["pid_target_internal"].  Without
-    # this, a restart before the broker re-populates the retained topic reverts
-    # comfort to the default (20.0).
-    if config is not None:
         config["pid_target_internal"] = body.value
+
+    # 2. Persist the operator key to YAML (survives restart). This is now
+    # the route's one persisted write — comfort_temp is memory-only.
     try:
         read_modify_write(_update_config_key("pid_target_internal", body.value))
+    except HTTPException:
+        raise  # safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist pid_target_internal: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to persist pid_target_internal: {e}",
+        )
 
     # Write the retained MQTT topic the driver actually reads.  Note the key
     # must be "comfort_temp" — the topic suffix the MQTT driver subscribes to
     # (control/comfort_temp).  Publishing to control/pid_target achieves
-    # nothing because the driver does not read that topic.
-    _mqtt_writeback("comfort_temp", str(body.value))
-
-    # Keep setpoint snapshot in sync (INSTRUCTION-42A)
+    # nothing because the driver does not read that topic. Wrapped in its
+    # own try — the persisted write above has already landed, so a failure
+    # here must not cost the caller its success response (the mechanism
+    # behind the §1.1 defect: a statement placed after an unguarded call
+    # that raises never runs). Closes on the complement, not a named type,
+    # for the same reason T6(b)'s handler does.
     try:
-        from ...drivers.ha.sensor_fetcher import update_setpoint_original
-        update_setpoint_original("comfort_temp", body.value)
-    except ImportError:
-        pass
+        _mqtt_writeback("comfort_temp", str(body.value))
+    except BaseException as e:
+        logger.warning("comfort_temp MQTT writeback failed: %s", e)
 
     return {"comfort_temp": body.value}
 
@@ -552,15 +553,25 @@ def set_pid_target_internal(body: PidTargetBody):
     if round(body.value * 2) != body.value * 2:
         raise HTTPException(status_code=422, detail="pid_target_internal must be a multiple of 0.5")
 
+    # comfort's operator key, pid_target_internal, is the route's own
+    # setpoint (owner ruling 1). The consumer key is written too, in
+    # memory only, so the mock driver — which reads the consumer key and
+    # runs no resolver — sees the edit immediately (INSTRUCTION-544A).
     config = shared_state.get_config()
     if config is not None:
         config["pid_target_internal"] = body.value
+        config["comfort_temp"] = body.value
 
     # Persist to YAML
     try:
         read_modify_write(_update_config_key("pid_target_internal", body.value))
+    except HTTPException:
+        raise  # safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist pid_target_internal: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to persist pid_target_internal: {e}",
+        )
 
     # INSTRUCTION-401 Task 3.3: key must be "comfort_temp" — the driver's
     # pending-writeback lookup is a literal-string match on that key
@@ -728,23 +739,27 @@ def set_shoulder_threshold(body: ShoulderThresholdBody):
             detail="Threshold must be between 0.5 and 10.0 kW",
         )
 
-    # Update in-memory config for immediate effect
+    # Update in-memory config for immediate effect. The operator key is the
+    # resolver's fallback; the consumer key is written too, in memory only
+    # (INSTRUCTION-544A). This is the boot/edit value only — on a
+    # multi-source install INSTRUCTION-330's SSC re-stamps hp_min_output_kw
+    # from the active source every cycle unless entities.shoulder_threshold
+    # is configured (OB-04), unchanged here.
     config = shared_state.get_config()
     if config is not None:
+        config["hp_min_output_kw_internal"] = body.value
         config["hp_min_output_kw"] = body.value
 
-    # Persist to qsh.yaml
+    # Persist the operator key to qsh.yaml
     try:
-        read_modify_write(_update_config_key("shoulder.hp_min_output_kw", body.value))
+        read_modify_write(_update_config_key("hp_min_output_kw_internal", body.value))
+    except HTTPException:
+        raise  # safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist shoulder threshold: %s", e)
-
-    # Keep setpoint snapshot in sync (INSTRUCTION-42A)
-    try:
-        from ...drivers.ha.sensor_fetcher import update_setpoint_original
-        update_setpoint_original("hp_min_output_kw", body.value)
-    except ImportError:
-        pass
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to persist hp_min_output_kw_internal: {e}",
+        )
 
     return {"hp_min_output_kw": body.value}
 
@@ -777,23 +792,24 @@ def set_overtemp_protection(body: OvertempProtectionBody):
             detail="Overtemp protection must be between 18.0 and 30.0 C",
         )
 
-    # Update in-memory config for immediate effect
+    # Update in-memory config for immediate effect. The operator key is the
+    # resolver's fallback; the consumer key is written too, in memory only
+    # (INSTRUCTION-544A).
     config = shared_state.get_config()
     if config is not None:
+        config["overtemp_protection_internal"] = body.value
         config["overtemp_protection"] = body.value
 
-    # Persist to qsh.yaml
+    # Persist the operator key to qsh.yaml
     try:
-        read_modify_write(_update_config_key("thermal.overtemp_protection", body.value))
+        read_modify_write(_update_config_key("overtemp_protection_internal", body.value))
+    except HTTPException:
+        raise  # safety-critical — caller must see 503
     except Exception as e:
-        logger.warning("Failed to persist overtemp protection: %s", e)
-
-    # Keep setpoint snapshot in sync (INSTRUCTION-42A)
-    try:
-        from ...drivers.ha.sensor_fetcher import update_setpoint_original
-        update_setpoint_original("overtemp_protection", body.value)
-    except ImportError:
-        pass
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to persist overtemp_protection_internal: {e}",
+        )
 
     return {"overtemp_protection": body.value}
 
