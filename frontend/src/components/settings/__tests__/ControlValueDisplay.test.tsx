@@ -19,7 +19,12 @@ describe('ControlValueDisplay', () => {
       />
     )
     expect(screen.getByText('Flow Min Temperature')).toBeInTheDocument()
-    expect(screen.getByText('No entity configured — using internal value')).toBeInTheDocument()
+    // INSTRUCTION-550 T4 — controlSource===undefined is the unreported
+    // state (fourth state), not the reported-internal-only state; the old
+    // caption belongs to a row that says source=internal, not to absence.
+    expect(
+      screen.getByText('Source not reported — showing the configured value')
+    ).toBeInTheDocument()
     const input = screen.getByRole('spinbutton')
     expect(input).toHaveValue(25)
   })
@@ -101,5 +106,35 @@ describe('ControlValueDisplay', () => {
     const toggle = screen.getByRole('button')
     fireEvent.click(toggle)
     expect(onChange).toHaveBeenCalledWith(false)
+  })
+
+  it('renders the unreported caption when controlSource is undefined', () => {
+    render(
+      <ControlValueDisplay
+        label="Overtemp Protection"
+        controlSource={undefined}
+        internalValue={23}
+        onInternalChange={() => {}}
+        unit="°C"
+      />
+    )
+    expect(
+      screen.getByText('Source not reported — showing the configured value')
+    ).toBeInTheDocument()
+  })
+
+  it('does not render the reported-internal caption when controlSource is undefined', () => {
+    render(
+      <ControlValueDisplay
+        label="Overtemp Protection"
+        controlSource={undefined}
+        internalValue={23}
+        onInternalChange={() => {}}
+        unit="°C"
+      />
+    )
+    expect(
+      screen.queryByText('No entity configured — using internal value')
+    ).toBeNull()
   })
 })

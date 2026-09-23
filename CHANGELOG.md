@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.6.6] — 2026-09-23
+
+### Fixed
+- On MQTT installs, the Home comfort panel now names the topic driving the
+  setpoint instead of reporting "No entity configured". A configured topic
+  with nothing published yet shows as unavailable rather than unbound.
+- Antifrost, the shoulder shutdown threshold and overtemp protection are now
+  reported correctly on MQTT installs instead of showing a misleading "no
+  entity configured".
+
 ## [1.6.5] — 2026-09-21
 
 ### Fixed
