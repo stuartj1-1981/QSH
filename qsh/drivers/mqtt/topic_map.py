@@ -568,16 +568,36 @@ _DEFAULT_DFAN_CONTROL_TOPIC = "control/dfan_control"
 _DEFAULT_PID_TARGET_TOPIC = "control/comfort_temp"
 
 
+def _control_topic_selector_key(which: str) -> str:
+    """Resolve the config['control'] key for an Active-Control ('dfan') or
+    PID-Target ('pid_target') selector. The single source of truth for the
+    selector set — configured_control_topic and control_topic_is_configured
+    both call this, so the two cannot disagree about which selectors exist
+    (INSTRUCTION-550 T3(a))."""
+    if which == "dfan":
+        return "dfan_control_topic"
+    if which == "pid_target":
+        return "pid_target_topic"
+    raise ValueError(f"unknown control topic selector: {which!r}")
+
+
 def configured_control_topic(config: Dict[str, Any], which: str) -> str:
     """Resolve the Active-Control ('dfan') or PID-Target ('pid_target') topic
     SUFFIX from config['control'], falling back to the legacy default. Prefix is
     applied by the caller (driver). Blank/whitespace ⇒ default."""
     ctrl = config.get("control", {}) or {}
-    if which == "dfan":
-        return (str(ctrl.get("dfan_control_topic") or "").strip()) or _DEFAULT_DFAN_CONTROL_TOPIC
-    if which == "pid_target":
-        return (str(ctrl.get("pid_target_topic") or "").strip()) or _DEFAULT_PID_TARGET_TOPIC
-    raise ValueError(f"unknown control topic selector: {which!r}")
+    key = _control_topic_selector_key(which)
+    default = _DEFAULT_DFAN_CONTROL_TOPIC if which == "dfan" else _DEFAULT_PID_TARGET_TOPIC
+    return (str(ctrl.get(key) or "").strip()) or default
+
+
+def control_topic_is_configured(config: Dict[str, Any], which: str) -> bool:
+    """INSTRUCTION-550 T3(a) — True when the operator has entered a non-blank
+    topic for the given selector, False otherwise (including a blank/
+    whitespace string, None, or an absent config['control'] section)."""
+    ctrl = config.get("control", {}) or {}
+    key = _control_topic_selector_key(which)
+    return bool(str(ctrl.get(key) or "").strip())
 
 
 def configured_control_json_path(config: Dict[str, Any], which: str) -> Optional[str]:

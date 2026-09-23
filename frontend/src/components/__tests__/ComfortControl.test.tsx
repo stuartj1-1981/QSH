@@ -131,6 +131,24 @@ describe('ComfortControl — read-only branch (INSTRUCTION-544B)', () => {
     expect(screen.getByText(/21\.5/)).toBeDefined()
   })
 
+  it('renders read-only via ControlValueDisplay naming an MQTT-shaped topic (INSTRUCTION-550)', () => {
+    render(
+      <ComfortControl
+        {...baseProps}
+        readOnly
+        controlSource={{
+          key: 'pid_target_internal',
+          value: 21.0,
+          source: 'external',
+          external_id: 'qsh/control/pid_target',
+          external_raw: '21.0',
+        }}
+      />
+    )
+    expect(screen.queryByText('20.0°')).toBeNull()
+    expect(screen.getByText(/via qsh\/control\/pid_target/)).toBeDefined()
+  })
+
   it('renders the fallback-with-warning state when the bound entity is unavailable', () => {
     render(
       <ComfortControl

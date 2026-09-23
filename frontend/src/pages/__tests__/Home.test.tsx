@@ -407,3 +407,70 @@ describe('Home editable operating setpoint — INSTRUCTION-377B', () => {
     expect(within(card).queryAllByRole('button').length).toBe(0)
   })
 })
+
+// INSTRUCTION-550 OB-05 — the predicate is computed in Home.tsx
+// (comfortEditable = singleSource && !comfortExternal), so ComfortControl's
+// own component tests cannot witness it (V1 review M5). Both cases carry a
+// reported control_sources row; the pair discriminates on what the row
+// says, never on whether one exists (V2 review R4) — a row-absent case
+// would assert the start-up window's editable stepper as expected
+// behaviour, which is the trap §1.3 and §6 name as an accepted residual.
+describe('Home single-source comfort provenance — INSTRUCTION-550 OB-05', () => {
+  afterEach(() => {
+    mockStatusData = null
+    mockLiveData = null
+    mockRawConfigData = null
+    mockProcConfigData = null
+  })
+
+  const comfortCard = () =>
+    screen.getByText('Comfort').closest('div.rounded-xl') as HTMLElement
+
+  it('reported-external row: read-only, no stepper', () => {
+    mockStatusData = {
+      control_sources: [
+        {
+          key: 'pid_target_internal',
+          value: 21.0,
+          source: 'external',
+          external_id: 'qsh/control/pid_target',
+          external_raw: '21.0',
+        },
+      ],
+    }
+    mockRawConfigData = {
+      heat_sources: [{ name: 'hp', type: 'heat_pump' }],
+    } as unknown as QshConfigYaml
+
+    render(<Home engineering={false} />)
+
+    const card = comfortCard()
+    expect(within(card).getByText(/via qsh\/control\/pid_target/)).toBeInTheDocument()
+    // Only the Shadow/Live toggle button remains — no +/- stepper pair.
+    expect(within(card).getAllByRole('button').length).toBe(1)
+  })
+
+  it('reported-internal row (empty external_id): the stepper IS offered — the control case', () => {
+    mockStatusData = {
+      control_sources: [
+        {
+          key: 'pid_target_internal',
+          value: 20.0,
+          source: 'internal',
+          external_id: '',
+          external_raw: '',
+        },
+      ],
+    }
+    mockRawConfigData = {
+      heat_sources: [{ name: 'hp', type: 'heat_pump' }],
+    } as unknown as QshConfigYaml
+
+    render(<Home engineering={false} />)
+
+    const card = comfortCard()
+    // Without this case, a panel that is read-only for any reason would
+    // still pass — this is what distinguishes a test from an observation.
+    expect(within(card).getAllByRole('button').length).toBe(3)
+  })
+})

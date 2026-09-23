@@ -12,13 +12,14 @@ interface ControlValueDisplayProps {
 }
 
 /**
- * Three-state display for control values that support external override.
+ * Four-state display for control values that support external override.
  *
  * | State                  | Detection                                     | Display                                        |
  * |------------------------|-----------------------------------------------|------------------------------------------------|
  * | Internal only          | source=internal && external_id=''             | Editable input showing internal value          |
  * | External connected     | source=external && external_raw!=''           | Read-only live value with source badge         |
  * | External unavailable   | source=internal && external_id!=''            | Fallback value with amber warning indicator    |
+ * | Unreported              | controlSource===undefined                     | Editable input, "Source not reported" caption  |
  */
 export function ControlValueDisplay({
   label,
@@ -121,7 +122,9 @@ export function ControlValueDisplay({
       )}
       {isInternalOnly && (
         <p className="text-xs text-[var(--text-muted)] mt-1">
-          No entity configured — using internal value
+          {controlSource
+            ? 'No entity configured — using internal value'
+            : 'Source not reported — showing the configured value'}
         </p>
       )}
     </div>

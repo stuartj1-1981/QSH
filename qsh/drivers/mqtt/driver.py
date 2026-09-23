@@ -35,6 +35,7 @@ from .topic_map import (
     command_topic_for_source,
     configured_control_json_path,
     configured_control_topic,
+    control_topic_is_configured,
     evaluate_availability_match,
     extract_json_value,
     get_control_topics,
@@ -734,6 +735,7 @@ class MQTTDriver:
         *,
         json_path: Optional[str] = None,
         max_age_s: Optional[float] = None,
+        topic_is_operator_configured: bool = False,
     ) -> ResolvedValue:
         """Read from auto-subscribed MQTT control topic cache, fall back to internal value.
 
@@ -761,6 +763,15 @@ class MQTTDriver:
                           for this topic; a present, within-age entry exits
                           the latch. The annunciator is untouched when
                           max_age_s is None.
+            topic_is_operator_configured: INSTRUCTION-550 T3(b) — True when
+                          the operator has configured this topic explicitly
+                          (control_topic_is_configured). On a cold cache
+                          (entry is None), an operator-configured topic is
+                          still reported in external_id, rather than being
+                          collapsed to None as though nothing were bound.
+                          Defaults to False, which preserves pre-550 byte-
+                          for-byte behaviour at every call site that does not
+                          pass it (OB-03).
 
         Returns:
             ResolvedValue with source="external" when MQTT cache hit+valid,
@@ -824,7 +835,7 @@ class MQTTDriver:
         return ResolvedValue(
             value=internal,
             source="internal",
-            external_id=full_topic if entry is not None else None,
+            external_id=full_topic if (entry is not None or topic_is_operator_configured) else None,
             external_raw=None,
         )
 
@@ -1677,6 +1688,7 @@ class MQTTDriver:
             default=False,
             validate=_parse_bool_payload,
             json_path=configured_control_json_path(config, "dfan"),
+            topic_is_operator_configured=control_topic_is_configured(config, "dfan"),
         )
         self._last_resolved["dfan_control"] = dfan_rv
 
@@ -1705,8 +1717,41 @@ class MQTTDriver:
             default=20.0,
             validate=lambda s: _validate_range(s, 10.0, 30.0),
             json_path=configured_control_json_path(config, "pid_target"),
+            topic_is_operator_configured=control_topic_is_configured(config, "pid_target"),
         )
-        self._last_resolved["comfort_temp"] = comfort_temp_rv
+        # INSTRUCTION-550 — the key is the HA driver's spec-table vocabulary
+        # (P4), which the frontend selects (P3); "pid_target_internal" is
+        # also the internal-fallback key this same call already reads, so
+        # the label now agrees with the key it falls back to.
+        self._last_resolved["pid_target_internal"] = comfort_temp_rv
+
+        # INSTRUCTION-550 T2 — antifrost, shoulder shutdown and overtemp are
+        # internal-only on MQTT: the HA driver's per-cycle external-setpoint
+        # resolver is HA-only (P6) and configured_control_topic admits only
+        # "dfan" and "pid_target" (P7), so on MQTT these three controls are
+        # internal by construction.
+        # Stating that is the point of these rows — after T4 an unreported
+        # control renders as unknown, so a driver that resolves a control
+        # internally must say so rather than stay silent. No MQTT topic is
+        # invented for any of the three (out of scope, §7).
+        self._last_resolved["antifrost_oat_threshold_internal"] = ResolvedValue(
+            value=deep_get(self._config, "antifrost_oat_threshold_internal", 7.0),
+            source="internal",
+            external_id=None,
+            external_raw=None,
+        )
+        self._last_resolved["hp_min_output_kw_internal"] = ResolvedValue(
+            value=deep_get(self._config, "hp_min_output_kw_internal", 2.0),
+            source="internal",
+            external_id=None,
+            external_raw=None,
+        )
+        self._last_resolved["overtemp_protection_internal"] = ResolvedValue(
+            value=deep_get(self._config, "overtemp_protection_internal", 23.0),
+            source="internal",
+            external_id=None,
+            external_raw=None,
+        )
 
         # INSTRUCTION-487 — DFS/session automation heat-source mode command.
         ttl_min = (config.get("source_selection") or {}).get("mode_command_ttl_minutes", 240.0)
