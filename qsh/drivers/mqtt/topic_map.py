@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -253,14 +254,21 @@ def parse_payload(payload_str: str, fmt: str = "plain", json_path: Optional[str]
             # string leg (`float("true")`) already fails; only JSON needs this.
             if isinstance(obj, bool):
                 return None
-            return float(obj)
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
+            value = float(obj)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError, OverflowError):
             return None
     else:
         try:
-            return float(payload_str)
-        except (ValueError, TypeError):
+            value = float(payload_str)
+        except (ValueError, TypeError, OverflowError):
             return None
+    # INSTRUCTION-549 — a non-finite number ("nan", "inf", "1e400", a JSON
+    # NaN literal) is not a reading. It parses to None, exactly as a
+    # non-numeric payload does, so every numeric field takes its existing
+    # unparseable path instead of carrying the value into control.
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 def parse_payload_string(
@@ -320,14 +328,22 @@ def parse_timestamp(value: Any, fmt: str) -> Optional[float]:
             if s.endswith("Z"):
                 s = s[:-1] + "+00:00"
             dt = datetime.fromisoformat(s)
-            return dt.timestamp()
-        if fmt == "epoch_s":
-            return float(value)
-        if fmt == "epoch_ms":
-            return float(value) / 1000.0
+            ts = dt.timestamp()
+        elif fmt == "epoch_s":
+            ts = float(value)
+        elif fmt == "epoch_ms":
+            ts = float(value) / 1000.0
+        else:
+            return None
+    except (ValueError, TypeError, AttributeError, OverflowError):
         return None
-    except (ValueError, TypeError, AttributeError):
+    # INSTRUCTION-549 — a non-finite timestamp is not a timestamp. Returning
+    # None makes the caller fall back to the payload's arrival age, as it
+    # already does for an unparseable one; a NaN age would otherwise fail
+    # every threshold test and grade any payload "good".
+    if not math.isfinite(ts):
         return None
+    return ts
 
 
 def extract_json_value(payload_str: str, json_path: str) -> Any:

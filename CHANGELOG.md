@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.6.7] — 2026-09-25
+
+### Changed
+- Swarm HTTP calls now use keep-alive connections, cutting connection and DNS
+  overhead. Registry status is now checked every 5 minutes instead of every
+  minute (the safety kill-switch check remains every 60 seconds, unchanged).
+
+### Fixed
+- A fallback outdoor temperature value could be written into history as if
+  it were a real sensor reading; invalid (non-numeric) MQTT sensor values
+  are now rejected instead of being used or stored.
+- Room emitter type (underfloor heating, fan coil, radiator) is now
+  correctly reported to the fleet — previously every room was reported as
+  "radiator" regardless of its actual configuration.
+
 ## [1.6.6] — 2026-09-23
 
 ### Fixed
