@@ -5,6 +5,7 @@ Pure data containers (SensorData, TrvOffsetTracker) remain in sensors.py.
 """
 
 import logging
+import math
 import time
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -85,6 +86,17 @@ def _register_events() -> None:
         name="HA.outdoor_no_entity_fallback",
         kind=EventKind.LATCHED,
         payload_fields=("value", "from_last_valid"),
+        default_level=logging.WARNING,
+    ))
+    # INSTRUCTION-549 — the entity is present and graded fresh, but its state
+    # does not parse to a finite number, so this cycle delivers the hardcoded
+    # fall-back with the freshness flag raised. Singleton LATCHED WARNING, no
+    # latch key: one condition per process, diagnostic payload only. Level and
+    # shape are parity with the no-entity spec registered immediately above.
+    ann.register(EventSpec(
+        name="HA.outdoor_fresh_unparseable",
+        kind=EventKind.LATCHED,
+        payload_fields=("value", "entity"),
         default_level=logging.WARNING,
     ))
     # INSTRUCTION-301 — hot_water_active last-valid hold across HW-source comms
@@ -1330,9 +1342,27 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         ann = get_annunciator()
         temp_raw, is_fresh = _fetch_with_staleness(outdoor_entity, "outdoor", default=5.0)
         if is_fresh:
-            data.outdoor_temp = safe_float(temp_raw, 5.0)
+            # INSTRUCTION-549 — parse ONCE with a None default, so the branch
+            # below learns whether the default was taken without re-parsing
+            # and without doubling the WARNING the parser emits on a non-empty
+            # unparseable state. A value test cannot serve here: a genuine
+            # five-degree reading is indistinguishable by value from the
+            # fall-back, which is the defect one layer down.
+            parsed_outdoor = safe_float(temp_raw, None)
+            if parsed_outdoor is not None and math.isfinite(parsed_outdoor):
+                data.outdoor_temp = parsed_outdoor
+                # The ONLY write to the store. A value that did not parse to a
+                # finite number never enters the history the hold limbs replay.
+                _last_valid_outdoor_temp = parsed_outdoor
+                ann.exited("HA.outdoor_fresh_unparseable")
+            else:
+                data.outdoor_temp = 5.0
+                ann.entered(
+                    "HA.outdoor_fresh_unparseable",
+                    value=data.outdoor_temp,
+                    entity=outdoor_entity,
+                )
             data.has_outdoor = True
-            _last_valid_outdoor_temp = data.outdoor_temp
             ann.exited("HA.outdoor_stale_lastvalid")
         else:
             if _last_valid_outdoor_temp is not None:
