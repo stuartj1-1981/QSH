@@ -377,11 +377,15 @@ def _apply_mode_ha_service(config, optimal_mode):
 
 
 def _register_events() -> None:
-    """Per-call registration (INSTRUCTION-506 T4), following the
+    """Per-call registration of the two readback events, following the
     sensor_fetcher.py:25-31 pattern — register() is idempotent for identical
     specs, so per-call cost is a small dict lookup. Import-time registration
     is not used here: DuplicateRegistrationError on a conflicting spec would
-    make import order a real property in a write-path module."""
+    make import order a real property in a write-path module.
+
+    HA.mode_readback_mismatch (INSTRUCTION-506 T4) annunciates the opening of
+    a mismatch run; HA.mode_readback_persisted (INSTRUCTION-555 T1) annunciates
+    the escalation once the run reaches readback_threshold."""
     ann = get_annunciator()
     ann.register(EventSpec(
         name="HA.mode_readback_mismatch",
@@ -389,6 +393,14 @@ def _register_events() -> None:
         payload_fields=("commanded", "observed", "consecutive", "hp_power_kw"),
         latch_key=("commanded", "observed"),
         default_level=logging.WARNING,
+    ))
+    # A single global latch: one process runs one readback count, and any count reset must clear it whatever the commanded mode (INSTRUCTION-555 §1.3).
+    ann.register(EventSpec(
+        name="HA.mode_readback_persisted",
+        kind=EventKind.LATCHED,
+        payload_fields=("commanded", "observed", "consecutive", "threshold"),
+        latch_key=(),
+        default_level=logging.ERROR,
     ))
 
 
@@ -409,6 +421,9 @@ def compute_mode_readback(
     counts consecutive cycles where observed_mode != optimal_mode, suppresses the
     count when the HP is legitimately idle because demand is satisfied (commanded
     flow <= return + margin), and raises an operator alarm at readback_threshold.
+    The alarm annunciates once per fault episode, at ERROR, through the latched
+    event HA.mode_readback_persisted, and exits at INFO when the count resets
+    (INSTRUCTION-555); the per-cycle diagnostic above the threshold is DEBUG.
 
     The mismatch counter is independent of should_update_mode — alarm semantics are
     intent-vs-reality, not debouncer state (INSTRUCTION-116 D1). should_update_mode
@@ -455,6 +470,7 @@ def compute_mode_readback(
                 # not an unresponsive HP. Do not escalate; reset the counter.
                 new_mismatch_count = 0
                 ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=observed_mode)
+                ann.exited("HA.mode_readback_persisted", commanded=optimal_mode, observed=observed_mode, level=logging.INFO)
                 logging.debug(
                     "Readback: commanded heat but HP idle with flow %.1f°C <= return "
                     "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
@@ -463,12 +479,15 @@ def compute_mode_readback(
             else:
                 new_mismatch_count = prev_mismatch_count + 1
                 if new_mismatch_count >= readback_threshold:
-                    logging.error(
-                        "Mode readback mismatch persisted for %d cycles "
-                        "(threshold %d) — HP not responding to commanded '%s'. "
-                        "Check Octopus API status and HP connectivity.",
+                    logging.debug(
+                        "Mode readback escalation (%d consecutive, threshold %d): "
+                        "commanded %s but HP power=%.2fkW (observed %s)",
                         new_mismatch_count, readback_threshold, optimal_mode,
+                        hp_power_kw, observed_mode,
                     )
+                    ann.entered("HA.mode_readback_persisted",
+                                commanded=optimal_mode, observed=observed_mode,
+                                consecutive=new_mismatch_count, threshold=readback_threshold)
                 elif should_update_mode:
                     logging.debug(
                         "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
@@ -502,6 +521,7 @@ def compute_mode_readback(
             # below, so it recovers the closing half of the tuple without new
             # state (INSTRUCTION-506 T4).
             ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=prev_mode)
+            ann.exited("HA.mode_readback_persisted", commanded=optimal_mode, observed=observed_mode, level=logging.INFO)
         applied_mode = observed_mode
 
     return applied_mode, new_mismatch_count

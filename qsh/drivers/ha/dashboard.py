@@ -800,7 +800,7 @@ def _view_engineering(config: Dict) -> dict:
         "title": "Flow Comparison (48h)",
         "hours_to_show": 48,
         "entities": [
-            {"entity": "input_number.qsh_shadow_flow", "name": "Actual"},
+            {"entity": "input_number.qsh_shadow_flow", "name": "Applied"},
             {"entity": "input_number.qsh_det_flow", "name": "Deterministic"},
             {"entity": "input_number.qsh_rl_proposed_flow", "name": "RL Proposed"},
         ],

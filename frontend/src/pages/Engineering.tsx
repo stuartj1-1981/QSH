@@ -115,9 +115,9 @@ function PipelineState({
         <Stat label="Cycle" value={`#${cycleNumber ?? 0}`} help="Pipeline cycle counter — increments every 30 s." />
         <Stat label="State" value={operatingState ?? '—'} help="Current operating state machine value (e.g. heating, off, antifrost, shoulder_off, summer_off)." />
         <Stat label="Mode" value={appliedMode ?? '—'} help="HP mode actually applied this cycle (heat / off). May differ from controller intent if a guard suppressed the command." />
-        <Stat label="Det Flow" value={detFlow != null ? `${detFlow.toFixed(1)}°C` : '—'} help="Flow temperature target from the deterministic controller chain — physics-only, no learning." />
-        <Stat label="RL Flow" value={rlFlow != null ? `${rlFlow.toFixed(1)}°C` : 'n/a'} help="Flow temperature target proposed by the RL agent. Shown as ‘n/a’ during shadow mode or before training maturity." />
-        <Stat label="Applied Flow" value={appliedFlow != null ? `${appliedFlow.toFixed(1)}°C` : '—'} help="Flow temperature actually commanded this cycle, after blend and any safety caps." />
+        <Stat label="Det Flow" value={detFlow != null ? `${detFlow.toFixed(1)}°C` : '—'} help="This cycle's flow target from the deterministic chain: demand-proportional term, weather-compensation floor and forecast adjustments. Physics only, no learning. The arbiter blends it with RL Flow and applies the safety envelope before anything is sent." />
+        <Stat label="RL Flow" value={rlFlow != null ? `${rlFlow.toFixed(1)}°C` : 'n/a'} help="Flow target proposed by the RL agent this cycle, before the arbiter blends it with Det Flow. Shown as ‘n/a’ during shadow mode or before training maturity." />
+        <Stat label="Applied Flow" value={appliedFlow != null ? `${appliedFlow.toFixed(1)}°C` : '—'} help="Flow setpoint last sent to the heat pump. It changes only when a write passes the debouncer (minimum change, step rounding, hold time), so it can be older than this cycle and may differ from the rounded value the unit received. Compare with Det Flow for this cycle's target." />
         <Stat label="Blend" value={rlBlend != null ? rlBlend.toFixed(3) : '—'} help="RL blend factor: 0 = pure deterministic, 1 = pure RL. Ramps up only with training samples and is clamped during shadow mode." />
         <Stat label="Total Demand" value={totalDemand != null ? `${totalDemand.toFixed(1)} kW` : '—'} help="Sum of per-room thermal demand estimates this cycle." />
         <div className="flex items-center gap-2">

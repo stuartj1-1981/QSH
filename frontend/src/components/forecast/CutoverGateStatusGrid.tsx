@@ -1,4 +1,4 @@
-import { Check, X } from 'lucide-react'
+import { Check, Minus, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { HelpTip } from '../HelpTip'
 import type { CutoverGatesResponse } from '../../types/api'
@@ -9,7 +9,20 @@ interface CutoverGateStatusGridProps {
   error: string | null
 }
 
-function GateDot({ pass, label }: { pass: boolean; label: string }) {
+function GateDot({ pass, label, noData }: { pass: boolean; label: string; noData?: boolean }) {
+  if (noData) {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center justify-center w-7 h-5 rounded text-xs',
+          'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border)]',
+        )}
+        title={`${label}: no data`}
+      >
+        <Minus size={12} />
+      </span>
+    )
+  }
   return (
     <span
       className={cn(
@@ -71,7 +84,7 @@ export function CutoverGateStatusGrid({
                 <div key={scope} className="border-t border-[var(--border)]">
                   <div className="flex items-center gap-2 py-1 text-sm">
                     <span className="w-32 text-[var(--text-muted)]">{scope}</span>
-                    <GateDot pass={gate.prediction_error_gate_pass} label="err" />
+                    <GateDot pass={gate.prediction_error_gate_pass} label="err" noData={gate.prediction_error_p95_c === null} />
                     <GateDot pass={gate.comfort_gate_pass} label="cmf" />
                     <GateDot pass={gate.composite_confidence_gate_pass} label="cnf" />
                     <GateDot pass={gate.twin_gate_pass} label="twn" />

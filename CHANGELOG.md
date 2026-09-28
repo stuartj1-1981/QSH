@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.6.8] — 2026-09-28
+
+### Fixed
+- The forecast cutover-gate prediction-error check could silently report a
+  pass when it had no data to evaluate. It now correctly reports "no data",
+  and the dashboard shows a distinct "no data" indicator instead of a false
+  green tick.
+- The comfort gate used for cutover evaluation was filtering on data that
+  never matched, so it silently evaluated nothing for a given room.
+
+### Changed
+- Clarified the Engineering dashboard's flow-temperature labels and
+  tooltips (deterministic, RL, and applied flow), and relabelled the HA
+  flow-comparison chart's "Actual" trace to "Applied" for accuracy.
+- The heat-pump mode-readback mismatch alarm now fires once per fault
+  episode instead of repeating, with a matching recovery notice when it
+  clears. Routine per-cycle diagnostics were moved out of the operator log.
+
 ## [1.6.7] — 2026-09-25
 
 ### Changed

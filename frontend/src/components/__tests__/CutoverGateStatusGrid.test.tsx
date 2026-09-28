@@ -67,4 +67,26 @@ describe('CutoverGateStatusGrid', () => {
     rerender(<CutoverGateStatusGrid data={null} loading={false} error="oops" />)
     expect(screen.getByRole('alert')).toHaveTextContent('oops')
   })
+
+  it('shows the err cell as no data when prediction_error_p95_c is null', () => {
+    render(
+      <CutoverGateStatusGrid
+        data={_resp(_gate({
+          prediction_error_p95_c: null,
+          prediction_error_gate_pass: false,
+          cutover_eligible: false,
+        }))}
+        loading={false}
+        error={null}
+      />,
+    )
+    expect(screen.getByTitle('err: no data')).toBeInTheDocument()
+  })
+
+  it('no no-data mark when prediction_error_p95_c is a number', () => {
+    render(
+      <CutoverGateStatusGrid data={_resp(_gate())} loading={false} error={null} />,
+    )
+    expect(screen.queryByTitle('err: no data')).toBeNull()
+  })
 })

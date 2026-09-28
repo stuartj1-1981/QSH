@@ -292,6 +292,7 @@ def _compute_one_gate(
         "rationale": _gate_rationale(
             error_gate_pass, comfort_gate_pass, conf_gate_pass, twin_gate_pass,
             cycles_holding, cycles_required,
+            error_no_data=(p95_error is None),
         ),
     }
 
@@ -304,74 +305,16 @@ def _evaluate_prediction_error_gate(
     controller: str, scope: str, threshold_c: float, window_cycles: int,
     history_store,
 ) -> Tuple[Optional[float], bool]:
-    """Reads qsh_forecast_reconciliation; worst-case-binding p95 per weather class.
+    """Reports no data: (None, False).
 
-    Returns (worst_p95, pass_flag). pass_flag iff worst_p95 <= threshold_c.
-    Returns (None, False) when no qualifying data.
+    The gate needs `controller`, `room` and a weather class on each
+    qsh_forecast_reconciliation point. `Historian.query()` returns no tags
+    and filters on `room` and `hw_active` only, and the read contract is not
+    widened (owner ruling, 27 September 2026). The gate therefore issues no
+    query and reports no data (INSTRUCTION-557, FI-48), and returns False so
+    that it is never read as passed.
     """
-    try:
-        import numpy as np
-    except Exception:
-        logger.warning("_evaluate_prediction_error_gate: numpy not available")
-        return (None, False)
-
-    from qsh.api.state import shared_state
-    from qsh.historian import get_historian
-
-    historian = get_historian()
-    if historian is None or not getattr(historian, "is_active", False):
-        return (None, False)
-
-    config = shared_state.get_config() or {}
-    cycle_period_s = float(config.get("update_interval_s", 300))
-    window_seconds = window_cycles * cycle_period_s
-
-    try:
-        result = historian.query(
-            measurement="qsh_forecast_reconciliation",
-            fields=["error_c"],
-            time_from=f"-{int(window_seconds)}s",
-            time_to="now()",
-            aggregation="mean",
-            interval=f"{int(cycle_period_s)}s",
-        )
-        points = result.get("points", []) if result else []
-    except Exception as exc:
-        logger.warning(
-            "_evaluate_prediction_error_gate: historian query failed: %s", exc,
-        )
-        return (None, False)
-
-    by_class: Dict[str, List[float]] = {}
-    for p in points:
-        if p.get("controller") != controller:
-            continue
-        room_tag = p.get("room")
-        if room_tag != scope:
-            continue
-        wc = p.get("weather_class") or p.get("oat_class")
-        err = p.get("error_c")
-        if err is None or wc is None:
-            continue
-        try:
-            by_class.setdefault(str(wc), []).append(float(err))
-        except (TypeError, ValueError):
-            continue
-
-    worst_p95: Optional[float] = None
-    for wc, errs in by_class.items():
-        if len(errs) < 5:
-            continue
-        try:
-            p95 = float(np.percentile(np.abs(errs), 95))
-        except Exception:
-            continue
-        if worst_p95 is None or p95 > worst_p95:
-            worst_p95 = p95
-
-    if worst_p95 is None:
-        return (None, False)
-    return (worst_p95, worst_p95 <= threshold_c)
+    return (None, False)
 
 
 def _evaluate_comfort_gate(
@@ -380,6 +323,12 @@ def _evaluate_comfort_gate(
     """Counts attributable Alarm A events per design §6.2 attribution rule.
 
     Returns (count, pass_flag). Pass iff count == 0.
+
+    The room scope comes from the query's `room=` filter, because `query()`
+    points carry no tags. A room-scoped query returns Alarm A only, because
+    Alarm B is written with the room tag `_installation`. The bucket is one
+    minute, because the qsdb store rejects a seconds interval and Alarm A
+    re-fires at most once per hour per room (INSTRUCTION-557).
     """
     import json
 
@@ -400,8 +349,9 @@ def _evaluate_comfort_gate(
             fields=["payload_json"],
             time_from=f"-{int(window_seconds)}s",
             time_to="now()",
+            room=None if scope == "_global" else scope,
             aggregation="last",
-            interval=f"{int(cycle_period_s)}s",
+            interval="1m",
         )
         points = result.get("points", []) if result else []
     except Exception as exc:
@@ -410,11 +360,7 @@ def _evaluate_comfort_gate(
 
     attributable_count = 0
     for p in points:
-        if p.get("alarm_id") != "A":
-            continue
         if scope == "_global":
-            continue
-        if p.get("room") != scope:
             continue
         payload_str = p.get("payload_json")
         try:
@@ -520,9 +466,10 @@ def _evaluate_twin_gate(scope: str, snapshot) -> Tuple[bool, bool]:
 def _gate_rationale(
     error_pass: bool, comfort_pass: bool, conf_pass: bool, twin_pass: bool,
     cycles_holding: int, cycles_required: int,
+    *, error_no_data: bool = False,
 ) -> str:
     failed = []
-    if not error_pass:
+    if not error_pass and not error_no_data:
         failed.append("prediction-error")
     if not comfort_pass:
         failed.append("comfort")
@@ -530,6 +477,14 @@ def _gate_rationale(
         failed.append("composite-confidence")
     if not twin_pass:
         failed.append("twin-drift")
+    if error_no_data:
+        parts = [
+            "No data: prediction-error (per-controller forecast error is not readable from the historian)."
+        ]
+        if failed:
+            parts.append(f"Failing gates: {', '.join(failed)}.")
+        parts.append(f"Cycles held: {cycles_holding}/{cycles_required}.")
+        return " ".join(parts)
     if failed:
         return (
             f"Failing gates: {', '.join(failed)}. "
