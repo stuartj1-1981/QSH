@@ -228,6 +228,17 @@ describe('Engineering page tooltips', () => {
     expect(block.getAllByLabelText('Help')).toHaveLength(9)
   })
 
+  it('Applied Flow help says it is the last write, not this cycle', async () => {
+    // INSTRUCTION-558B T3 — walk from the label to its own help button.
+    render(<Engineering />)
+    const block = within(screen.getByTestId('pipeline-state'))
+    const label = block.getByText('Applied Flow').closest('div') as HTMLElement
+    fireEvent.click(within(label).getByRole('button', { name: /help/i }))
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip.textContent).toContain('last sent to the heat pump')
+    expect(tooltip.textContent).not.toMatch(/commanded this cycle/)
+  })
+
   it('chart titles do not advertise specific time windows', () => {
     // INSTRUCTION-239: the buffer-depth window grows from startup onwards,
     // so a chart title that commits to "(48h)" or "(7d)" is a UX defect
