@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [1.6.9] — 2026-10-03
+
+### Added
+- Historian event records: alarm and forecast-reconciliation records can
+  now be read back from the historian through a new events endpoint.
+
+### Changed
+- Octopus API host migration: QSH now uses Octopus's new public API host
+  (`api.oegb-kraken.energy`). Update before Octopus retires the old host.
+- Heat-pump mode readback fault: the UI banner and the log now agree on
+  timing, so the banner appears at the same moment as the log line.
+- Minor code cleanup. No behaviour changes.
+
+### Fixed
+- Octopus gas rate: the Variable gas rate is now refreshed daily, so a
+  price change under the same tariff is picked up without a restart. A
+  failing rate fetch now raises one alarm when it starts and one when it
+  clears, instead of a warning every minute.
+- Forecast page: alarm history, the reconciliation dashboard and the
+  prediction-error cutover gate now show real data.
+- Alarm B now loads its energy history at boot on InfluxDB installs.
+- Static export rate: consistent handling on HA and MQTT installs; an
+  invalid value is priced as no export and flagged once.
+
+### Removed
+- The unused Home Assistant Lovelace dashboard generator.
+
 ## [1.6.8] — 2026-09-28
 
 ### Fixed
