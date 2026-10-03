@@ -3,6 +3,7 @@ import { apiUrl } from '../lib/api'
 import type {
   HistorianMeasurementsResponse,
   HistorianQueryResponse,
+  HistorianEventsResponse,
   HistorianTagsResponse,
   HistorianFieldsResponse,
   HistorianFieldClass,
@@ -115,6 +116,92 @@ export function useHistorianQuery(
 
     return () => controller.abort()
   }, [measurement, fieldsKey, room, hwActive, timeFrom, timeTo, interval, aggregation, trigger, doFetch])
+
+  return { data, loading, error, refetch }
+}
+
+interface UseHistorianEventsResult {
+  data: HistorianEventsResponse | null
+  loading: boolean
+  error: string | null
+  refetch: () => void
+}
+
+// A refused request (400) carries its reason as a string `detail`; any other
+// body, or one that does not parse, has none.
+function eventsErrorDetail(body: unknown): string | null {
+  if (typeof body === 'object' && body !== null && 'detail' in body) {
+    return typeof body.detail === 'string' ? body.detail : null
+  }
+  return null
+}
+
+// INSTRUCTION-565D — the raw records of an event measurement with their tag
+// values. The effect is keyed on the option values, not on the options
+// object, so a caller passing a new literal on each render fetches once.
+export function useHistorianEvents(
+  measurement: string,
+  options: { room?: string; controller?: string; timeFrom?: string } = {},
+): UseHistorianEventsResult {
+  const [data, setData] = useState<HistorianEventsResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [trigger, setTrigger] = useState(0)
+
+  const { room, controller, timeFrom = '-7d' } = options
+
+  const refetch = useCallback(() => setTrigger((n) => n + 1), [])
+
+  const doFetch = useCallback((
+    m: string,
+    tf: string,
+    r: string | undefined,
+    c: string | undefined,
+    signal: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({ measurement: m, from: tf })
+    // The route refuses an empty filter value, so an empty string is not sent.
+    if (r) params.set('room', r)
+    if (c) params.set('controller', c)
+
+    return fetch(apiUrl(`api/historian/events?${params}`), { signal })
+      .then((resp) => {
+        if (resp.ok) {
+          return resp.json().then((json: HistorianEventsResponse) => {
+            setData(json)
+            setError(json.error ?? null)
+            setLoading(false)
+          })
+        }
+        return resp.json()
+          .catch((e: unknown) => {
+            if (e instanceof DOMException && e.name === 'AbortError') throw e
+            return null
+          })
+          .then((body: unknown) => {
+            setData(null)
+            setError(eventsErrorDetail(body) ?? `HTTP ${resp.status}`)
+            setLoading(false)
+          })
+      })
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setError(e instanceof Error ? e.message : 'Fetch failed')
+        setLoading(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!measurement) return
+
+    const abortController = new AbortController()
+    // Loading is set through a microtask, as in useHistorianQuery, to avoid a
+    // synchronous setState in the effect.
+    queueMicrotask(() => setLoading(true))
+    doFetch(measurement, timeFrom, room, controller, abortController.signal)
+
+    return () => abortController.abort()
+  }, [measurement, timeFrom, room, controller, trigger, doFetch])
 
   return { data, loading, error, refetch }
 }

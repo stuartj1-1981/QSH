@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useHistorianMeasurements, useHistorianQuery, useHistorianFields } from '../useHistorian'
+import { useHistorianMeasurements, useHistorianQuery, useHistorianFields, useHistorianEvents } from '../useHistorian'
 import { apiUrl } from '../../lib/api'
+import type { HistorianEventsResponse } from '../../types/api'
 
 describe('useHistorianMeasurements', () => {
   afterEach(() => {
@@ -254,5 +255,238 @@ describe('useHistorianFields', () => {
     })
 
     expect(fetchSpy.mock.calls[0][0]).toBe(apiUrl('api/historian/fields?measurement=qsh_room'))
+  })
+})
+
+// INSTRUCTION-565D — the event-record read. The fixtures are typed as the
+// response contract in types/api.ts, so the tsc gate checks them against it.
+describe('useHistorianEvents', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // As the route returns them: newest first, every row with its tag values;
+  // `t` is the row time and `timestamp` the event time.
+  const alarmEvents: HistorianEventsResponse = {
+    measurement: 'qsh_alarm_event',
+    rows: [
+      {
+        t: 1790000300,
+        timestamp: 1790000150.4,
+        payload_json: '{"room_temp": 16.2}',
+        alarm_id: 'A',
+        severity: 'notification',
+        room: 'lounge',
+        comparator_mode: '_none',
+      },
+      {
+        t: 1789990300,
+        timestamp: 1789990150.9,
+        payload_json: '{}',
+        alarm_id: 'B',
+        severity: 'notification',
+        room: '_installation',
+        comparator_mode: '_none',
+      },
+    ],
+    truncated: false,
+  }
+
+  const reconciliationEvents: HistorianEventsResponse = {
+    measurement: 'qsh_forecast_reconciliation',
+    rows: [
+      {
+        t: 1790000300,
+        predicted: 20.4,
+        actual: 20.1,
+        error_c: 0.3,
+        prediction_target_ts: 1790000100,
+        basis_summary: 'oat=4.0',
+        basis_hash: '9f2c1a',
+        controller: 'valve_controller',
+        room: 'lounge',
+        oat_class: 'cold',
+        solar_class: 'low',
+        wind_class: 'calm',
+      },
+    ],
+    truncated: false,
+  }
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  it('returns the rows of the response as data, with error null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(alarmEvents))
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.data).not.toBeNull()
+    })
+
+    expect(result.current.data).toEqual(alarmEvents)
+    expect(result.current.error).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('is loading while the request is in flight, and not after', async () => {
+    let resolveFetch: (value: Response) => void = () => {}
+    vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve
+      }),
+    )
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(true)
+    })
+    expect(result.current.data).toBeNull()
+
+    resolveFetch(jsonResponse(alarmEvents))
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false)
+    })
+    expect(result.current.data?.rows).toEqual(alarmEvents.rows)
+  })
+
+  it('requests measurement and from=-7d through apiUrl, with no room or controller when not given', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(alarmEvents))
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.data).not.toBeNull()
+    })
+
+    const prefix = apiUrl('api/historian/events?')
+    const calledUrl = String(fetchSpy.mock.calls[0][0])
+    expect(calledUrl.slice(0, prefix.length)).toBe(prefix)
+    const params = new URLSearchParams(calledUrl.slice(prefix.length))
+    expect(params.get('measurement')).toBe('qsh_alarm_event')
+    expect(params.get('from')).toBe('-7d')
+    expect(params.has('room')).toBe(false)
+    expect(params.has('controller')).toBe(false)
+  })
+
+  it('adds room and controller to the request when given', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(reconciliationEvents))
+
+    const { result } = renderHook(() =>
+      useHistorianEvents('qsh_forecast_reconciliation', {
+        room: 'lounge',
+        controller: 'valve_controller',
+        timeFrom: '-24h',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(result.current.data).not.toBeNull()
+    })
+
+    const prefix = apiUrl('api/historian/events?')
+    const calledUrl = String(fetchSpy.mock.calls[0][0])
+    expect(calledUrl.slice(0, prefix.length)).toBe(prefix)
+    const params = new URLSearchParams(calledUrl.slice(prefix.length))
+    expect(params.get('measurement')).toBe('qsh_forecast_reconciliation')
+    expect(params.get('from')).toBe('-24h')
+    expect(params.get('room')).toBe('lounge')
+    expect(params.get('controller')).toBe('valve_controller')
+  })
+
+  it('reports the error a 200 response carries in its body', async () => {
+    const notConfigured: HistorianEventsResponse = {
+      error: 'Historian not configured. Enable in qsh.yaml historian section.',
+      rows: [],
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(notConfigured))
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(
+        'Historian not configured. Enable in qsh.yaml historian section.',
+      )
+    })
+    expect(result.current.data).toEqual(notConfigured)
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('reports the detail of a 400 and sets data to null', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(alarmEvents))
+      // FastAPI's body for a request the route refuses.
+      .mockResolvedValueOnce(jsonResponse({ detail: "malformed room: 'living room'" }, 400))
+
+    const initialProps: { room: string | undefined } = { room: undefined }
+    const { result, rerender } = renderHook(
+      ({ room }) => useHistorianEvents('qsh_alarm_event', { room }),
+      { initialProps },
+    )
+
+    // A first, accepted request leaves data set, so the null asserted below
+    // is the refusal's doing and not the initial state.
+    await waitFor(() => {
+      expect(result.current.data).not.toBeNull()
+    })
+
+    rerender({ room: 'living room' })
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("malformed room: 'living room'")
+    })
+    expect(result.current.data).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
+  it("reports 'HTTP 502' for a 502 whose body is not JSON", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('<html><body><h1>502 Bad Gateway</h1></body></html>', {
+        status: 502,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    )
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.error).toBe('HTTP 502')
+    })
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('reports the message of a rejected fetch', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const { result } = renderHook(() => useHistorianEvents('qsh_alarm_event'))
+
+    await waitFor(() => {
+      expect(result.current.error).toBe('Failed to fetch')
+    })
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('does not fetch when measurement is empty', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('no request expected'))
+
+    const { result } = renderHook(() => useHistorianEvents(''))
+
+    // Give any request the hook might start time to be made.
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(false)
+    expect(result.current.data).toBeNull()
   })
 })

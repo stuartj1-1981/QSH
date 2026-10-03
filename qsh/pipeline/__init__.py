@@ -130,6 +130,12 @@ def _resolve_ha_defaults(kwargs):
 
         resolved["apply_hardware_control_fn"] = apply_hardware_control
 
+    # INSTRUCTION-563 — HardwareController's readback-fault monitoring time.
+    if resolved.get("readback_threshold_fn") is None:
+        from ..drivers.ha.hardware_dispatch import readback_threshold_cycles
+
+        resolved["readback_threshold_fn"] = readback_threshold_cycles
+
     if resolved.get("get_reliable_cop_fn") is None:
         from ..drivers.ha.cop_fetcher import get_reliable_cop
 
@@ -266,7 +272,6 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
             # function (mirrors the HA apply_hardware_control import in
             # _resolve_ha_defaults above).
             from ..drivers.ha.hardware_dispatch import (
-                _derive_readback_threshold,
                 compute_mode_readback,
             )
 
@@ -291,12 +296,10 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
                 prev_mode = args[4] if len(args) > 4 else None
                 # should_update_mode=True: MQTT re-publishes flow+mode together
                 # every cycle in write_outputs, so the mode write is never
-                # debounced away (mode_debounce_time_s=0.0). The threshold is the
-                # SINGLE per-source threshold (INSTRUCTION-339B B-1/B-2) — the same
-                # _derive_readback_threshold the HA path uses — driven by the
-                # active source's response_timeout_s that HardwareController
-                # resolves and forwards, so the per-source operator alarm fires on
-                # MQTT too. The floor/margin remain a lower bound.
+                # debounced away. The slot returns the applied mode and the
+                # mismatch count; the monitoring time is the MQTT
+                # readback_threshold_fn below, which HardwareController calls
+                # with the active source's resolved timeout (INSTRUCTION-563).
                 return compute_mode_readback(
                     prev_mismatch_count=kw.get("prev_mismatch_count", 0),
                     optimal_mode=optimal_mode,
@@ -305,9 +308,6 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
                     optimal_flow=optimal_flow,
                     return_temp=kw.get("return_temp"),
                     has_live_return_temp=kw.get("has_live_return_temp", False),
-                    readback_threshold=_derive_readback_threshold(
-                        0.0, response_timeout_s=kw.get("response_timeout_s")
-                    ),
                     should_update_mode=True,
                 )
 
@@ -333,6 +333,17 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
                 return applied_mode, 0
 
             resolved["apply_hardware_control_fn"] = _noop_hw
+
+    if driver_type == "mqtt" and resolved.get("readback_threshold_fn") is None:
+        from ..drivers.ha.hardware_dispatch import _derive_readback_threshold
+
+        def _mqtt_readback_threshold(debouncer, response_timeout_s=None):
+            # MQTT re-publishes flow and mode together every cycle, so no mode
+            # write is debounced away: the debounce term is 0.0 (the value the
+            # slot used before INSTRUCTION-563). The debouncer is not read.
+            return _derive_readback_threshold(0.0, response_timeout_s=response_timeout_s)
+
+        resolved["readback_threshold_fn"] = _mqtt_readback_threshold
 
     # COP: already in InputBlock.hp_cop
     # Signature: get_cop(config, cop_history)
@@ -456,7 +467,6 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         room_control_state=kw.get("room_control_state"),
         apply_dissipation_fn=kw.get("apply_dissipation_fn"),
         apply_hybrid_fn=kw.get("apply_hybrid_fn"),
-        calc_flow_adjust_fn=kw.get("calc_flow_adjust_fn"),
     )
     # INSTRUCTION-117D Task 2d: single pipeline-owned CycleProtectionState /
     # CycleProtectionGate. One physical heat source → one pair of timers.
@@ -586,6 +596,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             check_control_urgency_fn=kw.get("check_control_urgency_fn"),
             apply_hardware_control_fn=kw.get("apply_hardware_control_fn"),
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),
+            readback_threshold_fn=kw.get("readback_threshold_fn"),
         ),
         ShadowController(
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),

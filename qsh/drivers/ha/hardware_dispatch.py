@@ -16,7 +16,6 @@ import math
 from typing import Optional
 from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
-from qsh.events import EventKind, EventSpec, get_annunciator
 
 
 # Lower bound on the readback mismatch alarm threshold. Preserves
@@ -39,13 +38,12 @@ PIPELINE_CYCLE_SECONDS = 30.0
 # covers the upper end of normal response.
 READBACK_SAFETY_MARGIN_CYCLES = 6
 
-# Legacy alias retained for downstream consumers that imported the
-# pre-INSTRUCTION-249 name (qsh/pipeline/controllers/hardware_controller.py,
-# qsh/pipeline/context.py, qsh/api/state.py). Those modules use this name
-# only as a default for fields/initial state; the live alarm threshold
-# is now derived per-debouncer via _derive_readback_threshold() called
-# inside apply_hardware_control(). Binding to the floor preserves their
-# behaviour at the legacy value.
+# Legacy alias retained for the modules that use it as a default for
+# fields/initial state (qsh/pipeline/context.py, qsh/api/state.py) and as
+# HardwareController's default monitoring time when no derivation is injected
+# (qsh/pipeline/controllers/hardware_controller.py). The live monitoring time
+# is derived per driver and injected into HardwareController (INSTRUCTION-563).
+# Binding to the floor preserves their behaviour at the legacy value.
 READBACK_MISMATCH_ALARM_THRESHOLD = READBACK_MISMATCH_FLOOR_CYCLES
 
 
@@ -69,7 +67,7 @@ def _derive_readback_threshold(
 
     `mode_debounce_time_s` stays the first positional argument for backward
     compatibility with the pre-339B single-arg callers; `response_timeout_s` is
-    an optional keyword (HardwareController / the MQTT injection pass it through).
+    an optional keyword (HardwareController passes it to the monitoring-time function injected per driver; INSTRUCTION-563).
     """
     debounce_cycles = int(math.ceil(mode_debounce_time_s / PIPELINE_CYCLE_SECONDS))
     derived = debounce_cycles + READBACK_SAFETY_MARGIN_CYCLES
@@ -79,6 +77,19 @@ def _derive_readback_threshold(
         else 0
     )
     return max(timeout_cycles, derived, READBACK_MISMATCH_FLOOR_CYCLES)
+
+
+def readback_threshold_cycles(debouncer, response_timeout_s=None) -> int:
+    """The readback-fault monitoring time, in cycles, for the HA driver.
+
+    HardwareController owns the readback fault (INSTRUCTION-563); the
+    composition root injects this function as its readback_threshold_fn. The
+    debounce term is the debouncer's mode_debounce_time, because the HA path
+    debounces mode writes.
+    """
+    return _derive_readback_threshold(
+        debouncer.mode_debounce_time, response_timeout_s=response_timeout_s
+    )
 
 
 # ========================================================================
@@ -376,34 +387,6 @@ def _apply_mode_ha_service(config, optimal_mode):
 # ========================================================================
 
 
-def _register_events() -> None:
-    """Per-call registration of the two readback events, following the
-    sensor_fetcher.py:25-31 pattern — register() is idempotent for identical
-    specs, so per-call cost is a small dict lookup. Import-time registration
-    is not used here: DuplicateRegistrationError on a conflicting spec would
-    make import order a real property in a write-path module.
-
-    HA.mode_readback_mismatch (INSTRUCTION-506 T4) annunciates the opening of
-    a mismatch run; HA.mode_readback_persisted (INSTRUCTION-555 T1) annunciates
-    the escalation once the run reaches readback_threshold."""
-    ann = get_annunciator()
-    ann.register(EventSpec(
-        name="HA.mode_readback_mismatch",
-        kind=EventKind.LATCHED,
-        payload_fields=("commanded", "observed", "consecutive", "hp_power_kw"),
-        latch_key=("commanded", "observed"),
-        default_level=logging.WARNING,
-    ))
-    # A single global latch: one process runs one readback count, and any count reset must clear it whatever the commanded mode (INSTRUCTION-555 §1.3).
-    ann.register(EventSpec(
-        name="HA.mode_readback_persisted",
-        kind=EventKind.LATCHED,
-        payload_fields=("commanded", "observed", "consecutive", "threshold"),
-        latch_key=(),
-        default_level=logging.ERROR,
-    ))
-
-
 def compute_mode_readback(
     prev_mismatch_count: int,
     optimal_mode: Optional[str],
@@ -412,26 +395,21 @@ def compute_mode_readback(
     optimal_flow: float,
     return_temp: Optional[float],
     has_live_return_temp: bool,
-    readback_threshold: int,
     should_update_mode: bool,
 ) -> tuple[Optional[str], int]:
-    """Driver-agnostic mode readback. Returns (observed_mode_or_prev, new_mismatch_count).
+    """Driver-agnostic mode readback. Returns (applied_mode, new_mismatch_count).
 
     Derives observed_mode from HP power draw (>= 0.1 kW => "heat", else "off"),
-    counts consecutive cycles where observed_mode != optimal_mode, suppresses the
-    count when the HP is legitimately idle because demand is satisfied (commanded
-    flow <= return + margin), and raises an operator alarm at readback_threshold.
-    The alarm annunciates once per fault episode, at ERROR, through the latched
-    event HA.mode_readback_persisted, and exits at INFO when the count resets
-    (INSTRUCTION-555); the per-cycle diagnostic above the threshold is DEBUG.
+    counts consecutive cycles where observed_mode != optimal_mode, applies the
+    demand-satisfied suppression (the count resets when the HP is legitimately
+    idle because commanded flow <= return + margin), and returns
+    (applied_mode, new_mismatch_count). It emits nothing at INFO or above: the
+    readback fault, its monitoring time and its annunciation belong to
+    HardwareController (INSTRUCTION-563).
 
-    The mismatch counter is independent of should_update_mode — alarm semantics are
+    The mismatch counter is independent of should_update_mode — the count is
     intent-vs-reality, not debouncer state (INSTRUCTION-116 D1). should_update_mode
-    selects the severity of the opening (rising-edge) annunciation only: WARNING
-    when QSH just attempted the mode-write, INFO when quiescent. Once the
-    HA.mode_readback_mismatch latch is open, no subsequent cycle re-emits at any
-    level until the mismatch clears (INSTRUCTION-506 T4) — the counter is
-    unaffected by this and keeps incrementing every cycle as before.
+    selects only the fallback applied mode and the text of the DEBUG diagnostic.
 
     This is the single shared readback computation for every driver: the HA driver
     (apply_hardware_control below) and the MQTT injection slot
@@ -453,8 +431,6 @@ def compute_mode_readback(
             unchanged when readback is unavailable (hp_power_kw is None or
             optimal_mode is None).
     """
-    _register_events()
-    ann = get_annunciator()
     applied_mode = optimal_mode if should_update_mode else prev_mode
     new_mismatch_count = prev_mismatch_count
     if hp_power_kw is not None and optimal_mode is not None:
@@ -469,8 +445,6 @@ def compute_mode_readback(
                 # QSH commanded flow at/below return — HP idle is demand-satisfied,
                 # not an unresponsive HP. Do not escalate; reset the counter.
                 new_mismatch_count = 0
-                ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=observed_mode)
-                ann.exited("HA.mode_readback_persisted", commanded=optimal_mode, observed=observed_mode, level=logging.INFO)
                 logging.debug(
                     "Readback: commanded heat but HP idle with flow %.1f°C <= return "
                     "%.1f°C (+%.1f margin) — demand-satisfied wind-down, suppressed",
@@ -478,26 +452,10 @@ def compute_mode_readback(
                 )
             else:
                 new_mismatch_count = prev_mismatch_count + 1
-                if new_mismatch_count >= readback_threshold:
-                    logging.debug(
-                        "Mode readback escalation (%d consecutive, threshold %d): "
-                        "commanded %s but HP power=%.2fkW (observed %s)",
-                        new_mismatch_count, readback_threshold, optimal_mode,
-                        hp_power_kw, observed_mode,
-                    )
-                    ann.entered("HA.mode_readback_persisted",
-                                commanded=optimal_mode, observed=observed_mode,
-                                consecutive=new_mismatch_count, threshold=readback_threshold)
-                elif should_update_mode:
+                if should_update_mode:
                     logging.debug(
                         "Mode readback mismatch (%d consecutive): commanded %s but HP power=%.2fkW (observed %s)",
                         new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
-                    )
-                    ann.entered(
-                        "HA.mode_readback_mismatch",
-                        commanded=optimal_mode, observed=observed_mode,
-                        consecutive=new_mismatch_count, hp_power_kw=hp_power_kw,
-                        level=logging.WARNING,
                     )
                 else:
                     logging.debug(
@@ -505,23 +463,8 @@ def compute_mode_readback(
                         "will trigger re-command next cycle",
                         new_mismatch_count, optimal_mode, hp_power_kw, observed_mode,
                     )
-                    ann.entered(
-                        "HA.mode_readback_mismatch",
-                        commanded=optimal_mode, observed=observed_mode,
-                        consecutive=new_mismatch_count, hp_power_kw=hp_power_kw,
-                        level=logging.INFO,
-                    )
         else:
             new_mismatch_count = 0
-            # observed_mode == optimal_mode here (that is what "else" means), so
-            # it cannot identify the latch tuple a prior mismatch cycle opened —
-            # that tuple was (optimal_mode, <the mismatched observed value>).
-            # prev_mode is this function's own previous-cycle applied_mode, which
-            # compute_mode_readback always sets to that cycle's observed_mode
-            # below, so it recovers the closing half of the tuple without new
-            # state (INSTRUCTION-506 T4).
-            ann.exited("HA.mode_readback_mismatch", commanded=optimal_mode, observed=prev_mode)
-            ann.exited("HA.mode_readback_persisted", commanded=optimal_mode, observed=observed_mode, level=logging.INFO)
         applied_mode = observed_mode
 
     return applied_mode, new_mismatch_count
@@ -546,7 +489,6 @@ def apply_hardware_control(
     prev_mismatch_count=0,
     return_temp=None,
     has_live_return_temp=False,
-    response_timeout_s=None,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -664,30 +606,9 @@ def apply_hardware_control(
     # Readback: derive applied_mode from HP power draw, not from command.
     # Mismatch counter is degated from should_update_mode (see INSTRUCTION-116 D1):
     # a 600s debouncer window would otherwise make the alarm unreachable during
-    # a real outage. Log severity still uses should_update_mode to distinguish
-    # "we just tried and it didn't stick" (WARNING) from "quiescent mismatch"
-    # (INFO), and ERROR is raised on threshold crossing.
-    #
-    # INSTRUCTION-249 Task 1: the alarm threshold is derived per-debouncer
-    # from mode_debounce_time so it scales with the configured write budget.
-    # The legacy hardcoded 5-cycle threshold fired before the debouncer
-    # could even permit the next mode-write at any mode_writes_per_hour in
-    # [3,6], rendering the alarm meaningless on tight write budgets.
-    readback_threshold = _derive_readback_threshold(
-        debouncer.mode_debounce_time, response_timeout_s=response_timeout_s
-    )
-    if not getattr(debouncer, "_readback_threshold_logged", False):
-        logging.info(
-            "Readback mismatch ERROR threshold = %d cycles (%.0fs) "
-            "(mode_debounce_time=%.0fs, safety_margin=%d cycles, "
-            "floor=%d cycles)",
-            readback_threshold,
-            readback_threshold * PIPELINE_CYCLE_SECONDS,
-            debouncer.mode_debounce_time,
-            READBACK_SAFETY_MARGIN_CYCLES,
-            READBACK_MISMATCH_FLOOR_CYCLES,
-        )
-        debouncer._readback_threshold_logged = True
+    # a real outage. The readback here returns the applied mode and the mismatch
+    # count only; HardwareController owns the monitoring time and the readback
+    # fault (INSTRUCTION-563).
 
     # Readback computation is the driver-agnostic shared helper (the same one
     # the MQTT injection calls), so HA and MQTT cannot drift. INSTRUCTION-339A.
@@ -699,7 +620,6 @@ def apply_hardware_control(
         optimal_flow=optimal_flow,
         return_temp=return_temp,
         has_live_return_temp=has_live_return_temp,
-        readback_threshold=readback_threshold,
         should_update_mode=should_update_mode,
     )
 

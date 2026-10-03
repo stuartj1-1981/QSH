@@ -7,16 +7,18 @@ vi.mock('../useLive', () => ({
 }))
 
 vi.mock('../useHistorian', () => ({
-  useHistorianQuery: vi.fn(),
+  useHistorianEvents: vi.fn(),
 }))
 
 import { useLive } from '../useLive'
-import { useHistorianQuery } from '../useHistorian'
+import { useHistorianEvents } from '../useHistorian'
 import { useAlarms } from '../useAlarms'
 
 describe('useAlarms', () => {
   beforeEach(() => {
-    vi.mocked(useHistorianQuery).mockReturnValue({
+    // Call history is cleared per test, so a call assertion sees only its own render.
+    vi.mocked(useHistorianEvents).mockClear()
+    vi.mocked(useHistorianEvents).mockReturnValue({
       data: null,
       loading: false,
       error: null,
@@ -53,19 +55,16 @@ describe('useAlarms', () => {
     vi.mocked(useLive).mockReturnValue({
       data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
     })
-    vi.mocked(useHistorianQuery).mockReturnValue({
+    vi.mocked(useHistorianEvents).mockReturnValue({
       data: {
         measurement: 'qsh_alarm_event',
-        fields: ['payload_json'],
-        points: [
+        rows: [
           {
-            t: 100,
-            alarm_id: 'A',
-            timestamp: 100,
-            room: 'lounge',
-            payload_json: JSON.stringify({ foo: 'bar' }),
-          } as never,
+            t: 100, timestamp: 100, payload_json: JSON.stringify({ foo: 'bar' }),
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
         ],
+        truncated: false,
       },
       loading: false, error: null, refetch: vi.fn(),
     })
@@ -75,19 +74,23 @@ describe('useAlarms', () => {
     })
     expect(result.current.historicalAlarms[0].alarm_id).toBe('A')
     expect(result.current.historicalAlarms[0].payload).toEqual({ foo: 'bar' })
+    expect(useHistorianEvents).toHaveBeenCalledWith('qsh_alarm_event', { timeFrom: '-7d' })
   })
 
   it('skips alarm points with invalid payload_json', () => {
     vi.mocked(useLive).mockReturnValue({
       data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
     })
-    vi.mocked(useHistorianQuery).mockReturnValue({
+    vi.mocked(useHistorianEvents).mockReturnValue({
       data: {
         measurement: 'qsh_alarm_event',
-        fields: ['payload_json'],
-        points: [
-          { t: 100, alarm_id: 'A', payload_json: '{{not-json' } as never,
+        rows: [
+          {
+            t: 100, timestamp: 100, payload_json: '{{not-json',
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
         ],
+        truncated: false,
       },
       loading: false, error: null, refetch: vi.fn(),
     })
@@ -100,14 +103,20 @@ describe('useAlarms', () => {
     vi.mocked(useLive).mockReturnValue({
       data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
     })
-    vi.mocked(useHistorianQuery).mockReturnValue({
+    vi.mocked(useHistorianEvents).mockReturnValue({
       data: {
         measurement: 'qsh_alarm_event',
-        fields: ['payload_json'],
-        points: [
-          { t: 100, alarm_id: 'A', payload_json: '{}' } as never,
-          { t: 200, alarm_id: 'C', payload_json: '{}' } as never,
+        rows: [
+          {
+            t: 200, timestamp: 200, payload_json: '{}',
+            alarm_id: 'C', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
+          {
+            t: 100, timestamp: 100, payload_json: '{}',
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
         ],
+        truncated: false,
       },
       loading: false, error: null, refetch: vi.fn(),
     })
@@ -120,18 +129,78 @@ describe('useAlarms', () => {
     vi.mocked(useLive).mockReturnValue({
       data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
     })
-    vi.mocked(useHistorianQuery).mockReturnValue({
+    vi.mocked(useHistorianEvents).mockReturnValue({
       data: {
         measurement: 'qsh_alarm_event',
-        fields: ['payload_json'],
-        points: [
-          { t: 100, alarm_id: 'A', payload_json: '{}' } as never,
-          { t: 200, alarm_id: 'B', payload_json: '{}' } as never,
+        rows: [
+          {
+            t: 200, timestamp: 200, payload_json: '{}',
+            alarm_id: 'B', severity: 'notification', room: '_installation', comparator_mode: '_none',
+          },
+          {
+            t: 100, timestamp: 100, payload_json: '{}',
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
         ],
+        truncated: false,
       },
       loading: false, error: null, refetch: vi.fn(),
     })
     const { result } = renderHook(() => useAlarms())
     expect(result.current.historicalAlarms.every(a => a.severity === 'notification')).toBe(true)
+  })
+
+  it('maps an Alarm B row whose room tag is _installation to a null room', () => {
+    vi.mocked(useLive).mockReturnValue({
+      data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
+    })
+    vi.mocked(useHistorianEvents).mockReturnValue({
+      data: {
+        measurement: 'qsh_alarm_event',
+        rows: [
+          {
+            t: 300, timestamp: 299, payload_json: '{}',
+            alarm_id: 'B', severity: 'notification', room: '_installation', comparator_mode: '_none',
+          },
+          {
+            t: 200, timestamp: 199, payload_json: '{}',
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
+        ],
+        truncated: false,
+      },
+      loading: false, error: null, refetch: vi.fn(),
+    })
+    const { result } = renderHook(() => useAlarms())
+    const expected: AlarmEvent = {
+      alarm_id: 'B', timestamp: 299, room: null,
+      payload: {}, severity: 'notification',
+    }
+    expect(result.current.historicalAlarms).toHaveLength(2)
+    expect(result.current.historicalAlarms[0]).toEqual(expected)
+    // A room tag that names a room is kept.
+    expect(result.current.historicalAlarms[1].room).toBe('lounge')
+  })
+
+  it('takes the alarm time from its timestamp field, not from the row time t', () => {
+    vi.mocked(useLive).mockReturnValue({
+      data: null, isConnected: false, lastUpdate: 0, disconnectedSince: 0,
+    })
+    vi.mocked(useHistorianEvents).mockReturnValue({
+      data: {
+        measurement: 'qsh_alarm_event',
+        rows: [
+          {
+            t: 1790000002, timestamp: 1789999998.4, payload_json: '{}',
+            alarm_id: 'A', severity: 'notification', room: 'lounge', comparator_mode: '_none',
+          },
+        ],
+        truncated: false,
+      },
+      loading: false, error: null, refetch: vi.fn(),
+    })
+    const { result } = renderHook(() => useAlarms())
+    expect(result.current.historicalAlarms).toHaveLength(1)
+    expect(result.current.historicalAlarms[0].timestamp).toBe(1789999998.4)
   })
 })

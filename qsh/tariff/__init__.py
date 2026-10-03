@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 # mutations. Same value, same review schedule.
 TARIFF_HTTP_TIMEOUT_SECONDS = 5
 
+# INSTRUCTION-562 — the Octopus public API host, declared once. Octopus
+# announced on 29 September 2026 that it serves its public REST API and its
+# public GraphQL endpoint at this host; the host it replaces runs in parallel
+# until a retirement date Octopus has not published. The Octopus providers take
+# their REST base from here, and drivers/ha/octopus_hp_control.py its token URL.
+# The heat-pump backend host is a different service and is not declared here.
+OCTOPUS_PUBLIC_API_HOST = "https://api.oegb-kraken.energy"
+OCTOPUS_REST_BASE = f"{OCTOPUS_PUBLIC_API_HOST}/v1"
+OCTOPUS_GRAPHQL_URL = f"{OCTOPUS_PUBLIC_API_HOST}/v1/graphql/"
+
 Fuel = Literal["electricity", "gas", "lpg", "oil"]
 ProviderKind = Literal[
     "octopus_electricity",
@@ -288,6 +298,7 @@ def fuel_for_source(source_type: str) -> Fuel:
 # lazily for the same reason.
 from qsh.tariff.fixed import FixedRateProvider  # noqa: E402
 from qsh.tariff.fallback import FallbackProvider  # noqa: E402
+from qsh.tariff.static_export import resolve_static_export_rate  # noqa: E402
 
 # INSTRUCTION-411 D5/D6: a built Octopus provider that will silently degrade to
 # its fallback rate (api_key present but tariff_code missing — the REST refresh
@@ -296,7 +307,7 @@ from qsh.tariff.fallback import FallbackProvider  # noqa: E402
 # scope so it is import-guaranteed before any factory call; re-registration of
 # the identical spec is idempotent (a suite that drops the annunciator singleton
 # via reset_for_testing() is defended by the re-register in the raise site).
-from qsh.events import EventKind, EventSpec, get_annunciator  # noqa: E402
+from qsh.events import EventAnnunciator, EventKind, EventSpec, get_annunciator  # noqa: E402
 
 _OCTOPUS_CREDS_INCOMPLETE_SPEC = EventSpec(
     name="TARIFF.octopus_credentials_incomplete",
@@ -334,6 +345,53 @@ _TARIFF_CODE_UNPRICEABLE_SPEC = EventSpec(
     default_level=logging.WARNING,
 )
 get_annunciator().register(_TARIFF_CODE_UNPRICEABLE_SPEC)
+
+# INSTRUCTION-568 (FI-53) — the empty-rates latch of INSTRUCTION-275, moved here
+# from octopus_electricity.py unchanged, so that every TARIFF.* spec the Octopus
+# providers emit is declared in this one place.
+_RATES_EMPTY_USING_FALLBACK_SPEC = EventSpec(
+    name="TARIFF.rates_empty_using_fallback",
+    kind=EventKind.LATCHED,
+    payload_fields=(),
+    default_level=logging.WARNING,
+)
+get_annunciator().register(_RATES_EMPTY_USING_FALLBACK_SPEC)
+
+# INSTRUCTION-568 (FI-46) — a provider's rate fetch is failing. For the length
+# of an upstream outage this is a steady in-fault state, not a per-attempt event
+# (T-45): LATCHED, entered on the first failed fetch and cleared by the next
+# fetch that succeeds. Keyed on fuel AND direction because the import and export
+# instances share a fuel; `error` is diagnostic payload only.
+_RATE_FETCH_FAILING_SPEC = EventSpec(
+    name="TARIFF.rate_fetch_failing",
+    kind=EventKind.LATCHED,
+    payload_fields=("fuel", "direction", "error"),
+    latch_key=("fuel", "direction"),
+    default_level=logging.WARNING,
+)
+get_annunciator().register(_RATE_FETCH_FAILING_SPEC)
+
+_TARIFF_EVENT_SPECS = (
+    _OCTOPUS_CREDS_INCOMPLETE_SPEC,
+    _TARIFF_CODE_CHANGED_SPEC,
+    _TARIFF_CODE_UNPRICEABLE_SPEC,
+    _RATES_EMPTY_USING_FALLBACK_SPEC,
+    _RATE_FETCH_FAILING_SPEC,
+)
+
+
+def tariff_annunciator() -> EventAnnunciator:
+    """INSTRUCTION-568 (FI-53) — the process annunciator, with every TARIFF.*
+    spec above registered on it. The Octopus providers call this at each
+    emission in place of get_annunciator(). register() of an identical spec is
+    a no-op, so the live path does not change. After the singleton is dropped
+    (reset_for_testing()), the emission registers the specs again before it
+    emits, and does not raise UnregisteredEventError (T-46; the use-site form
+    of forecast/parse.py)."""
+    ann = get_annunciator()
+    for spec in _TARIFF_EVENT_SPECS:
+        ann.register(spec)
+    return ann
 
 
 def _normalise_legacy_config(energy_config: dict, fuel: Fuel) -> dict | None:
@@ -519,15 +577,7 @@ def create_export_provider(
     api_key = elec.get("octopus_api_key") or legacy.get("api_key")
     account_number = elec.get("octopus_account_number") or legacy.get("account_number")
 
-    fixed_rates = energy_config.get("fixed_rates") or {}
-    fallback_rates = energy_config.get("fallback_rates") or {}
-    static_export = fixed_rates.get("export_rate")
-    if static_export is None:
-        static_export = fallback_rates.get("export", 0.0)
-    try:
-        static_export = float(static_export)
-    except (TypeError, ValueError):
-        static_export = 0.0
+    static_export = resolve_static_export_rate(energy_config, source="export_provider")
 
     # The provider reads its config from the "electricity" key of the dict it is
     # given (OctopusElectricityProvider._read_section); feeding it an

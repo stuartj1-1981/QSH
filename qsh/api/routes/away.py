@@ -166,7 +166,6 @@ def get_away_state():
 
     # Recovery status from pipeline
     recovery_active = snap.recovery_active
-    zones_recovering = snap.zones_recovering
 
     # Compute recovery estimates per room
     recovery_rooms = {}

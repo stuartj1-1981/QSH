@@ -9,9 +9,9 @@ bug in the BottlecapDave HA integration (< v17.1.1, fixed 31 Oct 2025).
 The HA service call is retained as a fallback when the direct call fails;
 this is safe on BottlecapDave v17.1.1 and later.
 
-Note: `obtainKrakenToken` is still fetched from the legacy
-`api.octopus.energy/v1/graphql/` endpoint; the resulting bare JWT is
-accepted by the new backend endpoint for HP mutations.
+Note: `obtainKrakenToken` is fetched from the Octopus public GraphQL
+endpoint (`qsh.tariff.OCTOPUS_GRAPHQL_URL`, INSTRUCTION-562); the resulting
+bare JWT is accepted by the backend endpoint for HP mutations.
 
 Config (options.json):
   octopus_api_key:        "sk_live_..."    - API key from Octopus dashboard
@@ -36,13 +36,14 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from ...events import EventKind, EventSpec, get_annunciator
+from ...tariff import OCTOPUS_GRAPHQL_URL
 
 
 def _clean_temp(value):
     """Round temperature to 1 decimal place for the Float scalar on the new backend endpoint.
 
     Previously returned a string to work around the old FloatSafeDecimal scalar on
-    api.octopus.energy, which parsed JSON numbers via Python float and reintroduced
+    the public endpoint, which parsed JSON numbers via Python float and reintroduced
     IEEE 754 precision errors server-side. The new endpoint declares setpointInCelsius
     as a standard Float scalar, so the string workaround is no longer needed and would
     in fact fail GraphQL type coercion.
@@ -64,7 +65,7 @@ REQUEST_RETRY_ON_TIMEOUT = True  # single intra-cycle retry on socket.timeout on
 # REQUEST_TIMEOUT_SECONDS above (see its comment for the review trigger).
 SLOW_RESPONSE_THRESHOLD_S = 2.0
 
-AUTH_URL = "https://api.octopus.energy/v1/graphql/"          # obtainKrakenToken, refresh
+AUTH_URL = OCTOPUS_GRAPHQL_URL  # obtainKrakenToken, refresh — the public host (INSTRUCTION-562)
 API_URL  = "https://api.backend.octopus.energy/v1/graphql/"  # HP mutations
 TOKEN_REFRESH_MARGIN = 300  # refresh 5 min before expiry
 TOKEN_LIFETIME = 3600  # 60 min token lifetime
@@ -562,8 +563,9 @@ def set_zone_mode(desired_mode, skip_if_current=True):
            time — the fallback does not recurse through _graphql_request.
         3. HardwareController observes applied_mode was not set to optimal_mode.
         4. On subsequent cycles, observed_mode != optimal_mode increments
-           ctx.readback_mismatch_count; after READBACK_MISMATCH_ALARM_THRESHOLD
-           cycles the frontend alarm trips.
+           ctx.readback_mismatch_count; after the readback-fault
+           monitoring time HardwareController derives (INSTRUCTION-563),
+           the frontend alarm trips.
         5. The Octopus backoff gates subsequent direct attempts for the
            duration determined by _consecutive_failures.
     """
