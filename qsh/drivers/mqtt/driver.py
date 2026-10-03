@@ -1649,18 +1649,10 @@ class MQTTDriver:
         else:
             current_rate = fallback_rates.get("standard", 0.245)
 
-        # INSTRUCTION-476 — export leg decoupled from the fixed_rates block
-        # gate: key-level precedence matching create_export_provider, so a
-        # fixed_rates block without export_rate no longer masks
-        # fallback_rates.export. Import leg (block-gated) unchanged.
-        export_rate = fixed_rates.get("export_rate")
-        if export_rate is None:
-            export_rate = (fallback_rates or {}).get("export", 0.0)
-        if export_rate is None:
-            # Present-but-null on the final rung: .get's default fires on
-            # absence, not on a stored null. OB-01 requires 0.0, never None,
-            # on a float-typed money-path field (ASSESSMENT-476-V2 M-02).
-            export_rate = 0.0
+        # INSTRUCTION-561 — one resolver for the operator-static export rate
+        # (qsh/tariff/static_export.py); the ladder is stated there, once.
+        from ...tariff.static_export import resolve_static_export_rate
+        export_rate = resolve_static_export_rate(config, source="mqtt_driver")
 
         # ── Control topics via _resolve_mqtt_control (cache-first with internal fallback) ──
         away_rv = self._resolve_mqtt_control(

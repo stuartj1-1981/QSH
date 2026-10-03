@@ -113,10 +113,6 @@ class HADriver:
                 dfan_entity,
             )
 
-        # Dashboard push disabled — Web UX is the sole interface for Beta.
-        # dashboard.py code retained for potential future use.
-        logging.info("Dashboard: push disabled (Web UX is primary interface)")
-
         # Init Octopus direct API only when control routing actually uses it.
         # INSTRUCTION-234: has_octopus alone is not sufficient -- it signals an
         # Octopus *tariff* API key is present, which says nothing about whether
@@ -317,8 +313,8 @@ class HADriver:
         """Fetch all external signals from Home Assistant."""
         from .integration import fetch_ha_entity
         from .sensor_fetcher import fetch_all_sensor_data, get_flow_temp_limits, resolve_external_setpoints
-        from ...utils import safe_float
         from ...tariff.octopus_electricity import parse_octopus_rate_array, pick_octopus_rate
+        from ...tariff.static_export import resolve_static_export_rate
 
         # Resolve external setpoint overrides into config dict (INSTRUCTION-42A)
         resolve_external_setpoints(config)
@@ -433,20 +429,9 @@ class HADriver:
         current_rate = (
             pick_octopus_rate(tariff_rates, fallback=fallback_rate) if tariff_rates else fallback_rate
         )
-        # INSTRUCTION-476 — operator-static export rate, key-corrected. The
-        # pre-476 read consumed a dead top-level export_rate config key that
-        # no production writer populates (Settings → Tariff writes
-        # fallback_rates.export), so the static leg was structurally dead on
-        # HA installs. Ladder matches create_export_provider
-        # (qsh/tariff/__init__.py): fixed_rates.export_rate, else
-        # fallback_rates.export, else 0.0 (INSTRUCTION-410 no-phantom-credit
-        # demotion preserved; unconfigured export still falls to the import
-        # tariff via the present-but-0 guard).
-        _fixed_rates = config.get("fixed_rates") or {}
-        _static_export = _fixed_rates.get("export_rate")
-        if _static_export is None:
-            _static_export = (config.get("fallback_rates") or {}).get("export", 0.0)
-        export_rate = safe_float(_static_export, 0.0)
+        # INSTRUCTION-561 — one resolver for the operator-static export rate
+        # (qsh/tariff/static_export.py); the ladder is stated there, once.
+        export_rate = resolve_static_export_rate(config, source="ha_driver")
 
         # Flow limits from HA entities
         flow_min, flow_max = get_flow_temp_limits(config)

@@ -22,9 +22,11 @@ ForecastHistoryStore.iter_observations accessor (no private access).
 """
 
 import logging
+import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -41,6 +43,11 @@ FORECAST_AWARE_CONTROLLERS: Tuple[str, ...] = (
     "flow_controller",
     "rl",
 )
+
+# INSTRUCTION-565C — the tags read with each reconciliation row, and the
+# records a weather class needs before its p95 counts in the error gate.
+_RECON_TAGS: Tuple[str, ...] = ("controller", "room", "oat_class", "solar_class", "wind_class")
+_ERROR_GATE_MIN_SAMPLES = 5
 
 # V2 LOW — process-restart-once WARN flag (module-scoped).
 _first_patch_warn_emitted: bool = False
@@ -214,6 +221,9 @@ def get_cutover_gates(window_cycles: int = 168):
     sysid_state = shared_state.get_sysid()
     history_store = _get_history_store()
     snapshot = shared_state.get_snapshot()
+    # INSTRUCTION-565C — one reconciliation read per uncached computation,
+    # shared by every (controller, scope) error gate below.
+    recon_rows = _read_reconciliation_rows(window_cycles, cycle_period_s) or []
 
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for controller in FORECAST_AWARE_CONTROLLERS:
@@ -232,6 +242,7 @@ def get_cutover_gates(window_cycles: int = 168):
                 sysid_state=sysid_state,
                 history_store=history_store,
                 snapshot=snapshot,
+                recon_rows=recon_rows,
             )
 
     response = {
@@ -249,12 +260,14 @@ def _compute_one_gate(
     cycles_required: int, error_threshold_c: float,
     c_maturity_threshold: float, c_historical_threshold: float,
     window_cycles: int, sysid_state, history_store, snapshot,
+    recon_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Single (controller, scope) gate evaluation per design §6.2."""
     from qsh.api.cutover_gate_tracker import get_cutover_gate_tracker
 
     p95_error, error_gate_pass = _evaluate_prediction_error_gate(
         controller, scope, error_threshold_c, window_cycles, history_store,
+        rows=recon_rows,
     )
     comfort_excursions, comfort_gate_pass = _evaluate_comfort_gate(
         controller, scope, window_cycles, history_store, snapshot,
@@ -301,20 +314,96 @@ def _compute_one_gate(
 # V1 HIGH-1 — concrete gate helpers; no NotImplementedError stubs.
 # ============================================================
 
+def _read_reconciliation_rows(
+    window_cycles: int, cycle_period_s: float,
+) -> Optional[List[Dict[str, Any]]]:
+    """The qsh_forecast_reconciliation rows of the window, each with its
+    error_c and the tags in _RECON_TAGS (INSTRUCTION-565C).
+
+    The window is window_cycles x cycle_period_s seconds, the comfort
+    gate's span. Returns None when no historian is active, or when the read
+    raises, returns something other than a dict, or returns an "error" key;
+    each of the last three logs one WARNING.
+    """
+    from qsh.historian import get_historian
+
+    historian = get_historian()
+    if historian is None or not getattr(historian, "is_active", False):
+        return None
+
+    try:
+        response = historian.read_events(
+            "qsh_forecast_reconciliation",
+            ["error_c"],
+            list(_RECON_TAGS),
+            time_from=f"-{int(window_cycles * cycle_period_s)}s",
+            time_to="now()",
+        )
+        if not isinstance(response, dict):
+            raise TypeError(f"response is a {type(response).__name__}, not a dict")
+        if "error" in response:
+            raise RuntimeError(response["error"])
+        return list(response.get("rows") or [])
+    except Exception as exc:
+        logger.warning("_read_reconciliation_rows: historian read failed: %s", exc)
+        return None
+
+
 def _evaluate_prediction_error_gate(
     controller: str, scope: str, threshold_c: float, window_cycles: int,
     history_store,
+    *, rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Optional[float], bool]:
-    """Reports no data: (None, False).
+    """Reports the worst weather class's p95 of |error_c| for (controller,
+    scope) against threshold_c, as INSTRUCTION-208A designed the gate.
 
-    The gate needs `controller`, `room` and a weather class on each
-    qsh_forecast_reconciliation point. `Historian.query()` returns no tags
-    and filters on `room` and `hw_active` only, and the read contract is not
-    widened (owner ruling, 27 September 2026). The gate therefore issues no
-    query and reports no data (INSTRUCTION-557, FI-48), and returns False so
-    that it is never read as passed.
+    Its rows are the qsh_forecast_reconciliation records of the comfort
+    gate's window (window_cycles x update_interval_s seconds), read once per
+    uncached computation by get_cutover_gates and passed in, or read here
+    when rows is None, which the owner's widening of the read contract on
+    30 September 2026 made possible (INSTRUCTION-565C). A row counts when
+    its controller and room match, its three class tags (oat, solar, wind)
+    are not all unknown, and its error_c is a finite int or float, not a
+    bool; the weather class is that triple. Each class with at least
+    _ERROR_GATE_MIN_SAMPLES records takes numpy's default linear p95, and
+    the gate returns (worst, worst <= threshold_c), or (None, False) when no
+    class qualifies or the historian is not readable.
     """
-    return (None, False)
+    if rows is None:
+        from qsh.api.state import shared_state
+
+        config = shared_state.get_config() or {}
+        rows = _read_reconciliation_rows(
+            window_cycles, float(config.get("update_interval_s", 300)),
+        )
+        if rows is None:
+            return (None, False)
+
+    errors_by_class: Dict[Tuple[Any, ...], List[float]] = {}
+    for row in rows:
+        if row.get("controller") != controller or row.get("room") != scope:
+            continue
+        weather_class = (
+            row.get("oat_class"), row.get("solar_class"), row.get("wind_class"),
+        )
+        if weather_class == ("unknown", "unknown", "unknown"):
+            continue
+        error_c = row.get("error_c")
+        if isinstance(error_c, bool) or not isinstance(error_c, (int, float)):
+            continue
+        if not math.isfinite(error_c):
+            continue
+        errors_by_class.setdefault(weather_class, []).append(abs(error_c))
+
+    class_p95s = [
+        float(np.percentile(values, 95))
+        for values in errors_by_class.values()
+        if len(values) >= _ERROR_GATE_MIN_SAMPLES
+    ]
+    if not class_p95s:
+        return (None, False)
+    worst = max(class_p95s)
+    return (worst, worst <= threshold_c)
 
 
 def _evaluate_comfort_gate(
@@ -479,7 +568,7 @@ def _gate_rationale(
         failed.append("twin-drift")
     if error_no_data:
         parts = [
-            "No data: prediction-error (per-controller forecast error is not readable from the historian)."
+            "No data: prediction-error (too few reconciliation records in every weather class, or the historian was not readable)."
         ]
         if failed:
             parts.append(f"Failing gates: {', '.join(failed)}.")

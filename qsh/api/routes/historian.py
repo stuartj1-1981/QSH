@@ -1,5 +1,6 @@
 """Historian API routes — InfluxDB query access for historical trend analysis."""
 
+import re
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
@@ -87,6 +88,75 @@ def query_historian(
         # second production caller ever adds this argument, OB-10 is no
         # longer true and the tier argument goes with it.
         derive_types=True,
+    )
+
+
+# INSTRUCTION-565B T4 — the events route serves these two measurements and
+# no other, each with a fixed field and tag set; the client chooses neither.
+# Every pattern below is applied with fullmatch, so a trailing newline does
+# not pass, and [0-9] admits ASCII digits only.
+_EVENT_MEASUREMENTS = {
+    "qsh_alarm_event": {
+        "fields": ("timestamp", "payload_json"),
+        "tags": ("alarm_id", "severity", "room", "comparator_mode"),
+    },
+    "qsh_forecast_reconciliation": {
+        "fields": ("predicted", "actual", "error_c", "prediction_target_ts",
+                   "basis_summary", "basis_hash"),
+        "tags": ("controller", "room", "oat_class", "solar_class", "wind_class"),
+    },
+}
+_EVENTS_FROM_RE = re.compile(r"-([0-9]{1,4})(m|h|d)")
+_EVENTS_UNIT_S = {"m": 60, "h": 3600, "d": 86400}
+_EVENTS_MAX_WINDOW_S = 31 * 86400
+_EVENTS_FILTER_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+
+
+@router.get("/events")
+def read_historian_events(
+    measurement: str = Query(..., description="Event measurement (qsh_alarm_event or qsh_forecast_reconciliation)"),
+    time_from: str = Query(default="-7d", alias="from", description="Start time: -N with m, h or d, at most 31 days"),
+    room: Optional[str] = Query(default=None, description="Room tag filter"),
+    controller: Optional[str] = Query(default=None, description="Controller tag filter (qsh_forecast_reconciliation only)"),
+):
+    """Raw event records with their tag values, newest first (INSTRUCTION-565B).
+
+    GET /api/historian/events?measurement=qsh_forecast_reconciliation&from=-7d&room=lounge&controller=valve_controller
+
+    400, before the historian is read, on a measurement outside the
+    allowlist, a malformed `from` or one longer than 31 days, a filter on a
+    tag the measurement does not carry, or a malformed filter value. The
+    upper bound is always now.
+    """
+    spec = _EVENT_MEASUREMENTS.get(measurement)
+    if spec is None:
+        raise HTTPException(400, f"unknown event measurement: {measurement!r}")
+    window = _EVENTS_FROM_RE.fullmatch(time_from)
+    if window is None or int(window.group(1)) * _EVENTS_UNIT_S[window.group(2)] > _EVENTS_MAX_WINDOW_S:
+        raise HTTPException(400, f"from must be -N with m, h or d, at most 31 days: {time_from!r}")
+    tag_filter = {}
+    for key, value in (("room", room), ("controller", controller)):
+        if value is None:
+            continue
+        if key not in spec["tags"]:
+            raise HTTPException(400, f"{key} is not a tag of {measurement}")
+        if _EVENTS_FILTER_RE.fullmatch(value) is None:
+            raise HTTPException(400, f"malformed {key}: {value!r}")
+        tag_filter[key] = value
+
+    h = _get_active_historian()
+    if h is None:
+        return {
+            "error": "Historian not configured. Enable in qsh.yaml historian section.",
+            "rows": [],
+        }
+    return h.read_events(
+        measurement,
+        list(spec["fields"]),
+        list(spec["tags"]),
+        time_from=time_from,
+        time_to="now()",
+        tag_filter=tag_filter,
     )
 
 

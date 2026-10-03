@@ -594,6 +594,21 @@ export interface HistorianQueryResponse {
   coerced_fields?: Record<string, { requested: string; applied: string }>
 }
 
+// INSTRUCTION-565D — the event-record read: raw records, newest first, each
+// with its tag values. `t` is the row time (the write instant), not the
+// event time, which is a field of the row.
+export interface HistorianEventRow {
+  t: number
+  [key: string]: number | string | boolean | null
+}
+
+export interface HistorianEventsResponse {
+  measurement?: string
+  rows: HistorianEventRow[]
+  truncated?: boolean
+  error?: string
+}
+
 export interface HistorianTagsResponse {
   available: boolean
   tags: Record<string, string[]>

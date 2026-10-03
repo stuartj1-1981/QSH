@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useLive } from './useLive'
-import { useHistorianQuery } from './useHistorian'
+import { useHistorianEvents } from './useHistorian'
 import type { AlarmEvent } from '../types/api'
 
 interface UseAlarmsResult {
@@ -17,18 +17,16 @@ export function useAlarms(timeFrom: string = '-7d'): UseAlarmsResult {
     [cycle?.active_alarms],
   )
 
-  const { data: historianData, loading, error } = useHistorianQuery(
+  const { data: historianData, loading, error } = useHistorianEvents(
     'qsh_alarm_event',
-    ['payload_json'],
-    { timeFrom, timeTo: 'now()', interval: '5m', aggregation: 'last' },
+    { timeFrom },
   )
 
   const historicalAlarms = useMemo<AlarmEvent[]>(() => {
-    if (!historianData?.points) return []
-    return historianData.points
-      .map((p): AlarmEvent | null => {
-        const point = p as unknown as Record<string, unknown>
-        const payloadJsonRaw = point['payload_json']
+    if (!historianData?.rows) return []
+    return historianData.rows
+      .map((row): AlarmEvent | null => {
+        const payloadJsonRaw = row['payload_json']
         let payload: Record<string, unknown> = {}
         if (typeof payloadJsonRaw === 'string') {
           try {
@@ -37,14 +35,16 @@ export function useAlarms(timeFrom: string = '-7d'): UseAlarmsResult {
             payload = {}
           }
         }
-        const alarmId = point['alarm_id']
+        const alarmId = row['alarm_id']
         if (alarmId !== 'A' && alarmId !== 'B') return null
-        const ts = point['timestamp']
-        const room = point['room']
+        // The event time is the row's own field; the row time is the write.
+        const ts = row['timestamp']
+        // Alarm B is installation-wide, and its room tag names no room.
+        const room = row['room']
         return {
-          alarm_id: alarmId as 'A' | 'B',
+          alarm_id: alarmId,
           timestamp: typeof ts === 'number' ? ts : 0,
-          room: typeof room === 'string' ? room : null,
+          room: typeof room === 'string' && room !== '_installation' ? room : null,
           payload,
           severity: 'notification',
         }
