@@ -121,6 +121,11 @@ export interface RoomConfigYaml {
   occupancy_debounce?: number
   occupancy_fallback?: 'schedule' | 'occupied' | 'last_known'
   last_known_timeout_s?: number
+  /** INSTRUCTION-569F — the room's window contact entity (Home Assistant). */
+  window_sensor?: string
+  /** INSTRUCTION-569F — seconds a contact must read open before QSH treats the
+   *  window as open. No UI control: it is set in YAML. */
+  window_open_delay_s?: number
   /** INSTRUCTION-478A/478B — predictive-occupancy learner enable + sensor
    *  class, round-tripped via the `rooms` section PATCH (qsh/config.py:1390-1391). */
   predictive_occupancy?: boolean

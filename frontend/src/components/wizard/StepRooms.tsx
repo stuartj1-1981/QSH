@@ -4,6 +4,7 @@ import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { OccupancyFields } from '../OccupancyFields'
+import { WINDOW } from '../../lib/helpText'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
 import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml, type BatteryDeviceYaml } from '../../types/config'
 
@@ -908,6 +909,18 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           candidates={candidates.battery_entity || []}
                         />
                       )}
+                      {/* INSTRUCTION-569F — the window contact, with the owner-ruling R5 help text. */}
+                      <EntityPicker
+                        slot="window_sensor"
+                        room={name}
+                        label="Window Sensor (optional)"
+                        helpText={WINDOW.sensor}
+                        value={room.window_sensor || ''}
+                        onChange={(v) =>
+                          updateRoom(name, { window_sensor: v || undefined })
+                        }
+                        candidates={candidates.window_sensor || []}
+                      />
                     </>
                   )}
                 </div>

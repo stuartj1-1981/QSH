@@ -382,6 +382,50 @@ def _fetch_all_entities() -> List[Dict]:
         return []
 
 
+# INSTRUCTION-569E — the window_sensor slot. A binary_sensor that carries a
+# valve word or a flag phrase is the radiator valve's own entity or its
+# open-window flag, and is not offered (owner ruling R5). The match is on
+# names, so it is a heuristic in both directions: a flag with a neutral name
+# is offered, and a contact with a valve word in its name is not. The help
+# text that INSTRUCTION-569F adds to the field is the control.
+_WINDOW_VALVE_WORDS = frozenset({"rad", "etrv", "windowopen", "openwindow"})
+# A word that starts with one of these is a valve word: trvzb, thermostatic.
+_WINDOW_VALVE_PREFIXES = ("trv", "radiator", "valve", "thermostat", "climate")
+# Adjacent words. "window opening" is a contact (the ZHA name) and is not here.
+_WINDOW_FLAG_PHRASES = (
+    ("open", "window"), ("window", "open"), ("window", "detection"), ("window", "detect"),
+)
+_WINDOW_CONTACT_CLASSES = ("window", "door", "opening", "garage_door")
+_WINDOW_CONTACT_WORDS = frozenset({"window", "contact", "door"})
+# With no device class, these words name another entity of a contact device.
+_WINDOW_OTHER_ENTITY_WORDS = frozenset({
+    "battery", "tamper", "tampered", "lock", "motion", "vibration", "update",
+    "online", "linkquality", "signal", "temperature", "humidity", "blind",
+    "cover", "connectivity", "problem", "moisture", "occupancy", "presence",
+    "light", "status", "firmware",
+})
+
+
+def _window_name_tokens(text: str) -> List[str]:
+    """Lower-case alphanumeric tokens of an entity id or a name."""
+    out: List[str] = []
+    token = ""
+    for ch in text.lower():
+        if ch.isalnum():
+            token += ch
+        elif token:
+            out.append(token)
+            token = ""
+    if token:
+        out.append(token)
+    return out
+
+
+def _window_singular(token: str) -> str:
+    """`windows` reads as `window`, `trvs` as `trv`."""
+    return token[:-1] if len(token) > 3 and token.endswith("s") else token
+
+
 def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
     """Heuristic score for how well an entity matches a config slot.
 
@@ -485,6 +529,54 @@ def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
             score += 5
         if "detector" in eid_lower or "sensor" in eid_lower:
             score += 2
+
+    elif slot == "window_sensor":
+        # INSTRUCTION-569E — a window or door contact.
+        if not eid.startswith("binary_sensor."):
+            return 0
+        room_tokens = _window_name_tokens(room)
+        n = len(room_tokens)
+        words: set = set()
+        in_room = room_first = flagged = False
+        for text in (eid.split(".", 1)[-1], name):
+            tokens = _window_name_tokens(text)
+            rest: List[str] = []
+            i = 0
+            while i < len(tokens):
+                # The room's own name is not evidence: a room can be named
+                # for a valve. It is matched as whole words.
+                if n and tokens[i:i + n] == room_tokens:
+                    in_room = True
+                    room_first = room_first or i == 0
+                    i += n
+                else:
+                    words.add(tokens[i])
+                    rest.append(_window_singular(tokens[i]))
+                    i += 1
+            words.update(rest)
+            flagged = flagged or any(pair in _WINDOW_FLAG_PHRASES for pair in zip(rest, rest[1:]))
+        if flagged or words & _WINDOW_VALVE_WORDS:
+            return 0
+        if any(w.startswith(_WINDOW_VALVE_PREFIXES) for w in words):
+            return 0
+        if device_class:
+            if device_class not in _WINDOW_CONTACT_CLASSES:
+                return 0  # the battery, tamper, lock or motion entity of a device
+        elif not (words & _WINDOW_CONTACT_WORDS) or words & _WINDOW_OTHER_ENTITY_WORDS:
+            return 0
+        score += 5
+        if device_class == "window":
+            score += 10
+        if "window" in words:
+            score += 5
+        if "contact" in words:
+            score += 3
+        if room_first:
+            score += 15      # the name starts with the room: "Recommended" is reachable
+        else:
+            if in_room:
+                score += 4   # the room is a later word: "master bedroom" for "bedroom"
+            score = min(score, 24)   # below "Recommended"
 
     elif slot == "hp_flow_temp":
         if not eid.startswith("sensor."):
@@ -789,6 +881,8 @@ def scan_entities_for_room(room: str):
             "independent_sensor": _scan_for_slot(all_entities, "independent_sensor", room),
             "heating_entity": _scan_for_slot(all_entities, "heating_entity", room),
             "occupancy_sensor": _scan_for_slot(all_entities, "occupancy_sensor", room),
+            # INSTRUCTION-569E: the window contact slot.
+            "window_sensor": _scan_for_slot(all_entities, "window_sensor", room),
             # INSTRUCTION-373A Task 2: per-device battery candidate slot.
             "battery_entity": _scan_for_slot(all_entities, "battery_entity", room),
         },

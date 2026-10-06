@@ -118,6 +118,17 @@ export const OCCUPANCY = {
   watchdog: 'How long to hold the last known occupancy state before degrading to \'Assume Occupied\'.',
 } as const
 
+// INSTRUCTION-569F — owner ruling R5: the radiator valve's own open-window
+// function is not a source, and the operator is told so where the sensor is set.
+export const WINDOW = {
+  sensor:
+    'Use a contact sensor on a window or on an external door. While the contact is open, this room does not start the heat source above 14°C, and QSH does not learn the heat loss of the room. A boost has priority. Do not use the open-window function of the radiator valve: set it to off on the valve. QSH does not read it, and a valve that closes itself is not visible to QSH.',
+  open: 'The window contact is open. This room does not start the heat source above 14°C. A boost has priority.',
+  inferred:
+    'This room loses heat faster than usual, and QSH treats a window as open. The room can fall up to 1.5°C below its target before it starts the heat source. A boost has priority.',
+  fault: 'The window sensor is not available. QSH reads the window as closed.',
+} as const
+
 export const SWARM = {
   inputs:
     'Each swarm input this unit can consume. The light shows whether the unit is using that data on live control — green: in use; amber: observing (received but not applied live); red: no data; grey: reserved (channel not yet active).',

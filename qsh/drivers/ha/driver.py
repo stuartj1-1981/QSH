@@ -474,6 +474,7 @@ class HADriver:
 
         per_zone_away = {}
         occupancy_sensor_states: Dict[str, str] = {}
+        window_sensor_states: Dict[str, str] = {}
 
         for room in config.get("rooms", {}):
             # Per-zone away toggle + duration
@@ -496,6 +497,17 @@ class HADriver:
                 signal_quality[f"occupancy_sensor.{room}"] = (
                     "good" if raw in ("on", "off") else "unavailable"
                 )
+
+            # Per-zone window contact (optional — raw binary state, 569A)
+            win_sensor_cfg = config.get("room_window_sensors", {}).get(room)
+            if win_sensor_cfg:
+                # suppress_log: an entity that Home Assistant does not hold
+                # (HTTP 404) is not a transport failure. It must not count on
+                # the circuit breaker; the contact stage annunciates it.
+                raw = fetch_ha_entity(
+                    win_sensor_cfg["entity"], default="unavailable", suppress_log=True
+                )
+                window_sensor_states[room] = raw if raw in ("on", "off") else "unavailable"
 
         # ── Weather forecast for recovery COP estimation ──
         # INSTRUCTION-474 Task 5 — seam-derived; the legacy hardcoded-entity
@@ -624,6 +636,7 @@ class HADriver:
             forecast_temps=forecast_temps,
             # Occupancy
             occupancy_sensor_states=occupancy_sensor_states,
+            window_sensor_states=window_sensor_states,
             # Per-source readings (INSTRUCTION-241A) — copied from
             # sensor_fetcher's fetch_all_sensor_data → SensorData.heat_sources.
             heat_sources=dict(getattr(sensor_data, "heat_sources", {})),

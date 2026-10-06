@@ -23,6 +23,7 @@ from .orchestrator import run_cycle, save_pipeline_state, restore_pipeline_state
 
 from .controllers import (
     BoostController,
+    WindowController,
     DegradationController,
     HeatSourceSensorSelector,
     SensorController,
@@ -53,6 +54,9 @@ from .controllers import (
     ApoptosisArbiterController,
 )
 from .controllers.swarm_context_enricher import SwarmContextEnricher
+from ..window_detection import ContactStage
+from ..window_inference import InferenceStage
+from ..window_action import ActionStage
 
 __all__ = [
     "CycleContext",
@@ -182,6 +186,7 @@ def _resolve_ha_defaults(kwargs):
             low_delta_persist,
             avg_open_frac,
             dfan_control,
+            excluded_rooms=None,
         ):
             return _pure_dissipation(
                 config,
@@ -195,6 +200,7 @@ def _resolve_ha_defaults(kwargs):
                 get_valve_fraction_fn=get_room_valve_fraction,
                 check_valve_available_fn=check_direct_valve_available,
                 apply_valve_position_fn=apply_valve_position,
+                excluded_rooms=excluded_rooms,
             )
 
         resolved["apply_dissipation_fn"] = _bound_dissipation
@@ -527,6 +533,17 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             channel_available_fn=kw.get("degradation_channel_fn"),
         ),
         boost,
+        # INSTRUCTION-569A — the window stages run after boost (the action
+        # stage reads ctx.boost_rooms) and before ThermalController, where
+        # sysid.observe and the thermal state read ctx.window_open_rooms.
+        WindowController(
+            config=config,
+            stages=[
+                ContactStage(config=config),
+                InferenceStage(config=config),
+                ActionStage(config=config),
+            ],
+        ),
         ThermalController(
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),
         ),

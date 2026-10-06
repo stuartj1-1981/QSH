@@ -5,6 +5,11 @@ export interface RoomState {
   occupancy: string
   occupancy_source?: string
   temperature_source?: string  // 'independent' | 'trv' | 'trv_stale' | 'unavailable' | 'none_configured' | 'unknown'
+  // INSTRUCTION-569F — the window state QSH acts on for the room (569E):
+  // 'contact', 'inferred', or null when no window is treated as open.
+  window_source?: 'contact' | 'inferred' | null
+  // INSTRUCTION-569F — true when the room's window contact cannot be read (569E).
+  window_sensor_fault?: boolean
   status: string
   facing: number | string
   area_m2: number

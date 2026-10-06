@@ -262,6 +262,49 @@ describe('RoomState aux fields (INSTRUCTION-131C V6)', () => {
   })
 })
 
+describe('RoomState window fields (INSTRUCTION-569F)', () => {
+  // TS-level shape gates for the two window fields of RoomState. `tsc -b
+  // --noEmit` enforces the type contract; the runtime assertions below double
+  // as a smoke check that the literal values fit the declared type without
+  // `as` casts.
+
+  it('(1) accepts a RoomState with no window field (older backend payload)', () => {
+    const room: RoomState = {
+      temp: 20.0,
+      target: 21.0,
+      valve: 50,
+      occupancy: 'occupied',
+      status: 'heating',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+    }
+    expect(room.window_source).toBeUndefined()
+    expect(room.window_sensor_fault).toBeUndefined()
+  })
+
+  it("(2) accepts window_source as 'contact', 'inferred' and null, and window_sensor_fault as a boolean", () => {
+    const base: RoomState = {
+      temp: 20.0,
+      target: 14.0,
+      valve: 0,
+      occupancy: 'occupied',
+      status: 'idle',
+      facing: 0.5,
+      area_m2: 20,
+      ceiling_m: 2.4,
+    }
+    const contact: RoomState = { ...base, window_source: 'contact', window_sensor_fault: false }
+    const inferred: RoomState = { ...base, window_source: 'inferred', window_sensor_fault: false }
+    const none: RoomState = { ...base, window_source: null, window_sensor_fault: true }
+    expect(contact.window_source).toBe('contact')
+    expect(inferred.window_source).toBe('inferred')
+    expect(none.window_source).toBeNull()
+    expect(contact.window_sensor_fault).toBe(false)
+    expect(none.window_sensor_fault).toBe(true)
+  })
+})
+
 describe('CycleMessage valve_positions_per_emitter (INSTRUCTION-224D)', () => {
   // TS-level shape gates for the new per-emitter field on CycleMessage.
   // `tsc -b --noEmit` enforces the type contract; the runtime assertions

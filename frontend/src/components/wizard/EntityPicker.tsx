@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Search, Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { HelpTip } from '../HelpTip'
 import type { EntityCandidate } from '../../types/config'
 
 interface EntityPickerProps {
@@ -11,6 +12,8 @@ interface EntityPickerProps {
   candidates?: EntityCandidate[]
   required?: boolean
   label?: string
+  /** INSTRUCTION-569F — optional help text, shown from a help button in the label. */
+  helpText?: string
 }
 
 export function EntityPicker({
@@ -20,6 +23,7 @@ export function EntityPicker({
   candidates = [],
   required = false,
   label,
+  helpText,
 }: EntityPickerProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -58,9 +62,10 @@ export function EntityPicker({
   return (
     <div ref={ref} className="relative">
       {label && (
-        <label className="block text-sm font-medium text-[var(--text)] mb-1">
+        <label className={cn('text-sm font-medium text-[var(--text)] mb-1', helpText ? 'flex items-center gap-1' : 'block')}>
           {label}
           {required && <span className="text-[var(--red)] ml-1">*</span>}
+          {helpText && <HelpTip text={helpText} size={12} />}
         </label>
       )}
       <button

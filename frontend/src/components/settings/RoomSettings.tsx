@@ -8,6 +8,7 @@ import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { AuxOutputEditor } from './AuxOutputEditor'
 import { OccupancyFields } from '../OccupancyFields'
+import { WINDOW } from '../../lib/helpText'
 
 // INSTRUCTION-335 — the wizard property band (qsh/api/routes/wizard.py:51-52,
 // 58, 69-70). Area band is a dirty-scoped client save-gate; bedrooms band and
@@ -230,6 +231,7 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
           room.independent_sensor,
           room.heating_entity,
           room.occupancy_sensor,
+          room.window_sensor,
         ]
       })
       // INSTRUCTION-373B — resolve the per-device battery entities too so their
@@ -526,6 +528,7 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
       independent_sensor: undefined,
       heating_entity: undefined,
       occupancy_sensor: undefined,
+      window_sensor: undefined,
     })
   }, [updateRoom])
 
@@ -680,7 +683,7 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
 
   /** Check if a room has any legacy HA entity fields set. */
   const hasLegacyHaFields = (room: RoomConfigYaml): boolean =>
-    !!(room.trv_entity || room.independent_sensor || room.heating_entity || room.occupancy_sensor)
+    !!(room.trv_entity || room.independent_sensor || room.heating_entity || room.occupancy_sensor || room.window_sensor)
 
   return (
     <div className="space-y-6">
@@ -1267,6 +1270,11 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                         Occupancy Sensor: {room.occupancy_sensor}
                       </p>
                     )}
+                    {room.window_sensor && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Window Sensor: {room.window_sensor}
+                      </p>
+                    )}
                     <button
                       onClick={() => clearLegacyHaFields(name)}
                       className="text-xs px-2 py-1 rounded border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--red)] hover:border-[var(--red)] transition-colors"
@@ -1422,6 +1430,19 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     />
                   </div>
                 )}
+                {/* INSTRUCTION-569F — the window contact, with the owner-ruling R5 help text. */}
+                <div className="grid grid-cols-2 gap-3">
+                  <EntityField
+                    label="Window Sensor"
+                    value={room.window_sensor || ''}
+                    friendlyName={resolved[room.window_sensor || '']?.friendly_name}
+                    state={resolved[room.window_sensor || '']?.state}
+                    unit={resolved[room.window_sensor || '']?.unit}
+                    placeholder="binary_sensor.room_window_contact"
+                    onChange={(v) => updateRoom(name, { window_sensor: v || undefined })}
+                    helpText={WINDOW.sensor}
+                  />
+                </div>
               </div>
             )}
 
