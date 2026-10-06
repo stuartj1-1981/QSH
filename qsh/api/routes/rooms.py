@@ -215,6 +215,14 @@ class RoomConfig(BaseModel):
     # INSTRUCTION-526A — a label, not an identity. The YAML mapping key
     # remains the room's sole identity; this field never reaches it.
     display_name: Optional[str] = None
+    # INSTRUCTION-569E — the room's window contact entity and its open delay
+    # (qsh/config.py reads both at room level). Deliberately not added to
+    # the uncleared-key set at the top of this module: an explicit null
+    # clears the key. The delay has no range rule here: the loader clamps
+    # it, and a rule here would refuse a Settings save of a room whose YAML
+    # holds a value the loader accepts.
+    window_sensor: Optional[str] = None
+    window_open_delay_s: Optional[Union[int, float]] = None
 
     @field_validator("display_name")
     @classmethod

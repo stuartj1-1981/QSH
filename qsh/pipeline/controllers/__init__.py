@@ -23,6 +23,7 @@ and preserves data dependencies:
 """
 
 from .boost_controller import BoostController
+from .window_controller import WindowController
 from .degradation_controller import DegradationController
 from .heat_source_sensor_selector import HeatSourceSensorSelector
 from .sensor_controller import SensorController
@@ -55,6 +56,7 @@ from .apoptosis_arbiter import ApoptosisArbiterController
 __all__ = [
     "ApoptosisArbiterController",
     "BoostController",
+    "WindowController",
     "DegradationController",
     "HeatSourceSensorSelector",
     "SensorController",

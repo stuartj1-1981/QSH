@@ -563,6 +563,14 @@ class SharedState:
         occupancy_states = ctx.occupancy_states
         occupancy_source = ctx.occupancy_source
         temperature_source = ctx.room_temperature_source
+        # INSTRUCTION-569E — the window state for the room card. A context
+        # with no window fields (a test double) reads as no open window.
+        _window_open = getattr(ctx, "window_open_rooms", None)
+        if not isinstance(_window_open, dict):
+            _window_open = {}
+        _window_fault = getattr(ctx, "window_sensor_fault_rooms", None)
+        if not isinstance(_window_fault, (set, frozenset)):
+            _window_fault = frozenset()
 
         # HOUSE_CONFIG["rooms"] is {room_name: area_m2} (flat floats)
         # Facings, ceiling heights etc. are in separate top-level dicts
@@ -660,6 +668,10 @@ class SharedState:
                 'occupancy': occ,
                 'occupancy_source': occupancy_source.get(room_name, 'schedule'),
                 'temperature_source': temperature_source.get(room_name, 'unknown'),
+                # INSTRUCTION-569E — "contact", "inferred" or None; and True
+                # when the room's window contact is not readable.
+                'window_source': _window_open.get(room_name),
+                'window_sensor_fault': room_name in _window_fault,
                 'status': status,
                 'facing': facings_map.get(room_name, 0.2),
                 'area_m2': room_areas.get(room_name, 0),

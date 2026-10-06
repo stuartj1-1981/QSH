@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [1.6.10] — 2026-10-06
+
+### Added
+- Window sensors: each room can now name a window contact sensor, set in
+  the room's settings or in the setup wizard (Home Assistant installs). Use
+  a door/window contact sensor, not the radiator valve's own open-window
+  function. QSH sends one notification when a window has been open for 30
+  minutes, and the room card shows when QSH is treating a window as open.
+- Open-window setback: while a window sensor reports open, that room's
+  target drops to 14 °C and it won't call for heat above that; the normal
+  target returns when the window shuts. Rooms in a boost, or already set
+  below 14 °C, are left alone.
+- Open-window detection without a sensor (off by default): QSH can infer an
+  open window from unusually high heat loss while the heat source is off.
+  Set `window_detection: {inference: observe}` to record it only, or `act`
+  to also notify and hold off heating that room until it is 1.5 °C below
+  its target.
+- The live room data and the historian now report window state, a
+  sensor that can't be read, and the room's heat-loss ratio.
+
+### Changed
+- While a room's window is open, QSH pauses learning for that room (heat
+  loss, thermal mass, solar gain, emitter output and balancing) so an open
+  window doesn't distort its building model. Other rooms are unaffected.
+- Frontend dependency updates.
+
 ## [1.6.9] — 2026-10-03
 
 ### Added

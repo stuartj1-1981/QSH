@@ -1,7 +1,8 @@
 import { memo } from 'react'
-import { Flame, Eye, Clock, EyeOff } from 'lucide-react'
+import { Flame, Eye, Clock, EyeOff, DoorOpen } from 'lucide-react'
 import { cn, formatTemp, statusColor, statusBg } from '../lib/utils'
 import { roomLabelTitleCase } from '../lib/roomLabel'
+import { WINDOW } from '../lib/helpText'
 import type { RoomState, BoostRoom, ManualEntry } from '../types/api'
 import { EntityValue } from './EntityValue'
 
@@ -75,6 +76,17 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
     }
   }
 
+  // INSTRUCTION-569F — an open window contact is the reason for a target
+  // below Comfort; the setback text would give the wrong reason.
+  if (
+    room.window_source === 'contact' &&
+    comfortTempActive != null &&
+    room.target != null &&
+    roundToDisplay(room.target) < roundToDisplay(comfortTempActive)
+  ) {
+    targetTooltip = WINDOW.open
+  }
+
   return (
     <button
       onClick={onClick}
@@ -89,7 +101,7 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
       )}
     >
       <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <h3 className="font-medium text-sm">{displayName}</h3>
           {manualEntry?.mode === 'MANUAL' && manualEntry.position_pct !== null && (
             <span
@@ -102,6 +114,31 @@ export const RoomCard = memo(function RoomCard({ name, room, boost, onClick, ent
             </span>
           )}
           {boost && <Flame size={14} className="text-orange-500" />}
+          {/* INSTRUCTION-569F — the window state. 'contact' is a fact;
+              'inferred' is a detector's conclusion and is marked with '?'. */}
+          {room.window_source && (
+            <span
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[var(--border)] px-2 py-0.5 text-xs font-medium text-[var(--blue)]"
+              role="img"
+              title={room.window_source === 'contact' ? WINDOW.open : WINDOW.inferred}
+              aria-label={room.window_source === 'contact' ? 'window open' : 'window open, inferred'}
+              data-testid={`window-badge-${name}`}
+            >
+              <DoorOpen size={11} aria-hidden="true" />
+              {room.window_source === 'contact' ? 'Window open' : 'Window open?'}
+            </span>
+          )}
+          {!room.window_source && room.window_sensor_fault && (
+            <span
+              className="inline-flex items-center text-[var(--amber)]"
+              role="img"
+              title={WINDOW.fault}
+              aria-label="window sensor not available"
+              data-testid={`window-fault-${name}`}
+            >
+              <DoorOpen size={12} aria-hidden="true" />
+            </span>
+          )}
           {room.temperature_source === 'none_configured' && (
             <span
               className="inline-flex items-center gap-1 text-xs text-[var(--text-muted)]"
