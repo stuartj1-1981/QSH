@@ -2,13 +2,17 @@ import { useState, useMemo, useCallback } from 'react'
 import { Plus, Trash2, Save, Loader2, X } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
-import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass, type BatteryDeviceYaml } from '../../types/config'
+import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass, type BatteryDeviceYaml, type WindowInferenceMode } from '../../types/config'
 import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
 import { AuxOutputEditor } from './AuxOutputEditor'
 import { OccupancyFields } from '../OccupancyFields'
-import { WINDOW } from '../../lib/helpText'
+import { WindowInferenceChooser } from '../WindowInferenceChooser'
+import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
+import { HelpTip } from '../HelpTip'
+import { WINDOW, WINDOW_DELAY } from '../../lib/helpText'
+import { parseWindowOpenDelay, WINDOW_OPEN_DELAY_MAX_S, WINDOW_OPEN_DELAY_MIN_S } from '../../lib/windowDelay'
 
 // INSTRUCTION-335 — the wizard property band (qsh/api/routes/wizard.py:51-52,
 // 58, 69-70). Area band is a dirty-scoped client save-gate; bedrooms band and
@@ -68,6 +72,9 @@ interface RoomSettingsProps {
   // flat list, device-keyed). Optional so the ~60 existing RoomSettings.test.tsx
   // render sites still compile; absent ⇒ [] (no batteries configured yet).
   batteryDevices?: BatteryDeviceYaml[]
+  // INSTRUCTION-572B — the stored `window_detection` section, as the raw
+  // config gives it. Optional; absent ⇒ the mode reads Off.
+  windowDetection?: unknown
   driver: Driver
   onRefetch: () => void
 }
@@ -198,7 +205,7 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   return { ...room, mqtt_topics: cleaned as RoomConfigYaml['mqtt_topics'] }
 }
 
-export function RoomSettings({ rooms, property, construction_year, fabric_class, batteryDevices = [], driver, onRefetch }: RoomSettingsProps) {
+export function RoomSettings({ rooms, property, construction_year, fabric_class, batteryDevices = [], windowDetection, driver, onRefetch }: RoomSettingsProps) {
   const [editedRooms, setEditedRooms] = useState<Record<string, RoomConfigYaml>>(rooms)
   // INSTRUCTION-373B — working battery list, seeded from the prop. Maintained
   // upsert-by-device (clearing a battery removes the entry); the persisted list
@@ -211,6 +218,10 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
     construction_year: construction_year ?? null,
     fabric_class: fabric_class ?? null,
   })
+  // INSTRUCTION-572B — the open-window inference mode, seeded from the stored
+  // section. Null is a stored value that is not a mode: no mode is selected.
+  const storedInferenceMode = selectedInferenceMode(windowDetection)
+  const [inferenceMode, setInferenceMode] = useState<WindowInferenceMode | null>(storedInferenceMode)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const { patch, saving } = usePatchConfig()
@@ -615,6 +626,9 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
     JSON.stringify(rebuiltBatteryDevices) !==
     JSON.stringify(rebuildBatteryDevices(rooms, batteryDevices))
 
+  // INSTRUCTION-572B — inference-mode dirty-gate.
+  const inferenceDirty = inferenceMode !== storedInferenceMode
+
   const save = async () => {
     setSaveError(null)
     // §1.1: dirty-gated, whole-section, serialized awaits, order rooms →
@@ -675,6 +689,21 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
       }
       if (!ok) {
         setSaveError('Failed to save battery devices. Your changes have not been applied.')
+        return
+      }
+    }
+    // INSTRUCTION-572B — fifth step: the open-window inference mode. Same
+    // abort-on-first-failure contract; fires only when dirty. The save
+    // replaces the section, so the stored keys go with the mode.
+    if (inferenceDirty && inferenceMode !== null) {
+      let ok = false
+      try {
+        ok = Boolean(await patch('window_detection', writeInferenceMode(windowDetection, inferenceMode)))
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        setSaveError('Failed to save open-window detection. The mode has not been changed.')
         return
       }
     }
@@ -1442,6 +1471,32 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     onChange={(v) => updateRoom(name, { window_sensor: v || undefined })}
                     helpText={WINDOW.sensor}
                   />
+                  {/* INSTRUCTION-572D — the contact delay, only when the room has a contact. */}
+                  {room.window_sensor && (
+                    <div>
+                      <label
+                        htmlFor={`${name}-window-open-delay`}
+                        className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1"
+                      >
+                        Window Open Delay (s)
+                        <HelpTip text={WINDOW_DELAY.help} size={12} />
+                      </label>
+                      <input
+                        id={`${name}-window-open-delay`}
+                        type="number"
+                        min={WINDOW_OPEN_DELAY_MIN_S}
+                        max={WINDOW_OPEN_DELAY_MAX_S}
+                        step={1}
+                        value={room.window_open_delay_s ?? ''}
+                        placeholder="60"
+                        aria-label={`Window open delay in seconds, ${name}`}
+                        onChange={(e) =>
+                          updateRoom(name, { window_open_delay_s: parseWindowOpenDelay(e.target.value) })
+                        }
+                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1475,6 +1530,19 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
             </div>
           </div>
         ))}
+      </div>
+
+      {/* INSTRUCTION-572B — the open-window inference mode, for both drivers.
+          Save Changes stores it with the rooms. */}
+      <div
+        className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]"
+        data-testid="window-inference-settings"
+      >
+        <WindowInferenceChooser
+          name="settings-window-inference"
+          value={inferenceMode}
+          onChange={setInferenceMode}
+        />
       </div>
     </div>
   )

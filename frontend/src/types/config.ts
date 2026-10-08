@@ -124,7 +124,7 @@ export interface RoomConfigYaml {
   /** INSTRUCTION-569F — the room's window contact entity (Home Assistant). */
   window_sensor?: string
   /** INSTRUCTION-569F — seconds a contact must read open before QSH treats the
-   *  window as open. No UI control: it is set in YAML. */
+   *  window as open. INSTRUCTION-572D: set in the room's settings. */
   window_open_delay_s?: number
   /** INSTRUCTION-478A/478B — predictive-occupancy learner enable + sensor
    *  class, round-tripped via the `rooms` section PATCH (qsh/config.py:1390-1391). */
@@ -517,6 +517,17 @@ export interface BatteryDeviceYaml {
   room: string
 }
 
+/** INSTRUCTION-572B — the three names of the open-window inference mode
+ *  (qsh/window_inference.py). */
+export type WindowInferenceMode = 'disabled' | 'observe' | 'act'
+
+/** INSTRUCTION-572B — the top-level section that holds the mode. A key that
+ *  this interface does not name is kept when the section is stored. */
+export interface WindowDetectionYaml {
+  inference?: WindowInferenceMode
+  [key: string]: unknown
+}
+
 export interface QshConfigYaml {
   driver?: 'ha' | 'mqtt'
   rooms?: Record<string, RoomConfigYaml>
@@ -547,6 +558,8 @@ export interface QshConfigYaml {
   hw_precharge?: HwPrechargeYaml
   telemetry?: TelemetryYaml
   disclaimer_accepted?: boolean
+  /** INSTRUCTION-572B — open-window detection for a room with no contact. */
+  window_detection?: WindowDetectionYaml
 
   /** INSTRUCTION-327 — IANA zone for comfort + occupancy schedule evaluation
    *  on installs without an HA Supervisor (e.g. plain Docker). Blank/absent =

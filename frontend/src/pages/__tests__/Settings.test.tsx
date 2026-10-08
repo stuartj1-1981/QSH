@@ -12,6 +12,8 @@ vi.mock('../../hooks/useConfig', () => ({
     data: {
       driver: 'mqtt',
       rooms: { lounge: { area_m2: 20 } },
+      // INSTRUCTION-572B T6, cases G1 and G2 — the stored open-window section.
+      window_detection: storedWindowDetection,
       heat_source: { type: 'heat_pump' },
       energy: {},
       thermal: {},
@@ -67,6 +69,10 @@ vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
   json: () => Promise.resolve({}),
 }))
 
+// INSTRUCTION-572B T6 — the stored open-window section that the mock of
+// useRawConfig gives. Cases G1 and G2 set it before they render the page.
+let storedWindowDetection: unknown
+
 import { Settings } from '../Settings'
 
 describe('Settings driver plumbing', () => {
@@ -76,5 +82,26 @@ describe('Settings driver plumbing', () => {
     // it would have caused a TypeScript error at build time (caught by tsc).
     // At runtime, verify the component renders by looking for room names.
     expect(screen.getByText('Settings')).toBeInTheDocument()
+  })
+
+  // INSTRUCTION-572B T6, cases G1 and G2 — the page gives the stored section
+  // to the room form as it is stored, on the mqtt driver also.
+  it('(G1) the Rooms section shows the stored open-window inference mode when driver=mqtt', () => {
+    storedWindowDetection = { inference: 'act' }
+    render(<Settings onRunWizard={() => {}} />)
+    expect(screen.getByTestId('window-inference-settings')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Act' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: 'Off' })).not.toBeChecked()
+  })
+
+  it.each([
+    ['a text', 'observe'],
+    ['false', false],
+  ])('(G2) the Rooms section shows no selection for a stored section that is %s', (_label, section) => {
+    storedWindowDetection = section
+    render(<Settings onRunWizard={() => {}} />)
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[]
+    expect(radios).toHaveLength(3)
+    expect(radios.filter((r) => r.checked)).toHaveLength(0)
   })
 })

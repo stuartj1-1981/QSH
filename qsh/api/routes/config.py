@@ -613,6 +613,8 @@ VALID_PATCH_SECTIONS: frozenset[str] = frozenset(
         "telemetry",
         "disclaimer_accepted",
         "mqtt",
+        # INSTRUCTION-572A — the open-window inference mode (569B).
+        "window_detection",
         "root",
     }
 )
@@ -631,6 +633,27 @@ def patch_config_section(section: str, body=Body(...)):
     """
     if section not in VALID_PATCH_SECTIONS:
         raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
+
+    # INSTRUCTION-572A — the open-window inference mode on the Settings save
+    # path, checked before the snapshot is taken. The rule is
+    # qsh.window_inference's. Shape -> 400 and value -> 422, as the arms
+    # below map them. A body with no mode key is refused here: a save of this
+    # section sets the mode. The detail is a string: the patch hook of the
+    # frontend makes its error text from the detail of a refusal.
+    if section == "window_detection":
+        from qsh.window_inference import check_inference_section
+
+        _wd_body = body.get("data", body) if isinstance(body, dict) else body
+        if not isinstance(_wd_body, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"window_detection PATCH body must be an object (dict), got {type(_wd_body).__name__}",
+            )
+        if "inference" not in _wd_body:
+            raise HTTPException(status_code=422, detail="window_detection.inference is required")
+        _wd_err = check_inference_section(_wd_body)
+        if _wd_err is not None:
+            raise HTTPException(status_code=422, detail=_wd_err)
 
     # INSTRUCTION-237A/241C/339C/412 — heat_sources element-level guard. All
     # per-entry checks (element shape/count/type, duplicate-topic, response-timeout

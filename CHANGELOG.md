@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.6.11] — 2026-10-08
+
+### Added
+- Open-window detection without a sensor can now be set to Off, Observe or
+  Act in Settings and in the setup wizard — no `qsh.yaml` edit needed.
+- Rooms with a window sensor gain a Window Open Delay setting (0–600 s) in
+  their room settings (Home Assistant installs).
+
 ## [1.6.10] — 2026-10-06
 
 ### Added
