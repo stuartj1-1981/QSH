@@ -975,6 +975,17 @@ def validate_config(req: WizardValidateRequest):
         if not rooms:
             errors.append("At least one room is required")
 
+        # INSTRUCTION-572A \u2014 the open-window inference mode, checked at the
+        # rooms step. The rule is qsh.window_inference's; an absent section
+        # is not checked.
+        _wd = cfg.get("window_detection")
+        if _wd is not None:
+            from qsh.window_inference import check_inference_section
+
+            _wd_err = check_inference_section(_wd)
+            if _wd_err is not None:
+                errors.append(_wd_err)
+
         # \u2500\u2500 INSTRUCTION-324: property ground-truth declaration \u2500\u2500
         # The declaration is required and band-checked BEFORE it anchors the
         # area-reconciliation rule below; a voided declaration reconciles

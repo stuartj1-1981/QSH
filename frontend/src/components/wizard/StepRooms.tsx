@@ -5,6 +5,8 @@ import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { OccupancyFields } from '../OccupancyFields'
 import { WINDOW } from '../../lib/helpText'
+import { WindowInferenceChooser } from '../WindowInferenceChooser'
+import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
 import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml, type BatteryDeviceYaml } from '../../types/config'
 
@@ -935,6 +937,18 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
           No rooms defined yet. Add your first room above.
         </div>
       )}
+
+      {/* INSTRUCTION-572C — the open-window inference mode, for both drivers.
+          The section is written only when the operator selects a mode. */}
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+        <WindowInferenceChooser
+          name="wizard-window-inference"
+          value={selectedInferenceMode(config.window_detection)}
+          onChange={(mode) =>
+            onUpdate('window_detection', writeInferenceMode(config.window_detection, mode))
+          }
+        />
+      </div>
     </div>
   )
 }

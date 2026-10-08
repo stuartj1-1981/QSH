@@ -129,6 +129,30 @@ export const WINDOW = {
   fault: 'The window sensor is not available. QSH reads the window as closed.',
 } as const
 
+// INSTRUCTION-572B — the open-window inference mode (569B), where the
+// operator sets it. The texts state what 569B, 569C and 569D do.
+export const WINDOW_INFERENCE = {
+  title: 'Open-Window Detection Without a Sensor',
+  intro:
+    'QSH can infer an open window in a room that has no window sensor. It measures only in long periods with the heat source off, and it compares the heat loss of the room with the normal value for that room. QSH first learns the normal value of each room, which needs many hours of such periods. The function needs a power measurement of the heat source and an outdoor temperature.',
+  disabled: 'QSH does not infer an open window.',
+  observe:
+    'QSH measures only. It writes the heat-loss ratio and the inferred window state to the historian, and the inferred state to the log. It does not change the heating, and it sends no notification.',
+  act: 'QSH also acts on a room that it infers open. It sends one notification and takes no learning sample from that room. The room can fall up to 1.5°C below its target before it starts the heat source. A boost has priority. A room with a window sensor that reads closed is not changed. If the detection is incorrect, the room calls for heat up to 1.5°C lower than its target for as long as the state lasts.',
+  invalid: 'The stored value is not a mode, and QSH reads it as Off. To correct it, select a mode and store the configuration.',
+} as const
+
+export const WINDOW_INFERENCE_LABEL = {
+  disabled: 'Off',
+  observe: 'Observe',
+  act: 'Act',
+} as const
+
+// INSTRUCTION-572D — the contact delay (569A), where the operator sets it.
+export const WINDOW_DELAY = {
+  help: 'The time that the contact must stay open before QSH treats the window as open. The range is 0 to 600 seconds. An empty field gives 60 seconds.',
+} as const
+
 export const SWARM = {
   inputs:
     'Each swarm input this unit can consume. The light shows whether the unit is using that data on live control — green: in use; amber: observing (received but not applied live); red: no data; grey: reserved (channel not yet active).',

@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import { Download, AlertTriangle, Check } from 'lucide-react'
 import { useSysid } from '../../hooks/useSysid'
 import { cadenceCopy, cadenceLabel } from '../../lib/sensorCadence'
+import { WINDOW_INFERENCE_LABEL } from '../../lib/helpText'
+import { readInferenceMode } from '../../lib/windowSettings'
 import type {
   DeployOutcome,
   QshConfigYaml,
@@ -344,6 +346,11 @@ export function StepReview({
           {Object.keys(rooms).length === 0 && (
             <p className="text-sm text-[var(--red)]">No rooms defined!</p>
           )}
+          {/* INSTRUCTION-572C — the mode that the deploy stores, or Off for no section. */}
+          <SummaryItem
+            label="Open-window detection without a sensor"
+            value={WINDOW_INFERENCE_LABEL[readInferenceMode(config.window_detection)]}
+          />
         </SummarySection>
 
         <SummarySection title="Sensors">
