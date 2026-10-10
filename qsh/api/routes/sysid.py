@@ -89,10 +89,11 @@ def get_sysid_room(room: str):
         raise HTTPException(status_code=404, detail=f"Room '{room}' not found")
 
     try:
-        # INSTRUCTION-415 — merge the per-room U-candidate ledger into
-        # gate_stats under distinct `room_`-prefixed names (the unprefixed
-        # u_qualified / u_rejected_rate keys remain the process-scope
-        # counters; the per-room block is authoritative for this room).
+        # INSTRUCTION-415 — merge the per-room U ledger into gate_stats
+        # under distinct `room_`-prefixed names (the unprefixed u_qualified
+        # key remains the process-scope counter; the per-room block is
+        # authoritative for this room). INSTRUCTION-573B — the ledger is the
+        # INSTRUCTION-419 event ledger.
         gate_stats = sysid.gate_stats(room)
         room_state = sysid.get_room_state(room)
         if not isinstance(room_state, dict):
@@ -122,17 +123,19 @@ def get_sysid_room(room: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# INSTRUCTION-415 — the seven per-room U-candidate ledger classes emitted by
-# SystemIdentifier.get_room_state. The taxonomy is total: for every room-cycle
-# in U context, exactly one class increments.
+# INSTRUCTION-573B — the per-room U ledger is the INSTRUCTION-419 event
+# ledger emitted by SystemIdentifier.get_room_state (the 415 per-cycle ledger
+# is deleted with the per-cycle U read). The taxonomy is total: each event (a
+# transition in the anchored direction, in U context) increments
+# u_event_candidates and exactly one of the six classes after it.
 _U_LEDGER_KEYS = (
-    "u_qualified",
-    "u_rejected_rate",
-    "u_rejected_delta_ext",
-    "u_rejected_no_c",
-    "u_flat",
-    "u_rejected_sign",
-    "u_rejected_outlier",
+    "u_event_candidates",
+    "u_event_qualified",
+    "u_event_rejected_window",
+    "u_event_rejected_sign",
+    "u_event_rejected_rate",
+    "u_event_rejected_no_c",
+    "u_event_rejected_outlier",
 )
 
 

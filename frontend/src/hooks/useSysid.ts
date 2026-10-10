@@ -18,8 +18,8 @@ export function useSysid() {
 
 /** INSTRUCTION-415 — detailed per-room SysID state (`/api/sysid/{room}`),
  *  fetched lazily when `room` is non-null (the Engineering room-detail
- *  expansion). Carries the per-room U-candidate rejection ledger inside
- *  `gate_stats` under `room_`-prefixed keys. */
+ *  expansion). Carries the per-room U ledger inside `gate_stats` under
+ *  `room_`-prefixed keys (INSTRUCTION-573B — the event ledger). */
 export function useSysidRoom(room: string | null, refreshKey = 0) {
   // Keyed by room so switching rooms never shows the previous room's data —
   // the derived values below return null until the fetch for the CURRENT

@@ -8,7 +8,13 @@ import { tempDomain } from '../lib/chartDomain'
 import { HardwareTelemetry } from '../components/HardwareTelemetry'
 import { HelpTip } from '../components/HelpTip'
 import { cn } from '../lib/utils'
-import { MIN_OBS_FOR_USE, CONFIDENCE_FULL_AT, PC_FIT_R_SQUARED_MIN } from '../lib/sysidConstants'
+import {
+  MIN_OBS_FOR_USE,
+  CONFIDENCE_FULL_AT,
+  PC_FIT_R_SQUARED_MIN,
+  MAX_EVENT_WINDOW_S,
+  MAX_U_RATE_C_PER_H,
+} from '../lib/sysidConstants'
 import { EMPTY_CADENCE, cadenceCopy, cadenceLabel } from '../lib/sensorCadence'
 import type { SensorCadence, SysidRoom } from '../types/api'
 
@@ -164,7 +170,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 C (kWh/°C)
                 <HelpTip
-                  text="Effective thermal mass. Confidence-weighted blend of prior and learned. Primary convergence path is the passive-cooling analyser (see PC fits), not per-cycle estimation, which rarely qualifies under multi-zone UK operation."
+                  text="Effective thermal mass. Confidence-weighted blend of prior and learned. It learns from the event heat-balance read (the interval between two readings while the source heats) and from the passive-cooling analyser (see PC fits)."
                   size={12}
                 />
               </span>
@@ -182,7 +188,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 C obs
                 <HelpTip
-                  text="Number of accepted C observations across both per-cycle estimation and passive-cooling fits. Same maturity scale as U obs."
+                  text="Number of accepted C observations across the event heat-balance read and passive-cooling fits. Same maturity scale as U obs."
                   size={12}
                 />
               </span>
@@ -191,7 +197,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 C source
                 <HelpTip
-                  text="Where C currently comes from: ‘Prior’ = config-derived prior (no observations yet), ‘Cycle’ = per-cycle heat-balance estimation, ‘PC’ = passive-cooling tau fits (the dominant path in normal multi-zone UK operation)."
+                  text="Where C currently comes from: ‘Prior’ = config-derived prior (no observations yet), ‘Cycle’ = the event heat-balance read, ‘PC’ = passive-cooling tau fits (the dominant path in normal multi-zone UK operation)."
                   size={12}
                 />
               </span>
@@ -227,7 +233,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
               <span className="inline-flex items-center gap-1">
                 Sensor
                 <HelpTip
-                  text="Measured reporting behaviour of this room's temperature sensor: the step size and cadence actually observed on the wire, classified against what the estimator can admit. OK = compatible with learning; Coarse = learns at reduced rate; Blocked = cannot learn at current settings (check the device's reporting deadband, minimum-report interval, or device class); Measuring = too few updates observed yet to classify. Advisory only — never blocks anything."
+                  text={`Measured reporting behaviour of this room's temperature sensor: the step size and cadence actually observed on the wire, classified against what the estimator can admit. OK = compatible with learning; Coarse = the updates are too far apart (median interval above ${WINDOW_HOURS} hours), so the room learns slowly; Blocked = cannot learn at current settings, shown only while the event reads are switched off (check the device's reporting deadband, minimum-report interval, or device class); Measuring = too few updates observed yet to classify. Advisory only — never blocks anything.`}
                   size={12}
                 />
               </span>
@@ -275,22 +281,25 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
 
 // INSTRUCTION-415 — per-room U-candidate rejection ledger (D4). A starved
 // room becomes diagnosable in one glance: the dominant rejection class names
-// the mechanism. The ledger is total — the seven classes sum to the room's
-// U-candidate count.
+// the mechanism. INSTRUCTION-573B — the ledger is the INSTRUCTION-419 event
+// ledger: one entry per interval between two readings in the anchored
+// direction, while the room is eligible for a U read. The six classes sum to
+// the room's event count. The ledger is counted since the last start.
 const U_LEDGER_CLASSES: { key: string; label: string }[] = [
-  { key: 'room_u_qualified', label: 'qualified' },
-  { key: 'room_u_flat', label: 'flat' },
-  { key: 'room_u_rejected_rate', label: 'rate' },
-  { key: 'room_u_rejected_sign', label: 'sign' },
-  { key: 'room_u_rejected_delta_ext', label: 'Δext' },
-  { key: 'room_u_rejected_no_c', label: 'no-C' },
-  { key: 'room_u_rejected_outlier', label: 'outlier' },
+  { key: 'room_u_event_qualified', label: 'qualified' },
+  { key: 'room_u_event_rejected_window', label: 'window' },
+  { key: 'room_u_event_rejected_sign', label: 'sign' },
+  { key: 'room_u_event_rejected_rate', label: 'rate' },
+  { key: 'room_u_event_rejected_no_c', label: 'no-C' },
+  { key: 'room_u_event_rejected_outlier', label: 'outlier' },
 ]
 
+const WINDOW_HOURS = MAX_EVENT_WINDOW_S / 3600
+
 const U_LEDGER_MECHANISM_COPY: Record<string, string> = {
-  room_u_rejected_rate:
-    'This sensor publishes in steps too large for the estimator (>0.1 °C per 30 s cycle) — check the device’s reporting deadband or minimum-report throttle.',
-  room_u_rejected_no_c:
+  room_u_event_rejected_window: `This sensor’s readings are more than ${WINDOW_HOURS} hours apart while the room cools — check the device’s reporting deadband or maximum report interval.`,
+  room_u_event_rejected_rate: `This room’s readings fall faster than ${MAX_U_RATE_C_PER_H} °C per hour while the heat source is off — check for a draught, or a sensor near a cold surface or an outside door.`,
+  room_u_event_rejected_no_c:
     'This room has no usable thermal-mass prior — check its area and facing in the configuration.',
 }
 
@@ -341,7 +350,7 @@ function SysidRoomDetailPanel({ room }: { room: string }) {
     count: gs[key] ?? 0,
   }))
   const candidates = counts.reduce((s, c) => s + c.count, 0)
-  const rejections = counts.filter((c) => c.key !== 'room_u_qualified')
+  const rejections = counts.filter((c) => c.key !== 'room_u_event_qualified')
   const dominant = rejections.reduce(
     (best, c) => (c.count > best.count ? c : best),
     rejections[0],
@@ -357,7 +366,7 @@ function SysidRoomDetailPanel({ room }: { room: string }) {
       <div className="flex items-center gap-1 font-medium text-[var(--text-muted)]">
         U observation ledger
         <HelpTip
-          text="Every 30 s cycle where this room was eligible for a heat-loss (U) observation resolved to exactly one class below. ‘qualified’ = accepted; the rest name why the cycle was discarded: ‘flat’ = no temperature change, ‘rate’ = step too large for the glitch gate, ‘sign’ = warming while the source was off, ‘Δext’ = room too close to outdoor temperature, ‘no-C’ = no usable thermal-mass prior, ‘outlier’ = implausible computed U."
+          text={`Since the last start, every interval between two readings of this room in one direction, while the room was eligible for a heat-loss (U) observation, resolved to exactly one class below. ‘qualified’ = accepted; the rest name why the interval was discarded: ‘window’ = readings more than ${WINDOW_HOURS} hours apart, ‘sign’ = warming while the source was off, ‘rate’ = cooling faster than ${MAX_U_RATE_C_PER_H} °C per hour, ‘no-C’ = no usable thermal-mass prior, ‘outlier’ = implausible computed U.`}
           size={12}
         />
       </div>
@@ -368,7 +377,7 @@ function SysidRoomDetailPanel({ room }: { room: string }) {
             className={cn(
               emphasise && key === dominant.key
                 ? 'text-[var(--red,#ef4444)] font-semibold'
-                : key === 'room_u_qualified'
+                : key === 'room_u_event_qualified'
                   ? 'text-[var(--text)]'
                   : 'text-[var(--text-muted)]',
             )}
@@ -380,6 +389,12 @@ function SysidRoomDetailPanel({ room }: { room: string }) {
       {emphasise && U_LEDGER_MECHANISM_COPY[dominant.key] && (
         <p data-testid="u-ledger-mechanism" className="text-[var(--text-muted)] max-w-prose">
           {U_LEDGER_MECHANISM_COPY[dominant.key]}
+        </p>
+      )}
+      {candidates === 0 && data.u_observations < MIN_OBS_FOR_USE && (
+        <p data-testid="u-ledger-no-event" className="text-[var(--text-muted)] max-w-prose">
+          No interval has closed since the last start. A U read needs the
+          heat source off and two changes of the reading in the same direction.
         </p>
       )}
 

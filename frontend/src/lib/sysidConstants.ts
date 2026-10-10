@@ -20,9 +20,19 @@ export const MIN_OBS_FOR_USE = 10
 /** Accepted-U-observation count at which the per-room confidence badge
  *  reaches High (and the historical full-confidence reference). Defined
  *  source-side in qsh/sysid.py as CONFIDENCE_FULL_AT (INSTRUCTION-416).
- *  @source qsh/sysid.py:191 */
+ *  @source qsh/sysid.py:193 */
 export const CONFIDENCE_FULL_AT = 100
 
 /** Minimum R² for a passive-cooling window fit to be accepted.
- *  @source qsh/sysid.py:233 */
+ *  @source qsh/sysid.py:235 */
 export const PC_FIT_R_SQUARED_MIN = 0.8
+
+/** INSTRUCTION-573B — the longest interval between two readings that the
+ *  event U read uses [s]; the Engineering U ledger's 'window' class.
+ *  @source qsh/sysid.py:290 */
+export const MAX_EVENT_WINDOW_S = 7200
+
+/** INSTRUCTION-573B — the fastest cooling that the event U read admits
+ *  [°C/h]; the Engineering U ledger's 'rate' class.
+ *  @source qsh/sysid.py:287 */
+export const MAX_U_RATE_C_PER_H = 5.0

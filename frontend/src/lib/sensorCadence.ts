@@ -1,11 +1,17 @@
 // INSTRUCTION-420 — sensor-cadence class → display label + per-room copy.
 // Match on the API value ("ok" / "coarse" / "blocked" / "insufficient"),
 // never the display text. The copy renders the measured quantities (D3/QG5)
-// and names the fix mechanism; the 415 rejection ledger (Engineering row
-// expansion) is the drill-down. Shared by the Engineering Sensor column and
-// the wizard review advisory (advisory only — never blocks anything).
+// and names the fix mechanism; the U ledger (Engineering row expansion) is
+// the drill-down. Shared by the Engineering Sensor column and the wizard
+// review advisory (advisory only — never blocks anything).
+//
+// INSTRUCTION-573B (owner ruling R7) — the classifier follows the event-read
+// flag, which ships on: any step is admissible, so 'coarse' means a median
+// interval between updates above MAX_EVENT_WINDOW_S, and 'blocked' occurs
+// only while the event reads are switched off.
 
 import type { SensorCadence } from '../types/api'
+import { MAX_EVENT_WINDOW_S } from './sysidConstants'
 
 export const EMPTY_CADENCE: SensorCadence = {
   class: 'insufficient',
@@ -42,11 +48,11 @@ export function cadenceCopy(c: SensorCadence): string {
     case 'blocked':
       return 'This sensor cannot feed room learning at current settings: no observed update step fits the estimator’s admission gate. Check the device’s reporting deadband, minimum-report-interval, or device class. Expand the row for the U observation ledger (the rejection counts).'
     case 'coarse':
-      return `Learns at reduced rate — a share of updates arrive too coarse to use (${
-        c.admissible_fraction != null ? Math.round(c.admissible_fraction * 100) : '—'
-      }% admissible, median step ${
-        c.median_step_c != null ? c.median_step_c.toFixed(2) : '—'
-      } °C${eventsPerDay ? `, ${eventsPerDay} updates/day` : ''}).`
+      return `Learns slowly — this sensor’s updates are too far apart (median interval ${
+        c.median_interval_s != null ? Math.round(c.median_interval_s / 60) : '—'
+      } min; an interval longer than ${MAX_EVENT_WINDOW_S / 3600} hours is not used${
+        eventsPerDay ? `, ${eventsPerDay} updates/day` : ''
+      }). Check the device’s maximum report interval.`
     case 'ok':
       return `Sensor reporting is compatible with room learning${
         eventsPerDay ? ` (${eventsPerDay} updates/day)` : ''

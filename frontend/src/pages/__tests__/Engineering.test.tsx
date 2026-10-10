@@ -79,13 +79,13 @@ const MOCK_ROOM_DETAIL = {
   solar_gain: 0.012,
   confidence: 'low',
   gate_stats: {
-    room_u_qualified: 3,
-    room_u_rejected_rate: 41,
-    room_u_rejected_delta_ext: 5,
-    room_u_rejected_no_c: 0,
-    room_u_flat: 12,
-    room_u_rejected_sign: 2,
-    room_u_rejected_outlier: 1,
+    room_u_event_candidates: 62,
+    room_u_event_qualified: 3,
+    room_u_event_rejected_window: 41,
+    room_u_event_rejected_sign: 12,
+    room_u_event_rejected_rate: 5,
+    room_u_event_rejected_no_c: 0,
+    room_u_event_rejected_outlier: 1,
   },
 }
 
@@ -282,19 +282,38 @@ describe('Engineering room detail (INSTRUCTION-415 ledger + INSTRUCTION-422 rese
   it('row click expands the detail with the U rejection ledger, dominant class emphasised', () => {
     expandRow()
     const ledger = screen.getByTestId('u-rejection-ledger')
-    // All seven classes render with their counts.
+    // All six event-ledger classes render with their counts (573B).
     expect(ledger).toHaveTextContent('qualified 3')
-    expect(ledger).toHaveTextContent('rate 41')
-    expect(ledger).toHaveTextContent('flat 12')
-    expect(ledger).toHaveTextContent('Δext 5')
-    // Starved room (3 obs < 10) + rate-dominant → the mechanism copy names
-    // the sensor-step fix (INSTRUCTION-415 D4).
+    expect(ledger).toHaveTextContent('window 41')
+    expect(ledger).toHaveTextContent('sign 12')
+    expect(ledger).toHaveTextContent('rate 5')
+    expect(ledger).toHaveTextContent('no-C 0')
+    expect(ledger).toHaveTextContent('outlier 1')
+    expect(ledger).not.toHaveTextContent('flat')
+    expect(ledger).not.toHaveTextContent('Δext')
+    // Starved room (3 obs < 10) + window-dominant → the mechanism copy names
+    // the sensor-reporting fix and the window from the mirrored constant.
     expect(screen.getByTestId('u-ledger-mechanism')).toHaveTextContent(
-      /steps too large/,
+      /more than 2 hours apart/,
     )
     expect(screen.getByTestId('u-ledger-mechanism')).toHaveTextContent(
       /deadband/,
     )
+    expect(screen.queryByTestId('u-ledger-no-event')).toBeNull()
+  })
+
+  it('a room with no closed interval shows the no-event line (573B)', () => {
+    const stats = MOCK_ROOM_DETAIL.gate_stats as Record<string, number>
+    const saved = { ...stats }
+    for (const k of Object.keys(stats)) stats[k] = 0
+    try {
+      expandRow()
+      expect(screen.getByTestId('u-ledger-no-event')).toHaveTextContent(
+        /No interval has closed since the last start/,
+      )
+    } finally {
+      Object.assign(stats, saved)
+    }
   })
 
   it('reset flow: confirm states what is discarded; success outcome renders (422)', async () => {

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.6.12] — 2026-10-10
+
+### Changed
+- System identification now learns heat loss and thermal mass from each
+  sensor-step interval rather than every cycle, with a new heat-balance
+  cross-check.
+- Engineering page sysid view updated.
+
 ## [1.6.11] — 2026-10-08
 
 ### Added
