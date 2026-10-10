@@ -496,11 +496,13 @@ export interface SysidRoom {
 }
 
 /** INSTRUCTION-415 — detailed per-room SysID state from `/api/sysid/{room}`.
- *  `gate_stats` carries the process-scope counters plus the per-room
- *  U-candidate ledger under `room_`-prefixed keys (room_u_qualified,
- *  room_u_rejected_rate, room_u_rejected_delta_ext, room_u_rejected_no_c,
- *  room_u_flat, room_u_rejected_sign, room_u_rejected_outlier). The ledger
- *  is total: the seven classes sum to the room's U-candidate count. */
+ *  `gate_stats` carries the process-scope counters plus the per-room U
+ *  ledger under `room_`-prefixed keys. INSTRUCTION-573B — the ledger is the
+ *  INSTRUCTION-419 event ledger (room_u_event_candidates,
+ *  room_u_event_qualified, room_u_event_rejected_window,
+ *  room_u_event_rejected_sign, room_u_event_rejected_rate,
+ *  room_u_event_rejected_no_c, room_u_event_rejected_outlier), counted since
+ *  the last start. The six classes sum to room_u_event_candidates. */
 export interface SysidRoomDetail extends SysidRoom {
   room: string
   gate_stats: Record<string, number>

@@ -33,17 +33,17 @@ describe('cadenceCopy (QG5 string assertions)', () => {
     expect(copy).toMatch(/U observation ledger/)
   })
 
-  it('Coarse copy renders measured f, median step and updates/day', () => {
+  it('Coarse copy (event mode, INSTRUCTION-573B) renders the median interval, the window and updates/day', () => {
     const copy = cadenceCopy({
       ...base,
       class: 'coarse',
-      admissible_fraction: 0.6,
-      median_step_c: 0.18,
+      median_interval_s: 9000,
     })
-    expect(copy).toMatch(/reduced rate/)
-    expect(copy).toMatch(/60% admissible/)
-    expect(copy).toMatch(/median step 0\.18 °C/)
+    expect(copy).toMatch(/too far apart/)
+    expect(copy).toMatch(/median interval 150 min/)
+    expect(copy).toMatch(/longer than 2 hours is not used/)
     expect(copy).toMatch(/72\.0 updates\/day/)
+    expect(copy).toMatch(/maximum report interval/)
   })
 
   it('post-417 OK copy for slow-but-admissible rooms renders updates/day (the rate context)', () => {
