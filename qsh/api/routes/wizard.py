@@ -1198,6 +1198,38 @@ def validate_config(req: WizardValidateRequest):
             if not sensors.get("power_input"):
                 warnings.append("No HP power sensor — COP monitoring unavailable")
 
+    # ── INSTRUCTION-575I: hydraulic protection rules (primary source) ──
+    # Errors (422 at deploy). The checks live in qsh.api.heat_source_validation,
+    # shared with the settings PATCH guard. The flow-rate rule runs at the
+    # sensors step, where the flow-rate sensor and min_flow_rate are entered;
+    # the bypass rule runs at the rooms step, when the rooms exist. Primary
+    # source read plural-first, as the heat_source step above reads it.
+    if req.step in ("sensors", "rooms") or req.step is None:
+        from qsh.api.heat_source_validation import (
+            bypass_rooms_error,
+            min_flow_rate_error,
+        )
+
+        _hs_list = cfg.get("heat_sources")
+        if isinstance(_hs_list, list) and _hs_list and isinstance(_hs_list[0], dict):
+            _primary = _hs_list[0]
+            _label = f"heat_sources[0] ('{_primary.get('name', _primary.get('type'))}')"
+        else:
+            _single = cfg.get("heat_source")
+            _primary = _single if isinstance(_single, dict) else {}
+            _label = "heat_source"
+        if req.step in ("sensors", None):
+            _flow_err = min_flow_rate_error(_primary, _label)
+            if _flow_err is not None:
+                errors.append(_flow_err)
+        if req.step in ("rooms", None):
+            _rooms = cfg.get("rooms")
+            _bypass_err = bypass_rooms_error(
+                _primary, _rooms.keys() if isinstance(_rooms, dict) else (), _label
+            )
+            if _bypass_err is not None:
+                errors.append(_bypass_err)
+
     if req.step == "thermal" or req.step is None:
         thermal = cfg.get("thermal", {})
         peak = thermal.get("peak_loss_kw")

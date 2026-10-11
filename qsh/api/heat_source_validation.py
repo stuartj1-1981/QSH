@@ -22,7 +22,8 @@ each names the source index / name, the offending value, the permitted band, and
 the remediation, so it stands alone in a banner off-screen.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from qsh.heat_source_limits import (
     ABSOLUTE_FLOW_CAPABILITY_C,
@@ -241,13 +242,91 @@ def _check_operating_envelope(idx: int, src: dict) -> Optional[Tuple[int, str]]:
     return None
 
 
-def validate_heat_sources_list(sources) -> Optional[Tuple[int, str]]:
+def flow_rate_sensor_declared(src: dict) -> bool:
+    """INSTRUCTION-575I — True when the source maps a flow-rate sensor.
+
+    HA stores an entity id string; MQTT stores a topic object
+    (INSTRUCTION-241B). A blank string or a topic object with a blank topic is
+    not a declaration.
+    """
+    sensors = src.get("sensors") if isinstance(src, dict) else None
+    if not isinstance(sensors, dict):
+        return False
+    value = sensors.get("flow_rate")
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        topic = value.get("topic")
+        return isinstance(topic, str) and bool(topic.strip())
+    return False
+
+
+def min_flow_rate_error(src: dict, label: str) -> Optional[str]:
+    """INSTRUCTION-575I — a declared flow-rate sensor requires min_flow_rate.
+
+    ``src`` is the primary source: the hydraulic controller reads min_flow_rate
+    from it (qsh/config.py, INSTRUCTION-575E). Without a declared value the
+    Tier-1 trip threshold falls back to a conservative default. Returns the
+    error message, or None.
+    """
+    if not flow_rate_sensor_declared(src):
+        return None
+    raw = src.get("min_flow_rate")
+    value = _coerce(raw) if raw is not None else None
+    if value is not None and math.isfinite(value) and value > 0:
+        return None
+    shown = "not set" if raw is None else f"{raw!r}"
+    return (
+        f"{label} has a flow-rate sensor but min_flow_rate is {shown}. "
+        f"Enter the heat pump's minimum flow rate in L/min, as given in its "
+        f"installation manual (a number above 0)"
+    )
+
+
+def bypass_rooms_error(
+    src: dict, room_names: Iterable[str], label: str,
+) -> Optional[str]:
+    """INSTRUCTION-575I — every bypass_rooms entry must be a configured room.
+
+    An absent or empty list means automatic selection and passes. Returns the
+    error message, or None.
+    """
+    declared = src.get("bypass_rooms")
+    if declared is None:
+        return None
+    if not isinstance(declared, list):
+        return (
+            f"{label} bypass_rooms must be a list of room names, got {declared!r}"
+        )
+    known = set(room_names)
+    unknown: List[Any] = []
+    for name in declared:
+        if not (isinstance(name, str) and name in known):
+            if name not in unknown:
+                unknown.append(name)
+    if not unknown:
+        return None
+    listed = ", ".join(repr(n) for n in unknown)
+    if len(unknown) == 1:
+        tail = ("which is not a configured room. "
+                "Remove it from the bypass rooms, or add the room")
+    else:
+        tail = ("which are not configured rooms. "
+                "Remove them from the bypass rooms, or add the rooms")
+    return f"{label} bypass_rooms names {listed}, {tail}"
+
+
+def validate_heat_sources_list(
+    sources, room_names: Optional[Iterable[str]] = None,
+) -> Optional[Tuple[int, str]]:
     """Aggregate per-entry guard for both interactive write surfaces (412 D7).
 
     Returns ``(status_code, detail)`` on the first failing check (400 structural /
     422 value), else ``None``. Check order per element: response_timeout → capability
     (must precede operating so the effective envelope is coherent) → operating
-    envelope + inversion.
+    envelope + inversion. Then, on the primary source only (INSTRUCTION-575I):
+    min_flow_rate for a declared flow-rate sensor, and — when ``room_names`` is
+    given — bypass_rooms against the configured rooms.
     """
     shape = _check_shape(sources)
     if shape is not None:
@@ -264,10 +343,22 @@ def validate_heat_sources_list(sources) -> Optional[Tuple[int, str]]:
             err = check(idx, src)
             if err is not None:
                 return err
+    primary = sources[0]
+    label = f"heat_sources[0] ('{primary.get('name', primary.get('type'))}')"
+    flow_err = min_flow_rate_error(primary, label)
+    if flow_err is not None:
+        return (422, flow_err)
+    if room_names is not None:
+        bypass_err = bypass_rooms_error(primary, room_names, label)
+        if bypass_err is not None:
+            return (422, bypass_err)
     return None
 
 
 __all__ = [
+    "bypass_rooms_error",
+    "flow_rate_sensor_declared",
+    "min_flow_rate_error",
     "validate_heat_sources_list",
     "validate_no_duplicate_heat_source_topics",
 ]

@@ -7,6 +7,7 @@ import { useEntityScan } from '../../hooks/useEntityScan'
 import { cn } from '../../lib/utils'
 import { mqttSensorPlaceholder } from '../../lib/mqtt-placeholders'
 import { asTopicInput } from '../../lib/mqttTopic'
+import { HydraulicProtectionFields } from '../settings/HydraulicProtectionFields'
 import type {
   HeatSourceYaml, OutdoorYaml, SolarYaml, BatteryYaml, GridYaml,
   MqttConfig, MqttTopicInput, MqttTopicCandidate,
@@ -78,6 +79,12 @@ function sensorAsString(v: string | { topic: string } | undefined): string {
   return typeof v === 'string' ? v : ''
 }
 
+/** INSTRUCTION-575H — configured room keys for the bypass-room choice. */
+function configuredRoomNames(config: Record<string, unknown>): string[] {
+  const rooms = config.rooms
+  return rooms && typeof rooms === 'object' ? Object.keys(rooms) : []
+}
+
 /** HA path — supports per-source sensor tabs (INSTRUCTION-237A Task 5). */
 function HaSensors({ config, onUpdate }: StepSensorsProps) {
   const { candidates, loading, error, scan } = useEntityScan()
@@ -127,6 +134,16 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
     // INSTRUCTION-237A: writes plural only. Server reconciles to singular
     // on save when length === 1.
     const updatedSource = { ...hs, sensors: newSensors }
+    const nextSources =
+      heatSourcesArr.length > 0
+        ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
+        : [updatedSource]
+    onUpdate('heat_sources', nextSources)
+  }
+
+  // INSTRUCTION-575H — source-level (non-sensor) fields; plural write only.
+  const updateSourceFields = (changes: Partial<HeatSourceYaml>) => {
+    const updatedSource = { ...hs, ...changes }
     const nextSources =
       heatSourcesArr.length > 0
         ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
@@ -351,6 +368,18 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
           </div>
         )}
       </div>
+
+      {/* INSTRUCTION-575H — hydraulic protection, primary source only.
+          Outside the collapsible so a required minimum flow rate is never
+          hidden. */}
+      {safeActive === 0 && (
+        <HydraulicProtectionFields
+          source={hs}
+          roomNames={configuredRoomNames(config)}
+          onChange={updateSourceFields}
+          idPrefix="wizard-ha-hydraulic"
+        />
+      )}
 
       {/* Outdoor */}
       <div>
@@ -590,6 +619,16 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
     onUpdate('heat_sources', nextSources)
   }
 
+  // INSTRUCTION-575H — source-level (non-sensor) fields; plural write only.
+  const updateSourceFields = (changes: Partial<HeatSourceYaml>) => {
+    const updatedSource = { ...hs, ...changes }
+    const nextSources =
+      heatSourcesArr.length > 0
+        ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
+        : [updatedSource]
+    onUpdate('heat_sources', nextSources)
+  }
+
   const getInputTopic = (key: string): string => inputs[key]?.topic || ''
 
   return (
@@ -695,6 +734,16 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
           })}
         </div>
       </div>
+
+      {/* INSTRUCTION-575H — hydraulic protection, primary source only. */}
+      {safeActive === 0 && (
+        <HydraulicProtectionFields
+          source={hs}
+          roomNames={configuredRoomNames(config)}
+          onChange={updateSourceFields}
+          idPrefix="wizard-mqtt-hydraulic"
+        />
+      )}
 
       {/* Additional sensors — system-level only (hp_mode_state per §D-8). */}
       <div>

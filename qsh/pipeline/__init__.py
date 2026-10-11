@@ -469,8 +469,18 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
     from ..allostatic_load import AllostaticLoadRegistry
     allostatic_registry = AllostaticLoadRegistry()
 
+    # INSTRUCTION-575A — one RoomControlState for the whole pipeline. The valve
+    # controller writes the nudge state; the shoulder, degradation and
+    # historian controllers read it. All four hold this object from
+    # construction, so a restore before the first cycle reaches it.
+    room_control_state = kw.get("room_control_state")
+    if room_control_state is None:
+        from ..valve_logic import RoomControlState
+
+        room_control_state = RoomControlState(list(config.get("rooms", {}).keys()))
+
     valve = ValveController(
-        room_control_state=kw.get("room_control_state"),
+        room_control_state=room_control_state,
         apply_dissipation_fn=kw.get("apply_dissipation_fn"),
         apply_hybrid_fn=kw.get("apply_hybrid_fn"),
     )
@@ -527,7 +537,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         # runtime `none` emitter.
         DegradationController(
             config=config,
-            room_control_state=kw.get("room_control_state"),
+            room_control_state=room_control_state,
             check_valve_available_fn=kw.get("degradation_check_fn"),
             park_fn=kw.get("degradation_park_fn"),
             channel_available_fn=kw.get("degradation_channel_fn"),
@@ -632,7 +642,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         # historian writes the qsh_system point (INSTRUCTION-403 consumer).
         MVController(config=config),
         HistorianController(
-            room_control_state=kw.get("room_control_state"),
+            room_control_state=room_control_state,
         ),
         # INSTRUCTION-264 V3 — CompositeConfidenceController writes
         # ctx.composite_confidence per cycle for State V1 §6.3. Position

@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [1.6.13] — 2026-10-11
+
+### Added
+- Hydraulic protection fields (minimum flow rate, bypass room setpoint,
+  bypass rooms) in the setup wizard's sensors step and in Settings for the
+  heat source. With a flow-rate sensor, the minimum flow rate is required.
+- A warning when a TRV does not hold the setpoint QSH sent it for 10
+  minutes. Annunciation only; control is unchanged.
+
+### Changed
+- **Hydraulic protection no longer learns a trip flow.** It uses the
+  declared `min_flow_rate`, or 8.0 L/min when none is declared. An install
+  with a flow-rate sensor and no `min_flow_rate` will now stop the heat
+  pump when flow is below 8.0 L/min. The sensor must report in L/min — a
+  sensor in m³/h or L/h will make the low-flow stop act always or never.
+  Set `min_flow_rate` in Settings or in the wizard.
+- The wizard and Settings refuse a flow-rate sensor without a minimum flow
+  rate above 0, and refuse bypass rooms that are not configured rooms. A
+  running install is not affected until it next saves.
+- Shoulder-mode run/stop decisions limit an implausibly high learned heat
+  loss, so it no longer keeps the heat pump running on its own.
+
+### Fixed
+- Indirect TRVs now hold their nudge on every cycle, not for one write only.
+- Hydraulic protection settings on the first heat source now take effect
+  on installs with more than one heat source.
+- The valve average ignores rooms with no fresh valve reading.
+- Valve, shoulder and historian controllers share room state from start-up;
+  saved nudge state survives a restart.
+
 ## [1.6.12] — 2026-10-10
 
 ### Changed

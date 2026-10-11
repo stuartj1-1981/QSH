@@ -192,6 +192,14 @@ export interface HeatSourceYaml {
   capability_flow_max?: number
   flow_min_entity?: string
   flow_max_entity?: string
+  // INSTRUCTION-575H: hydraulic protection. Read from the primary source
+  // (heat_sources[0]) at config load (INSTRUCTION-575E).
+  // min_flow_rate: Tier 1 trip flow (L/min); required when sensors.flow_rate is set.
+  // bypass_rooms: rooms forced open when flow starves; absent or empty = automatic.
+  // bypass_setpoint: setpoint (°C) applied to a bypass room; absent = 25.
+  min_flow_rate?: number
+  bypass_rooms?: string[]
+  bypass_setpoint?: number
   fuel_cost_per_kwh?: number
   // Widened under INSTRUCTION-245 to mirror the per-source `sensors` slot
   // shape (INSTRUCTION-241B): HA driver stores a string entity_id; MQTT
