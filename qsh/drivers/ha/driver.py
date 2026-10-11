@@ -458,6 +458,12 @@ class HADriver:
         for sensor_name in stale_sensors:
             signal_quality[sensor_name] = "stale"
 
+        # INSTRUCTION-575D — the valve signal of each room with a configured
+        # valve source: "good" with a fresh valve read this cycle, else
+        # "stale". The key space is the MQTT driver's (valve_positions.<room>).
+        for room, quality in getattr(sensor_data, "valve_signal_quality", {}).items():
+            signal_quality[f"valve_positions.{room}"] = quality
+
         # INSTRUCTION-427 D5(a) — absent-room observable (observe-only). A
         # configured room absent from room_temps post-fetch produced no value
         # (dead sensor); the loop above never grades it, so it defaults 'good'

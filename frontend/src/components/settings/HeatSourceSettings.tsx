@@ -26,6 +26,7 @@ import type { ControlSource } from '../../types/api'
 import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
 import { WriteBudgetField } from './WriteBudgetField'
+import { HydraulicProtectionFields } from './HydraulicProtectionFields'
 import { isHeatPumpType } from '../../lib/heat-source-types'
 
 // INSTRUCTION-385B — verbatim mirror of the backend efficiency_plausible
@@ -1810,6 +1811,17 @@ function SourceCard({
               </div>
             )}
           </div>
+
+          {/* INSTRUCTION-575H — hydraulic protection, primary source only
+              (the config loader reads the three keys from heat_sources[0]). */}
+          {index === 0 && (
+            <HydraulicProtectionFields
+              source={hs}
+              roomNames={Object.keys(rootConfig?.rooms ?? {})}
+              onChange={onChange}
+              idPrefix={`source-${index}-hydraulic`}
+            />
+          )}
         </div>
       )}
     </div>

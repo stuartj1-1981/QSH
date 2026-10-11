@@ -14,7 +14,7 @@ Control methods:
 import logging
 import math
 from typing import Optional
-from .integration import fetch_ha_entity, fetch_ha_entity_full, set_ha_service
+from .integration import WriteOutcome, fetch_ha_entity, fetch_ha_entity_full, set_ha_service
 from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
 
 
@@ -553,7 +553,13 @@ def apply_hardware_control(
                         temperature = real_target
 
                     data = {"entity_id": config["entities"][entity_key], "temperature": temperature}
-                    set_ha_service("climate", "set_temperature", data)
+                    outcome = set_ha_service("climate", "set_temperature", data)
+                    # INSTRUCTION-575C — the write record HardwareController's
+                    # TRV setpoint readback check compares against. Only a
+                    # write Home Assistant accepted is recorded: a rejected or
+                    # breaker-suppressed write is not a device fault.
+                    if outcome is WriteOutcome.SENT:
+                        debouncer.last_trv_written[room] = temperature
 
                     offset = trv_offset_tracker.get_offset(room) if trv_offset_tracker else 0.0
                     if abs(offset) > 0.3:

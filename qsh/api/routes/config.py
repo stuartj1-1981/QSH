@@ -667,7 +667,16 @@ def patch_config_section(section: str, body=Body(...)):
         from qsh.api.heat_source_validation import validate_heat_sources_list
 
         guard_incoming = body.get("data", body) if isinstance(body, dict) else body
-        _guard_err = validate_heat_sources_list(guard_incoming)
+        # INSTRUCTION-575I — the bypass_rooms check needs the configured
+        # rooms, which this section's body does not carry: read them from the
+        # on-disk YAML. Unreadable YAML → None → bypass check skipped (the
+        # config loader drops unknown bypass rooms at boot, INSTRUCTION-575E).
+        _disk = _load_raw_yaml()
+        _disk_rooms = _disk.get("rooms") if isinstance(_disk, dict) else None
+        _guard_err = validate_heat_sources_list(
+            guard_incoming,
+            room_names=_disk_rooms.keys() if isinstance(_disk_rooms, dict) else None,
+        )
         if _guard_err is not None:
             raise HTTPException(status_code=_guard_err[0], detail=_guard_err[1])
 

@@ -151,6 +151,13 @@ _warned_no_heating_entity: Set[str] = set()
 _warned_valve_stale_no_history: Set[Tuple[str, str]] = set()
 
 # =========================================================================
+# AVG_OPEN_FRAC NO-SIGNAL VALUE (INSTRUCTION-575D)
+# =========================================================================
+# avg_open_frac when no room has a fresh valve read this cycle. Same value as
+# the MQTT driver's no-valve-positions fallback and the InputBlock default.
+AVG_OPEN_FRAC_NO_SIGNAL = 0.75
+
+# =========================================================================
 # POWER UNIT AUTO-DETECTION
 # =========================================================================
 # Cache: entity_id → divisor (1.0 for kW, 1000.0 for W)
@@ -599,6 +606,19 @@ def _read_one_valve_position(
         Last-valid value if HA is unavailable but history exists.
         ``None`` if unavailable AND no history (caller falls back to room-level).
     """
+    value, _fresh = _read_one_valve_position_ex(entity, room, stem, scale)
+    return value
+
+
+def _read_one_valve_position_ex(
+    entity: str, room: str, stem: str, scale: int
+) -> Tuple[Optional[float], bool]:
+    """``_read_one_valve_position`` with the freshness of this cycle's read.
+
+    INSTRUCTION-575D. Returns ``(value, fresh)``: ``value`` is exactly what
+    ``_read_one_valve_position`` returns; ``fresh`` is True only when the
+    entity read this cycle was fresh (not the last-valid fallback).
+    """
     global _last_valid_heating_perc_per_emitter
     _register_events()
     ann = get_annunciator()
@@ -611,7 +631,7 @@ def _read_one_valve_position(
             perc = round(perc / float(scale) * 100.0, 1)
         _last_valid_heating_perc_per_emitter[key] = perc
         ann.exited("HA.valve_stale_lastvalid", room=room, stem=stem)
-        return perc
+        return perc, True
 
     if key in _last_valid_heating_perc_per_emitter:
         last = _last_valid_heating_perc_per_emitter[key]
@@ -623,7 +643,7 @@ def _read_one_valve_position(
             "HA.valve_stale_lastvalid",
             room=room, stem=stem, entity=entity, perc=last,
         )
-        return last
+        return last, False
 
     if key not in _warned_valve_stale_no_history:
         logging.info(
@@ -631,12 +651,23 @@ def _read_one_valve_position(
             room, stem, entity,
         )
         _warned_valve_stale_no_history.add(key)
-    return None
+    return None, False
 
 
 def _legacy_room_level_read(
     room: str, config: Dict, scale: int
 ) -> Tuple[float, Dict[str, float]]:
+    """INSTRUCTION-575D wrapper: ``_legacy_room_level_read_ex`` without the
+    freshness flag. Signature and return values are unchanged; the contract
+    is documented on ``_legacy_room_level_read_ex``.
+    """
+    perc, per_emitter, _fresh = _legacy_room_level_read_ex(room, config, scale)
+    return perc, per_emitter
+
+
+def _legacy_room_level_read_ex(
+    room: str, config: Dict, scale: int
+) -> Tuple[float, Dict[str, float], bool]:
     """Operator-declared ``<room>_heating`` entity read (INSTRUCTION-224B
     legacy path, fallback semantics restored by INSTRUCTION-229,
     list-form support added by INSTRUCTION-231A V2).
@@ -673,6 +704,11 @@ def _legacy_room_level_read(
         - ``{last_winning_entity_id: last}`` for list-form
           stale-with-history.
         - ``{}`` for no path configured / no history available.
+
+        INSTRUCTION-575D: a third element ``fresh`` is True only when a
+        declared entity was read fresh this cycle (the first-fresh-wins
+        loop returned). No heating entity, stale-with-history and
+        stale-without-history all return ``fresh`` False.
     """
     global _last_valid_heating_perc_per_emitter
     global _last_winning_entity_per_room
@@ -693,7 +729,7 @@ def _legacy_room_level_read(
             if legacy_key in _last_valid_heating_perc_per_emitter
             else {}
         )
-        return last, per_emitter
+        return last, per_emitter, False
 
     # Normalise to a list for unified iteration. Single-string is treated
     # as a length-1 list internally; the synthetic legacy stem "" is used
@@ -732,7 +768,7 @@ def _legacy_room_level_read(
                 # stale-with-history branch keys its per-emitter dict
                 # consistently by the last winning entity_id.
                 _last_winning_entity_per_room[room] = entity_id
-            return perc, {("" if single_string else entity_id): perc}
+            return perc, {("" if single_string else entity_id): perc}, True
 
     # All entities stale. Fall back to room-level last-valid memory under
     # the synthetic legacy stem (V2: list-form fresh branch mirrors to
@@ -740,7 +776,7 @@ def _legacy_room_level_read(
     if legacy_key in _last_valid_heating_perc_per_emitter:
         last = _last_valid_heating_perc_per_emitter[legacy_key]
         if single_string:
-            return last, {"": last}
+            return last, {"": last}, False
         # V2 MEDIUM-1 fix: list-form — key the per-emitter dict by the
         # last-winning entity rather than synthesizing "". Fallback to
         # the first entity in declaration order if no winner has ever
@@ -750,7 +786,7 @@ def _legacy_room_level_read(
         last_winner = _last_winning_entity_per_room.get(
             room, entity_list[0]
         )
-        return last, {last_winner: last}
+        return last, {last_winner: last}, False
 
     # All stale AND no history. Emit a single info log naming the first
     # entity and return 0.0. Subsequent cycles in the same condition are
@@ -764,12 +800,23 @@ def _legacy_room_level_read(
             f" and {len(entity_list) - 1} others" if not single_string else "",
         )
         _warned_valve_stale_no_history.add(legacy_key)
-    return 0.0, {}
+    return 0.0, {}, False
 
 
 def fetch_heating_percentages(
     config: Dict,
 ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], float]:
+    """INSTRUCTION-575D wrapper: ``fetch_heating_percentages_ex`` without the
+    valve signal of each room. Signature and return values are unchanged;
+    the contract is documented on ``fetch_heating_percentages_ex``.
+    """
+    percs, per_emitter, avg_open_frac, _signal = fetch_heating_percentages_ex(config)
+    return percs, per_emitter, avg_open_frac
+
+
+def fetch_heating_percentages_ex(
+    config: Dict,
+) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], float, Dict[str, str]]:
     """Fetch TRV valve positions per room with per-emitter detail.
 
     Post-INSTRUCTION-231A: operator-declared ``heating_entity`` is the
@@ -802,16 +849,25 @@ def fetch_heating_percentages(
         Tuple of:
         - heating_percs: room → aggregate valve position 0-100.
         - heating_percs_per_emitter: room → entity_or_stem → value.
-        - avg_open_frac: mean of room aggregates / 100 across rooms.
+        - avg_open_frac: mean of room aggregates / 100 across the rooms
+          with a fresh valve read this cycle (INSTRUCTION-575D);
+          ``AVG_OPEN_FRAC_NO_SIGNAL`` when no room has one; 0.0 when
+          no rooms are configured.
+        - valve_signal: room → ``"good"`` when the room had a fresh valve
+          read this cycle, ``"stale"`` when it did not. A room has no key
+          when its declared ``heating_entity`` is empty, or when it has no
+          declared ``heating_entity`` and no TRV stem (INSTRUCTION-575D).
     """
     heating_percs: Dict[str, float] = {}
     heating_percs_per_emitter: Dict[str, Dict[str, float]] = {}
     total_frac = 0.0
+    num_fresh_rooms = 0
+    valve_signal: Dict[str, str] = {}
     num_rooms = len(config["rooms"])
 
     if num_rooms == 0:
         logging.warning("No rooms defined in HOUSE_CONFIG - skipping heating perc fetch.")
-        return {}, {}, 0.0
+        return {}, {}, 0.0, {}
 
     valve_scales = config.get("room_valve_scale", {})
     type1_rooms = {
@@ -835,9 +891,10 @@ def fetch_heating_percentages(
             # keyed by the synthetic legacy stem (single-string case) or
             # the winning / last-winning entity id (list-form case per V2
             # MEDIUM-1 fix).
-            room_perc, per_emitter = _legacy_room_level_read(
+            room_perc, per_emitter, room_fresh = _legacy_room_level_read_ex(
                 room, config, scale
             )
+            has_valve_source = bool(declared_heating_entity)
             heating_percs[room] = room_perc
             heating_percs_per_emitter[room] = per_emitter
         else:
@@ -845,10 +902,15 @@ def fetch_heating_percentages(
             # path (Sonoff-only convenience shortcut for installations that
             # never declared explicit feedback entities).
             stems = _enumerate_emitter_stems(room, config)
+            has_valve_source = bool(stems)
             per_emitter: Dict[str, float] = {}
+            room_fresh = False
             for stem in stems:
                 entity = f"number.{stem}_valve_position"
-                perc = _read_one_valve_position(entity, room, stem, scale)
+                perc, stem_fresh = _read_one_valve_position_ex(
+                    entity, room, stem, scale
+                )
+                room_fresh = room_fresh or stem_fresh
                 if perc is not None:
                     per_emitter[stem] = perc
 
@@ -866,18 +928,29 @@ def fetch_heating_percentages(
                 # non-empty dict (room-level last-valid memory exists from
                 # a prior cycle's successful auto-derive read), use it;
                 # else preserve the failed-auto-derive empty dict shape.
-                room_perc, per_emitter_legacy = _legacy_room_level_read(
-                    room, config, scale
+                room_perc, per_emitter_legacy, legacy_fresh = (
+                    _legacy_room_level_read_ex(room, config, scale)
                 )
+                room_fresh = room_fresh or legacy_fresh
                 heating_percs[room] = room_perc
                 if per_emitter_legacy:
                     heating_percs_per_emitter[room] = per_emitter_legacy
 
-        total_frac += heating_percs[room] / 100.0
+        # INSTRUCTION-575D: only a room with a fresh valve read this cycle
+        # enters the sum and the divisor. heating_percs[room] is unchanged.
+        if room_fresh:
+            total_frac += heating_percs[room] / 100.0
+            num_fresh_rooms += 1
+        if has_valve_source:
+            valve_signal[room] = "good" if room_fresh else "stale"
 
-    avg_open_frac = total_frac / num_rooms if num_rooms > 0 else 0.0
+    avg_open_frac = (
+        total_frac / num_fresh_rooms
+        if num_fresh_rooms > 0
+        else AVG_OPEN_FRAC_NO_SIGNAL
+    )
 
-    return heating_percs, heating_percs_per_emitter, avg_open_frac
+    return heating_percs, heating_percs_per_emitter, avg_open_frac, valve_signal
 
 
 # INSTRUCTION-241A Task 2a — per-source sensor key map. Mirrors the legacy
@@ -1393,7 +1466,8 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
         data.heating_percs,
         data.heating_percs_per_emitter,
         data.avg_open_frac,
-    ) = fetch_heating_percentages(config)
+        data.valve_signal_quality,
+    ) = fetch_heating_percentages_ex(config)
 
     hs_status = fetch_heat_source_status(config)
     data.hp_flow_temp = hs_status["flow_temp"]
