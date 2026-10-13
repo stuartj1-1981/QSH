@@ -78,6 +78,11 @@ BATTERY_CAPACITY_MAX_KWH = 50.0
 TANK_VOLUME_PLAUSIBLE_MIN_L = 80
 TANK_VOLUME_PLAUSIBLE_MAX_L = 500
 
+# INSTRUCTION-577E: a tariff rate above this bound is flagged for
+# acknowledgement, not refused (owner ruling of 12 October 2026). The YAML
+# holds £/kWh; a rate this high is most often a slip of the unit or of a digit.
+TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH = 2.0
+
 
 def _get_ha_headers():
     """Lazily resolve HA Supervisor credentials. Only called when an HA endpoint runs."""
@@ -889,6 +894,58 @@ def scan_entities_for_room(room: str):
     }
 
 
+def _rate_above_bound(value: Any) -> Optional[float]:
+    """INSTRUCTION-577E: the rate as a float when it is above
+    TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH, else None. A value that float()
+    cannot read, or that overflows, gives None: the rule is a plausibility
+    warning on numbers, and never raises."""
+    try:
+        rate = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return rate if rate > TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH else None
+
+
+def _rate_phrase(what: str, rate: float) -> str:
+    """INSTRUCTION-577E: a rate in £/kWh and in p/kWh, for the warning."""
+    return f"{what} £{rate:.10g}/kWh ({rate * 100:.10g}p/kWh)"
+
+
+def _tariff_rates_above_bound(energy_cfg: Any) -> Dict[str, List[str]]:
+    """INSTRUCTION-577E: for each fuel section of ``energy``, the rates that
+    its provider uses and that are above the bound, as phrases for the
+    warning message. The fixed rate counts under the provider ``fixed`` and,
+    for LPG and oil, under an explicit ``provider: null`` too, as the factory
+    reads it (``_normalise_legacy_config`` takes the section only when the
+    key ``provider`` is present). The band rates count under the electricity
+    provider ``time_of_use``. A fuel with no such rate is not a key."""
+    found: Dict[str, List[str]] = {}
+    if not isinstance(energy_cfg, dict):
+        return found
+    for fuel in ("electricity", "gas", "lpg", "oil"):
+        section = energy_cfg.get(fuel)
+        if not isinstance(section, dict):
+            continue
+        provider = section.get("provider")
+        phrases: List[str] = []
+        if provider == "fixed" or (
+            fuel in ("lpg", "oil") and "provider" in section and provider is None
+        ):
+            rate = _rate_above_bound(section.get("fixed_rate"))
+            if rate is not None:
+                phrases.append(_rate_phrase("fixed_rate", rate))
+        if fuel == "electricity" and provider == "time_of_use":
+            bands = section.get("bands")
+            for band in bands if isinstance(bands, list) else []:
+                if isinstance(band, dict):
+                    rate = _rate_above_bound(band.get("rate"))
+                    if rate is not None:
+                        phrases.append(_rate_phrase(f"the band at {band.get('start')}", rate))
+        if phrases:
+            found[fuel] = phrases
+    return found
+
+
 @router.post("/validate")
 def validate_config(req: WizardValidateRequest):
     """Validate a partial or complete wizard config."""
@@ -1334,6 +1391,12 @@ def validate_config(req: WizardValidateRequest):
             # byte-identical to the inline V2 M-2 check it replaces.
             pass
 
+        elif provider == "time_of_use":
+            # INSTRUCTION-577B: the band list is validated by the shared
+            # validate_energy_time_of_use call after this dispatch chain. This
+            # branch makes 'time_of_use' a recognised electricity provider.
+            pass
+
         elif provider is None:
             # No new-schema provider declared. Fall back to the legacy
             # paths. The existing behaviour (warn if no tariff sources at
@@ -1367,9 +1430,28 @@ def validate_config(req: WizardValidateRequest):
         # electricity coverage is byte-identical to the inline V2 M-2 check
         # (same canonical string); gas coverage is new. Single source of
         # truth: qsh.tariff.validate_energy_fixed_rate.
-        from qsh.tariff import validate_energy_fixed_rate
+        from qsh.tariff import validate_energy_fixed_rate, validate_energy_time_of_use
 
         errors.extend(validate_energy_fixed_rate(energy_cfg))
+        # INSTRUCTION-577B: the time-of-use band list, one predicate shared
+        # with the Settings energy save and the provider.
+        errors.extend(validate_energy_time_of_use(energy_cfg))
+
+        # INSTRUCTION-577E: a rate above the bound is an acknowledged
+        # warning, one id per fuel section. The message gives each rate in
+        # £/kWh and in p/kWh, so it reads true for a rate typed in either
+        # unit. The Settings save and the boot loader do not apply it.
+        for fuel, phrases in _tariff_rates_above_bound(energy_cfg).items():
+            bound = TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH
+            warnings.append({
+                "rule_id": f"tariff_rate_implausible:{fuel}",
+                "message": (
+                    f"energy.{fuel}: a rate above £{bound:g}/kWh "
+                    f"({bound * 100:g}p/kWh) — {'; '.join(phrases)}. A rate "
+                    f"this high is most often a slip of the unit or of a "
+                    f"digit: confirm each value, or correct it"
+                ),
+            })
 
     if req.step == "hot_water" or req.step is None:
         hw_plan = cfg.get("hw_plan")

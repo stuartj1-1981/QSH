@@ -16,11 +16,16 @@
  * The wizard PATCHes the new per-fuel shape; the backend's migrate-on-save
  * (150C) handles legacy `energy.octopus` / `energy.fixed_rates` keys.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Loader2, Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { apiUrl } from '../../lib/api'
 import { DEFAULT_ELEC_FIXED_RATE, DEFAULT_GAS_FIXED_RATE } from '../../lib/tariffDefaults'
+import { bandFormAdmitted, defaultBands, hydrateBands, rateAdmitted } from '../../lib/touBands'
+import { TouBandEditor } from '../TouBandEditor'
+import { HelpTip } from '../HelpTip'
+import { TARIFF } from '../../lib/helpText'
+import { penceInputValue, poundsFromPence, rateBelowOnePenny } from '../../lib/pence'
 import { useTariffStatus } from '../../hooks/useTariffStatus'
 import { testEdfRegionResponseSchema } from '../../types/schemas'
 import type {
@@ -68,12 +73,26 @@ function stripSentinels<T extends object>(obj: T): T {
   return out as T
 }
 
+// 577D: the rate of a seeded band: the fixed rate when the backend admits it,
+// else the default.
+function seedRate(rate: number | undefined): number {
+  return rateAdmitted(rate) ? rate : DEFAULT_ELEC_FIXED_RATE
+}
+
 /** Hydrate the electricity tariff state from the (possibly legacy-shaped)
  *  energy config. Migration-on-save lives in the backend; the wizard just
  *  tries the new key first, then falls back to interpreting the legacy
  *  shape. */
 function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
-  if (energy.electricity) return energy.electricity
+  if (energy.electricity) {
+    // 577D: the bands sorted by start; one band when the config holds none,
+    // or a list whose starts the backend would refuse.
+    const e = energy.electricity
+    if (e.provider === 'time_of_use') {
+      return { ...e, bands: hydrateBands(e.bands, seedRate(e.fixed_rate)) }
+    }
+    return e
+  }
   // Full-Octopus credentials win first.
   if (energy.octopus?.api_key) {
     return {
@@ -163,6 +182,12 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
     const updated: ElectricityTariffConfig = { ...electricity, provider }
     if (provider === 'fixed' && updated.fixed_rate == null) {
       updated.fixed_rate = DEFAULT_ELEC_FIXED_RATE
+    }
+    // 577D: the same seed for Time of Use — one band over the day when the
+    // config holds no bands; a band list kept from an earlier choice comes
+    // back sorted, or as one band when the backend would refuse its starts.
+    if (provider === 'time_of_use') {
+      updated.bands = hydrateBands(updated.bands, seedRate(updated.fixed_rate))
     }
     setElectricity(updated)
     setTestResultElectricity(null)
@@ -311,6 +336,15 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
     if (energy.electricity?.provider === 'fixed' && energy.electricity.fixed_rate == null) {
       next.electricity = { ...energy.electricity, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
     }
+    // 577D: the same seed for a time_of_use config whose band list is missing,
+    // empty or of a form that the backend refuses, so that the persisted list
+    // is the one that the editor shows.
+    if (energy.electricity?.provider === 'time_of_use' && !bandFormAdmitted(energy.electricity.bands)) {
+      next.electricity = {
+        ...energy.electricity,
+        bands: defaultBands(seedRate(energy.electricity.fixed_rate)),
+      }
+    }
     if (hasGas && energy.gas?.provider === 'fixed' && energy.gas.fixed_rate == null) {
       next.gas = { ...energy.gas, fixed_rate: DEFAULT_GAS_FIXED_RATE }
     }
@@ -344,7 +378,8 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
               ? [{ value: 'edf_freephase', label: 'EDF FreePhase Dynamic', desc: 'Region-determined dynamic tariff' }]
               : []),
             { value: 'ha_entity', label: 'Home Assistant', desc: 'Rates from an existing HA integration' },
-            { value: 'fixed', label: 'Fixed Rate', desc: 'Single £/kWh' },
+            { value: 'fixed', label: 'Fixed Rate', desc: 'Single p/kWh' },
+            { value: 'time_of_use', label: 'Time of Use', desc: 'Your own bands over 24 h' },
           ]}
         />
 
@@ -380,9 +415,16 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
 
         {electricity.provider === 'fixed' && (
           <FixedRateInput
-            label="Electricity Rate (£/kWh)"
+            label="Electricity Rate (p/kWh)"
             value={electricity.fixed_rate ?? DEFAULT_ELEC_FIXED_RATE}
             onChange={(v) => updateElectricity({ fixed_rate: v })}
+          />
+        )}
+
+        {electricity.provider === 'time_of_use' && (
+          <TouBandEditor
+            bands={electricity.bands ?? []}
+            onChange={(bands) => updateElectricity({ bands })}
           />
         )}
       </section>
@@ -397,7 +439,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
             onChange={(v) => setGasProvider(v as GasProviderKind)}
             options={[
               { value: 'octopus', label: 'Octopus Tracker', desc: 'Daily-tracking gas tariff' },
-              { value: 'fixed', label: 'Fixed Rate', desc: 'Single £/kWh' },
+              { value: 'fixed', label: 'Fixed Rate', desc: 'Single p/kWh' },
             ]}
           />
 
@@ -416,7 +458,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
 
           {gas.provider === 'fixed' && (
             <FixedRateInput
-              label="Gas Rate (£/kWh)"
+              label="Gas Rate (p/kWh)"
               value={gas.fixed_rate ?? DEFAULT_GAS_FIXED_RATE}
               onChange={(v) => updateGas({ fixed_rate: v })}
             />
@@ -428,7 +470,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
         <section className="space-y-4" data-testid="tariff-lpg-section">
           <h3 className="text-sm font-semibold text-[var(--text)]">LPG</h3>
           <FixedRateInput
-            label="LPG Rate (£/kWh)"
+            label="LPG Rate (p/kWh)"
             value={(energy.lpg?.fixed_rate as number | undefined) ?? 0.10}
             onChange={(v) =>
               onUpdate('energy', { ...energy, lpg: { provider: 'fixed', fixed_rate: v } })
@@ -441,7 +483,7 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
         <section className="space-y-4" data-testid="tariff-oil-section">
           <h3 className="text-sm font-semibold text-[var(--text)]">Oil</h3>
           <FixedRateInput
-            label="Oil Rate (£/kWh)"
+            label="Oil Rate (p/kWh)"
             value={(energy.oil?.fixed_rate as number | undefined) ?? 0.08}
             onChange={(v) =>
               onUpdate('energy', { ...energy, oil: { provider: 'fixed', fixed_rate: v } })
@@ -458,8 +500,8 @@ export function StepTariff({ config, onUpdate }: StepTariffProps) {
         <div className="grid grid-cols-4 gap-3">
           {(['cheap', 'standard', 'peak', 'export'] as const).map((tier) => (
             <div key={tier}>
-              <label className="block text-xs font-medium text-[var(--text)] mb-1 capitalize">
-                {tier}
+              <label className="block text-xs font-medium text-[var(--text)] mb-1">
+                <span className="capitalize">{tier}</span> (£/kWh)
               </label>
               <input
                 type="number"
@@ -766,18 +808,33 @@ function FixedRateInput({
   value: number
   onChange: (v: number) => void
 }) {
+  // INSTRUCTION-577F: the input takes p/kWh and the config holds £/kWh. The
+  // label names the input by id, so the help button beside it is not the
+  // labelled control.
+  const id = useId()
+  const lowRate = rateBelowOnePenny(value)
   return (
-    <label className="block">
-      <span className="block text-sm font-medium text-[var(--text)] mb-1">{label}</span>
+    <div>
+      <span className="flex items-center gap-1 text-sm font-medium text-[var(--text)] mb-1">
+        <label htmlFor={id}>{label}</label>
+        <HelpTip text={TARIFF.ratePence} size={12} />
+      </span>
       <input
+        id={id}
         type="number"
-        step="0.001"
-        min={0.01}
-        max={2.0}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        step="0.01"
+        min={1}
+        max={200}
+        value={penceInputValue(value)}
+        onChange={(e) => onChange(poundsFromPence(parseFloat(e.target.value) || 0))}
+        aria-describedby={lowRate ? `${id}-low-hint` : undefined}
         className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
       />
-    </label>
+      {lowRate && (
+        <p id={`${id}-low-hint`} className="text-xs text-[var(--amber)] mt-1">
+          {TARIFF.rateBelowOnePenny}
+        </p>
+      )}
+    </div>
   )
 }

@@ -117,6 +117,7 @@ export type ProviderKind =
   | 'fixed'
   | 'fallback'
   | 'ha_entity'  // 158C: mirrors backend qsh/tariff/__init__.py
+  | 'time_of_use'  // 577A: accepted before the backend lists it
 
 export interface ProviderStatus {
   fuel: Fuel

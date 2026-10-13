@@ -14,7 +14,7 @@
  * - Stale providers get a subtle warning indicator; non-null
  *   `last_error` shows the message in a muted secondary line.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { Save, Loader2, Check, X, AlertTriangle } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { apiUrl } from '../../lib/api'
@@ -26,6 +26,9 @@ import { TARIFF } from '../../lib/helpText'
 import { useLive } from '../../hooks/useLive'
 import { DEFAULT_TARIFF_AGGRESSION_MODE } from '../../lib/tariff'
 import { DEFAULT_ELEC_FIXED_RATE, DEFAULT_GAS_FIXED_RATE } from '../../lib/tariffDefaults'
+import { allRatesAdmitted, hydrateBands, rateAdmitted } from '../../lib/touBands'
+import { penceInputValue, poundsFromPence, rateBelowOnePenny } from '../../lib/pence'
+import { TouBandEditor } from '../TouBandEditor'
 import type {
   Driver,
   ElectricityProviderKind,
@@ -62,6 +65,7 @@ const PROVIDER_KIND_DISPLAY: Record<ProviderKind, string> = {
   fixed: 'Fixed',
   fallback: 'Not configured',
   ha_entity: 'Home Assistant',
+  time_of_use: 'Time of Use',
 }
 
 // 158C: REDACTED sentinel — declared locally; no shared frontend constant
@@ -80,6 +84,12 @@ function stripSentinels<T extends object>(obj: T): T {
   return out as T
 }
 
+// 577D: the rate of a seeded band: the fixed rate when the backend admits it,
+// else the default.
+function seedRate(rate: number | undefined): number {
+  return rateAdmitted(rate) ? rate : DEFAULT_ELEC_FIXED_RATE
+}
+
 function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
   if (energy.electricity) {
     // 304: a config that arrived as provider:'fixed' with no rate hydrates
@@ -89,6 +99,11 @@ function hydrateElectricity(energy: EnergyYaml): ElectricityTariffConfig {
     const e = energy.electricity
     if (e.provider === 'fixed' && e.fixed_rate == null) {
       return { ...e, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
+    }
+    // 577D: the bands sorted by start; a time_of_use config with no bands
+    // hydrates with one band, so the Save payload carries a band list.
+    if (e.provider === 'time_of_use') {
+      return { ...e, bands: hydrateBands(e.bands, seedRate(e.fixed_rate)) }
     }
     return e
   }
@@ -162,6 +177,10 @@ export function TariffSettings({
   const [edfTesting, setEdfTesting] = useState(false)
   const [edfTestResult, setEdfTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const { patch, saving } = usePatchConfig()
+  // 577D: the backend refuses a band rate that is not above 0, and this page
+  // does not show the 422, so Save stays off until each rate is correct.
+  const touRatesBlocked =
+    electricity.provider === 'time_of_use' && !allRatesAdmitted(electricity.bands ?? [])
   const { byFuel, edfFreephaseSupported } = useTariffStatus()
 
   const hasGas = installHasFuel(initialHs, initialHsList, 'gas')
@@ -333,11 +352,19 @@ export function TariffSettings({
     // 304: seed the UI default into committed state when switching to Fixed
     // with no rate, so the Save payload carries energy.electricity.fixed_rate
     // even if the user accepts the displayed default without a keystroke.
-    setElectricity((prev) =>
-      provider === 'fixed' && prev.fixed_rate == null
-        ? { ...prev, provider, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
-        : { ...prev, provider },
-    )
+    // 577D: the same seed for Time of Use — one band over the day at the
+    // fixed rate, or the default, when the config holds no bands; a band list
+    // kept from an earlier choice comes back sorted, or as one band when the
+    // backend would refuse its starts.
+    setElectricity((prev) => {
+      if (provider === 'fixed' && prev.fixed_rate == null) {
+        return { ...prev, provider, fixed_rate: DEFAULT_ELEC_FIXED_RATE }
+      }
+      if (provider === 'time_of_use') {
+        return { ...prev, provider, bands: hydrateBands(prev.bands, seedRate(prev.fixed_rate)) }
+      }
+      return { ...prev, provider }
+    })
     setTestResultElectricity(null)
     setEdfTestResult(null)
   }
@@ -358,7 +385,7 @@ export function TariffSettings({
         <h2 className="text-lg font-bold text-[var(--text)]">Energy Tariff</h2>
         <button
           onClick={save}
-          disabled={saving}
+          disabled={saving || touRatesBlocked}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -378,7 +405,8 @@ export function TariffSettings({
               ? [{ value: 'edf_freephase', label: 'EDF FreePhase Dynamic', desc: 'Region-determined dynamic tariff' }]
               : []),
             { value: 'ha_entity', label: 'Home Assistant', desc: 'Rates from an existing HA integration' },
-            { value: 'fixed', label: 'Fixed Rate', desc: 'Single £/kWh' },
+            { value: 'fixed', label: 'Fixed Rate', desc: 'Single p/kWh' },
+            { value: 'time_of_use', label: 'Time of Use', desc: 'Your own bands over 24 h' },
           ]}
         />
 
@@ -427,11 +455,25 @@ export function TariffSettings({
 
         {electricity.provider === 'fixed' && (
           <FixedRateInput
-            label="Electricity Rate (£/kWh)"
+            label="Electricity Rate (p/kWh)"
             help={TARIFF.importRate}
             value={electricity.fixed_rate ?? DEFAULT_ELEC_FIXED_RATE}
             onChange={(v) => setElectricity((prev) => ({ ...prev, fixed_rate: v }))}
           />
+        )}
+
+        {electricity.provider === 'time_of_use' && (
+          <>
+            <TouBandEditor
+              bands={electricity.bands ?? []}
+              onChange={(bands) => setElectricity((prev) => ({ ...prev, bands }))}
+            />
+            {touRatesBlocked && (
+              <p className="text-xs text-[var(--text-muted)]" data-testid="tou-save-blocked">
+                Save Changes is off until each rate is above 0.
+              </p>
+            )}
+          </>
         )}
       </section>
 
@@ -444,7 +486,7 @@ export function TariffSettings({
             onChange={(v) => setGasProvider(v as GasProviderKind)}
             options={[
               { value: 'octopus', label: 'Octopus Tracker', desc: 'Daily-tracking gas tariff' },
-              { value: 'fixed', label: 'Fixed Rate', desc: 'Single £/kWh' },
+              { value: 'fixed', label: 'Fixed Rate', desc: 'Single p/kWh' },
             ]}
           />
 
@@ -463,7 +505,7 @@ export function TariffSettings({
 
           {gas.provider === 'fixed' && (
             <FixedRateInput
-              label="Gas Rate (£/kWh)"
+              label="Gas Rate (p/kWh)"
               value={gas.fixed_rate ?? DEFAULT_GAS_FIXED_RATE}
               onChange={(v) => setGas((prev) => ({ ...prev, fixed_rate: v }))}
             />
@@ -475,7 +517,7 @@ export function TariffSettings({
         <section className="space-y-4" data-testid="settings-lpg">
           <h3 className="text-sm font-semibold text-[var(--text)]">LPG</h3>
           <FixedRateInput
-            label="LPG Rate (£/kWh)"
+            label="LPG Rate (p/kWh)"
             value={(energy.lpg?.fixed_rate as number | undefined) ?? 0.10}
             onChange={(v) => setEnergy((prev) => ({ ...prev, lpg: { provider: 'fixed', fixed_rate: v } }))}
           />
@@ -486,7 +528,7 @@ export function TariffSettings({
         <section className="space-y-4" data-testid="settings-oil">
           <h3 className="text-sm font-semibold text-[var(--text)]">Oil</h3>
           <FixedRateInput
-            label="Oil Rate (£/kWh)"
+            label="Oil Rate (p/kWh)"
             value={(energy.oil?.fixed_rate as number | undefined) ?? 0.08}
             onChange={(v) => setEnergy((prev) => ({ ...prev, oil: { provider: 'fixed', fixed_rate: v } }))}
           />
@@ -525,8 +567,8 @@ export function TariffSettings({
         <div className="grid grid-cols-4 gap-3">
           {(['cheap', 'standard', 'peak', 'export'] as const).map((tier) => (
             <div key={tier}>
-              <label className="block text-xs text-[var(--text-muted)] mb-1 capitalize">
-                {tier}
+              <label className="block text-xs text-[var(--text-muted)] mb-1">
+                <span className="capitalize">{tier}</span> (£/kWh)
               </label>
               <input
                 type="number"
@@ -936,21 +978,33 @@ function FixedRateInput({
   onChange: (v: number) => void
   help?: string
 }) {
+  // INSTRUCTION-577F: the input takes p/kWh and the config holds £/kWh. The
+  // label names the input by id, so the help button beside it is not the
+  // labelled control.
+  const id = useId()
+  const lowRate = rateBelowOnePenny(value)
   return (
-    <label className="block">
+    <div>
       <span className="flex items-center gap-1 text-sm font-medium text-[var(--text)] mb-1">
-        {label}
-        {help && <HelpTip text={help} size={12} />}
+        <label htmlFor={id}>{label}</label>
+        <HelpTip text={help ? `${help} ${TARIFF.ratePence}` : TARIFF.ratePence} size={12} />
       </span>
       <input
+        id={id}
         type="number"
-        step="0.001"
-        min={0.01}
-        max={2.0}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        step="0.01"
+        min={1}
+        max={200}
+        value={penceInputValue(value)}
+        onChange={(e) => onChange(poundsFromPence(parseFloat(e.target.value) || 0))}
+        aria-describedby={lowRate ? `${id}-low-hint` : undefined}
         className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
       />
-    </label>
+      {lowRate && (
+        <p id={`${id}-low-hint`} className="text-xs text-[var(--amber)] mt-1">
+          {TARIFF.rateBelowOnePenny}
+        </p>
+      )}
+    </div>
   )
 }

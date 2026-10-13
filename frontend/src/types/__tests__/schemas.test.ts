@@ -97,6 +97,7 @@ const validCycleFixture = {
     'fixed',
     'fallback',
     'ha_entity',
+    'time_of_use',
   ] as const,
 }
 
@@ -116,7 +117,7 @@ describe('cycleSnapshotSchema — provider_kind enum parity (159A)', () => {
   })
 
   it('accepts every backend-supported provider_kind in the enum (parity with SUPPORTED_PROVIDER_KINDS)', () => {
-    // Mirror of qsh/tariff/__init__.py SUPPORTED_PROVIDER_KINDS (158B).
+    // Mirror of qsh/tariff/__init__.py SUPPORTED_PROVIDER_KINDS (158B); 577A adds time_of_use before the backend lists it.
     const allKinds = [
       'octopus_electricity',
       'octopus_gas',
@@ -124,6 +125,7 @@ describe('cycleSnapshotSchema — provider_kind enum parity (159A)', () => {
       'fixed',
       'fallback',
       'ha_entity',
+      'time_of_use',
     ]
     const payload = { ...validCycleFixture, available_provider_kinds: allKinds }
     const result = cycleSnapshotSchema.safeParse(payload)
@@ -150,6 +152,27 @@ describe('cycleSnapshotSchema — provider_kind enum parity (159A)', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts time_of_use as a kind and as a ProviderStatus.provider_kind value (577A)', () => {
+    const payload = {
+      ...validCycleFixture,
+      available_provider_kinds: ['time_of_use'],
+      tariff_providers_status: {
+        electricity: {
+          fuel: 'electricity',
+          provider_kind: 'time_of_use',
+          last_refresh_at: 1714665000,
+          stale: false,
+          last_price: 0.08,
+          source_url: null,
+          last_error: null,
+          tariff_label: 'Time of Use, 2 bands, £0.0800 to £0.3000/kWh',
+        },
+      },
+    }
+    const result = cycleSnapshotSchema.safeParse(payload)
+    expect(result.success).toBe(true)
+  })
+
   it('rejects an unknown provider_kind (enum remains strict)', () => {
     const payload = {
       ...validCycleFixture,
@@ -169,6 +192,7 @@ describe('providerKindSchema — direct enum coverage', () => {
       'fixed',
       'fallback',
       'ha_entity',
+      'time_of_use',
     ]) {
       expect(providerKindSchema.safeParse(k).success).toBe(true)
     }
