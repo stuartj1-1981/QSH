@@ -1274,15 +1274,271 @@ describe('TariffSettings — fixed_rate seeding (304)', () => {
   it('user-entered electricity rate wins over the seeded default', async () => {
     render(<TariffSettings energy={{}} driver="ha" onRefetch={noop} />)
     fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
-    // The fixed-rate number input is the only spinbutton inside the
-    // electricity section (the label also wraps a HelpTip button, so
-    // getByLabelText would resolve to that, not the input).
-    const elecSection = screen.getByTestId('settings-electricity')
-    const input = within(elecSection).getByRole('spinbutton') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '0.30' } })
+    // INSTRUCTION-577F: the label names the input, which takes p/kWh.
+    const input = screen.getByLabelText('Electricity Rate (p/kWh)') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '30' } })
     fireEvent.click(screen.getByText('Save Changes'))
     await waitFor(() => expect(patchMock).toHaveBeenCalled())
     const payload = patchMock.mock.calls[0][1]
     expect(payload.electricity.fixed_rate).toBe(0.30)
+  })
+})
+
+// ── INSTRUCTION-577D: the Time of Use provider and its band editor ──────
+
+describe('TariffSettings — time of use (577D)', () => {
+  it('seeds one band at the fixed rate on the switch and saves the band list', async () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'fixed', fixed_rate: 0.27 } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect(screen.getByTestId('tou-band-editor')).toBeDefined()
+    fireEvent.click(screen.getByLabelText('Split band 1'))
+    fireEvent.change(screen.getByLabelText('Band 2 rate'), { target: { value: '8' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.provider).toBe('time_of_use')
+    expect(payload.electricity.bands).toEqual([
+      { start: '00:00', rate: 0.27 },
+      { start: '12:00', rate: 0.08 },
+    ])
+  })
+
+  it('hydrates a saved band list sorted by start', () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: {
+            provider: 'time_of_use',
+            bands: [
+              { start: '23:00', rate: 0.08 },
+              { start: '06:00', rate: 0.3 },
+            ],
+          },
+        }}
+        driver="ha"
+        onRefetch={noop}
+      />,
+    )
+    expect((screen.getByLabelText('Band 1 start') as HTMLSelectElement).value).toBe('06:00')
+    expect(screen.getByTestId('tou-total').textContent).toBe('Total 24 h in 2 bands')
+  })
+
+  it('hydrates a time_of_use config with no bands as one band at the default rate and saves it', async () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'time_of_use' } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getByTestId('tou-total').textContent).toBe('Total 24 h in 1 band')
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    expect(patchMock.mock.calls[0][1].electricity.bands).toEqual([{ start: '00:00', rate: 0.245 }])
+  })
+
+  it('hydrates a time_of_use config with no bands and a fixed rate of 0 as one band at the default', () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'time_of_use', fixed_rate: 0 } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    expect((screen.getByLabelText('Band 1 rate') as HTMLInputElement).value).toBe('24.5')
+  })
+
+  it('sorts a band list kept from an earlier choice on the switch to Time of Use', () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: {
+            provider: 'fixed',
+            fixed_rate: 0.27,
+            bands: [
+              { start: '23:00', rate: 0.08 },
+              { start: '06:00', rate: 0.3 },
+            ],
+          },
+        }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect((screen.getByLabelText('Band 1 start') as HTMLSelectElement).value).toBe('06:00')
+    expect(screen.getByTestId('tou-total').textContent).toBe('Total 24 h in 2 bands')
+  })
+
+  it('seeds one band at the default rate on the switch when the fixed rate is not admitted', () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'fixed', fixed_rate: 0 } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect((screen.getByLabelText('Band 1 rate') as HTMLInputElement).value).toBe('24.5')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps Save Changes off while a band rate is not above 0', () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: {
+            provider: 'time_of_use',
+            bands: [
+              { start: '06:00', rate: 0.3 },
+              { start: '23:00', rate: 0.08 },
+            ],
+          },
+        }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    const save = screen.getByText('Save Changes').closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    expect(screen.queryByTestId('tou-save-blocked')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Band 2 rate'), { target: { value: '' } })
+    expect(save.disabled).toBe(true)
+    expect(screen.getByTestId('tou-save-blocked')).toBeDefined()
+    fireEvent.click(save)
+    expect(patchMock).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Band 2 rate'), { target: { value: '8' } })
+    expect(save.disabled).toBe(false)
+  })
+})
+
+// ── INSTRUCTION-577F: the Fixed rate inputs take pence ──────────────────
+
+describe('TariffSettings — the Fixed rate in pence (577F)', () => {
+  const ALL_FUELS = [
+    { type: 'heat_pump' as const },
+    { type: 'gas_boiler' as const },
+    { type: 'lpg_boiler' as const },
+    { type: 'oil_boiler' as const },
+  ]
+
+  it('shows each Fixed rate in p/kWh and saves it in £/kWh', async () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: { provider: 'fixed', fixed_rate: 0.245 },
+          gas: { provider: 'fixed', fixed_rate: 0.07 },
+          lpg: { provider: 'fixed', fixed_rate: 0.1 },
+          oil: { provider: 'fixed', fixed_rate: 0.08 },
+        }}
+        heatSources={ALL_FUELS}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    const shown = { Electricity: '24.5', Gas: '7', LPG: '10', Oil: '8' }
+    const typed = { Electricity: '27.5', Gas: '6.24', LPG: '9.9', Oil: '7.1' }
+    for (const fuel of ['Electricity', 'Gas', 'LPG', 'Oil'] as const) {
+      const input = screen.getByLabelText(`${fuel} Rate (p/kWh)`) as HTMLInputElement
+      expect(input.tagName).toBe('INPUT')
+      expect(input.value).toBe(shown[fuel])
+      expect(input.min).toBe('1')
+      expect(input.max).toBe('200')
+      expect(input.step).toBe('0.01')
+      fireEvent.change(input, { target: { value: typed[fuel] } })
+      const label = screen.getByText(`${fuel} Rate (p/kWh)`)
+      fireEvent.click(within(label.parentElement as HTMLElement).getByLabelText('Help'))
+      expect(screen.getByRole('tooltip').textContent).toContain('must be in pence per kWh')
+      fireEvent.click(screen.getByLabelText('Close'))
+    }
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.fixed_rate).toBe(0.275)
+    expect(payload.gas.fixed_rate).toBe(0.0624)
+    expect(payload.lpg.fixed_rate).toBe(0.099)
+    expect(payload.oil.fixed_rate).toBe(0.071)
+  })
+
+  it('shows a hint under each Fixed rate below 1p/kWh, and states £/kWh on the Fallback Rates', () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: { provider: 'fixed', fixed_rate: 0.00245 },
+          gas: { provider: 'fixed', fixed_rate: 0.0099 },
+          lpg: { provider: 'fixed', fixed_rate: 0.01 },
+          oil: { provider: 'fixed', fixed_rate: 0 },
+        }}
+        heatSources={ALL_FUELS}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    const hint = (fuel: string) => {
+      const id = screen.getByLabelText(`${fuel} Rate (p/kWh)`).getAttribute('aria-describedby')
+      return id === null ? null : (document.getElementById(id)?.textContent ?? '')
+    }
+    expect((screen.getByLabelText('Electricity Rate (p/kWh)') as HTMLInputElement).value).toBe('0.245')
+    expect(hint('Electricity')).toContain('Below 1p/kWh')
+    expect(hint('Gas')).toContain('Below 1p/kWh')
+    expect(hint('LPG')).toBeNull()
+    expect(hint('Oil')).toBeNull()
+    expect(screen.getAllByText(/Below 1p\/kWh/)).toHaveLength(2)
+    fireEvent.change(screen.getByLabelText('Oil Rate (p/kWh)'), { target: { value: '-5' } })
+    expect(hint('Oil')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Electricity Rate (p/kWh)'), { target: { value: '24.5' } })
+    expect(hint('Electricity')).toBeNull()
+    expect(screen.getAllByText(/Below 1p\/kWh/)).toHaveLength(1)
+    expect(screen.getAllByText('(£/kWh)', { exact: false })).toHaveLength(4)
+  })
+
+  it('saves a Fixed rate and a band rate below 1p/kWh: the hint blocks nothing', async () => {
+    render(
+      <TariffSettings
+        energy={{
+          electricity: {
+            provider: 'time_of_use',
+            bands: [
+              { start: '06:00', rate: 0.3 },
+              { start: '23:00', rate: 0.0008 },
+            ],
+          },
+          gas: { provider: 'fixed', fixed_rate: 0.0007 },
+        }}
+        heatSources={[{ type: 'heat_pump' as const }, { type: 'gas_boiler' as const }]}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    expect(screen.getAllByText(/Below 1p\/kWh/)).toHaveLength(2)
+    const save = screen.getByText('Save Changes').closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    expect(screen.queryByTestId('tou-save-blocked')).toBeNull()
+    fireEvent.click(save)
+    await waitFor(() => expect(patchMock).toHaveBeenCalled())
+    const payload = patchMock.mock.calls[0][1]
+    expect(payload.electricity.bands[1].rate).toBe(0.0008)
+    expect(payload.gas.fixed_rate).toBe(0.0007)
+  })
+
+  it('says in the tooltip of the Fixed rate that the value is in pence', () => {
+    render(
+      <TariffSettings
+        energy={{ electricity: { provider: 'fixed', fixed_rate: 0.245 } }}
+        driver="mqtt"
+        onRefetch={noop}
+      />,
+    )
+    const label = screen.getByText('Electricity Rate (p/kWh)')
+    fireEvent.click(within(label.parentElement as HTMLElement).getByLabelText('Help'))
+    const tip = screen.getByRole('tooltip').textContent ?? ''
+    expect(tip).toContain('imported from the grid')
+    expect(tip).toContain('must be in pence per kWh')
   })
 })

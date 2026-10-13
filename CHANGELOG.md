@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [1.6.14] — 2026-10-13
+
+### Added
+- A manual time-of-use electricity tariff, for an install with no Octopus
+  account and no Home Assistant rate entity: set
+  `energy.electricity.provider: time_of_use` with a list of `bands`, each
+  a `start` time on the half-hour and a `rate` in £/kWh above 0. A band
+  ends where the next one starts, so the bands always cover the 24 hours
+  of the day. Times are UK clock time, also on the days the clocks change.
+  In a hand-edited `qsh.yaml`, put each start in quotes (`"23:00"`).
+- A band editor for the time-of-use tariff, in the setup wizard's tariff
+  step and on the Settings tariff page. Each row shows a band's start,
+  end, rate and length. The end of a band is the start of the next, so the
+  total stays at 24 hours. A band can be split or removed.
+- The setup wizard warns when a tariff rate is above £2/kWh (200p/kWh),
+  which is most often a slip of the unit or of a digit. The review step
+  lists the warning and the deploy waits until you confirm it.
+
+### Changed
+- The rate inputs of the tariff pages take pence per kWh: the fixed rate
+  of electricity, gas, LPG and oil, and the rate of each time-of-use band.
+  `qsh.yaml` still holds £/kWh: 24.5 typed in an input is saved as 0.245.
+  The fallback rates and the fuel cost of a heat source stay in £/kWh.
+- The setup wizard and the Settings energy save refuse a fixed rate that is
+  not a valid number. At start, the same value for a fuel in use now stops
+  the add-on with a clear message.
+
 ## [1.6.13] — 2026-10-11
 
 ### Added

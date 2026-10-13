@@ -2,6 +2,8 @@ export const TARIFF = {
   hpEuid: 'The unique identifier for your heat pump on the Octopus network. Found on the heat pump sticker or in Octopus account settings.',
   importRate: 'The price you pay per kWh of electricity imported from the grid.',
   exportRate: 'The price you receive per kWh of electricity exported to the grid.',
+  ratePence: 'The value must be in pence per kWh: 24.5 for 24.5p/kWh. QSH saves it in £/kWh (0.245).',
+  rateBelowOnePenny: 'Below 1p/kWh: is this a rate in pounds? Enter it in pence, for example 24.5 for 24.5p/kWh.',
   fallbackRates: 'Backup rates used when live tariff data is temporarily unavailable. Set these to your typical rates. Export blank = no export credit assumed; solar surplus is priced at the import rate and solar-adjusted pricing stays off. (Advanced: set energy.electricity.octopus_export_tariff_code in YAML to decode a live export rate instead — requires your Octopus API key and export tariff code.)',
   weatherComp: 'Adjusts flow temperature based on outdoor temperature. Improves efficiency in milder weather by lowering the flow temp automatically.',
   fixedFlowTemp: 'The constant flow temperature used when weather compensation is turned off. Higher values heat faster but use more energy.',

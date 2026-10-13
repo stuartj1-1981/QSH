@@ -809,9 +809,11 @@ def patch_config_section(section: str, body=Body(...)):
     # runtime). The 422 detail shape matches deploy_config (wizard.py) so API
     # clients see one validation-error contract across both write entry points.
     if section == "energy" and isinstance(incoming, dict):
-        from qsh.tariff import validate_energy_fixed_rate
+        from qsh.tariff import validate_energy_fixed_rate, validate_energy_time_of_use
 
-        _energy_errors = validate_energy_fixed_rate(incoming)
+        # INSTRUCTION-577B: the time-of-use band list is refused here on the
+        # same terms as at the wizard deploy and in the provider.
+        _energy_errors = validate_energy_fixed_rate(incoming) + validate_energy_time_of_use(incoming)
         if _energy_errors:
             raise HTTPException(
                 status_code=422,

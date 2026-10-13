@@ -8,6 +8,7 @@ modules.
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Literal, Protocol, Tuple, runtime_checkable
@@ -38,6 +39,7 @@ ProviderKind = Literal[
     "fixed",
     "fallback",
     "ha_entity",          # 158B
+    "time_of_use",        # 577B
 ]
 
 # V5 E-M1: backend capability flag. Frontend (150E) gates radio options on
@@ -48,6 +50,7 @@ ProviderKind = Literal[
 #   150C: + "octopus_gas"
 #   150D: + "edf_freephase"
 #   158B: + "ha_entity"
+#   577B: + "time_of_use"
 SUPPORTED_PROVIDER_KINDS: tuple[ProviderKind, ...] = (
     "fixed",
     "fallback",
@@ -55,6 +58,7 @@ SUPPORTED_PROVIDER_KINDS: tuple[ProviderKind, ...] = (
     "octopus_gas",
     "edf_freephase",
     "ha_entity",          # 158B
+    "time_of_use",        # 577B
 )
 
 # V4 NEW-V3-1: shared base for Octopus product-code prefixes. Declared at
@@ -218,6 +222,7 @@ VALID_ELECTRICITY_PROVIDERS: tuple[str, ...] = (
     "ha_entity",
     "fixed",
     "edf_freephase",
+    "time_of_use",        # 577B
 )
 
 
@@ -234,6 +239,12 @@ ELECTRICITY_FIXED_RATE_REQUIRED_MSG = (
 GAS_FIXED_RATE_REQUIRED_MSG = (
     "energy.gas.provider='fixed' requires "
     "energy.gas.fixed_rate to be set"
+)
+# INSTRUCTION-577B: the canonical message for a time_of_use section with no
+# band list; the band predicate in qsh/tariff/time_of_use.py returns it.
+ELECTRICITY_TIME_OF_USE_BANDS_REQUIRED_MSG = (
+    "energy.electricity.provider='time_of_use' requires "
+    "energy.electricity.bands to be a non-empty list"
 )
 
 
@@ -262,11 +273,52 @@ def _fixed_rate_missing(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _fixed_rate_not_finite(value) -> bool:
+    """INSTRUCTION-577G: True when a fixed_rate is not a rate that
+    FixedRateProvider can price: a bool, a value that float() cannot read
+    (None, a blank or non-numeric string, a list, a mapping), a value that
+    overflows a float, or NaN or an infinity. A value that float() reads as a
+    finite number is a rate: an int, a float, or a numeric string, which
+    FixedRateProvider converts as it does today. The sign is not tested: the
+    Fixed input can hold 0, and owner ruling (c) of FI-93 keeps `fixed` as it
+    is. Shared by validate_energy_fixed_rate and the runtime factory."""
+    if isinstance(value, bool):
+        return True
+    try:
+        rate = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return True
+    return not math.isfinite(rate)
+
+
+def fixed_rate_not_finite_msg(fuel: str, value) -> str:
+    """INSTRUCTION-577G: the canonical message for a fixed_rate that
+    _fixed_rate_not_finite refuses. The value is shown by repr, cut to 40
+    characters."""
+    shown = repr(value)
+    if len(shown) > 40:
+        shown = shown[:37] + "..."
+    return f"energy.{fuel}.fixed_rate must be a finite number of £/kWh (got {shown})"
+
+
+def _fixed_rate_used(fuel: str, section: dict) -> bool:
+    """INSTRUCTION-577G: True when the factory prices this fuel section from
+    its fixed_rate: the provider `fixed`, and for LPG and oil also an explicit
+    `provider: null` (`_normalise_legacy_config` takes a section only when it
+    holds the key `provider`)."""
+    provider = section.get("provider")
+    return provider == "fixed" or (
+        fuel in ("lpg", "oil") and "provider" in section and provider is None
+    )
+
+
 def validate_energy_fixed_rate(energy: dict) -> list[str]:
     """Return error strings for any electricity/gas section whose provider is
     'fixed' but whose fixed_rate is missing per _fixed_rate_missing (None or
-    empty/blank string). Empty list = no fixed-rate problem. Does not validate
-    lpg/oil — the runtime factory defaults those to 0.0 by design."""
+    empty/blank string), and (INSTRUCTION-577G) for any fuel section whose
+    fixed_rate the factory prices but _fixed_rate_not_finite refuses. Empty
+    list = no fixed-rate problem. The presence of an lpg/oil rate is not
+    validated — the runtime factory defaults it to 0.0 by design."""
     errors: list[str] = []
     for fuel, msg in (
         ("electricity", ELECTRICITY_FIXED_RATE_REQUIRED_MSG),
@@ -276,6 +328,48 @@ def validate_energy_fixed_rate(energy: dict) -> list[str]:
         if isinstance(section, dict) and section.get("provider") == "fixed":
             if _fixed_rate_missing(section.get("fixed_rate")):
                 errors.append(msg)
+    # INSTRUCTION-577G: a fixed_rate that the factory would price must be a
+    # finite number, for each of the four fuels. An electricity or gas rate
+    # that is missing has its own message above and is not reported twice;
+    # an LPG or oil section with no fixed_rate key takes the factory's 0.0.
+    for fuel in ("electricity", "gas", "lpg", "oil"):
+        section = energy.get(fuel) if isinstance(energy, dict) else None
+        if not isinstance(section, dict) or not _fixed_rate_used(fuel, section):
+            continue
+        if fuel in ("lpg", "oil"):
+            if "fixed_rate" not in section:
+                continue
+        elif _fixed_rate_missing(section.get("fixed_rate")):
+            continue
+        value = section.get("fixed_rate")
+        if _fixed_rate_not_finite(value):
+            errors.append(fixed_rate_not_finite_msg(fuel, value))
+    return errors
+
+
+def validate_energy_time_of_use(energy: dict) -> list[str]:
+    """Return error strings for an electricity section whose provider is
+    'time_of_use' and whose band list the band predicate refuses
+    (qsh.tariff.time_of_use.band_errors, INSTRUCTION-577B), and for a gas, LPG
+    or oil section whose provider is 'time_of_use', which the factory cannot
+    build. Empty list = no time-of-use problem. The wizard validation, the
+    Settings energy save and the provider share the band predicate."""
+    if not isinstance(energy, dict):
+        return []
+    errors: list[str] = []
+    for fuel in ("gas", "lpg", "oil"):
+        other = energy.get(fuel)
+        if isinstance(other, dict) and other.get("provider") == "time_of_use":
+            errors.append(
+                f"energy.{fuel}.provider='time_of_use' is refused: only the "
+                f"electricity section takes time_of_use"
+            )
+    section = energy.get("electricity")
+    if isinstance(section, dict) and section.get("provider") == "time_of_use":
+        # Local import: qsh.tariff.time_of_use imports names from this package root.
+        from qsh.tariff.time_of_use import band_errors
+
+        errors.extend(band_errors(section.get("bands")))
     return errors
 
 
@@ -657,7 +751,16 @@ def _build_provider(fuel: Fuel, energy_config: dict) -> TariffProvider:
             fixed_rate = fuel_section.get("fixed_rate")
             if _fixed_rate_missing(fixed_rate):
                 raise ConfigurationError(ELECTRICITY_FIXED_RATE_REQUIRED_MSG)
+            if _fixed_rate_not_finite(fixed_rate):
+                # INSTRUCTION-577G: the same predicate as the two write routes.
+                raise ConfigurationError(fixed_rate_not_finite_msg(fuel, fixed_rate))
             return FixedRateProvider(fuel, value=fixed_rate)
+        if provider_kind == "time_of_use":
+            # INSTRUCTION-577B: the provider applies the shared band predicate
+            # and raises ConfigurationError on a list that the wizard and the
+            # Settings save refuse. Local import, as for the Octopus providers.
+            from qsh.tariff.time_of_use import TimeOfUseProvider
+            return TimeOfUseProvider(fuel, fuel_section.get("bands"))
 
     if fuel == "gas":
         if provider_kind == "octopus":
@@ -671,15 +774,23 @@ def _build_provider(fuel: Fuel, energy_config: dict) -> TariffProvider:
             fixed_rate = fuel_section.get("fixed_rate")
             if _fixed_rate_missing(fixed_rate):
                 raise ConfigurationError(GAS_FIXED_RATE_REQUIRED_MSG)
+            if _fixed_rate_not_finite(fixed_rate):
+                # INSTRUCTION-577G: the same predicate as the two write routes.
+                raise ConfigurationError(fixed_rate_not_finite_msg(fuel, fixed_rate))
             return FixedRateProvider(fuel, value=fixed_rate)
 
     if fuel in ("lpg", "oil"):
         if provider_kind in (None, "fixed"):
-            return FixedRateProvider(fuel, value=fuel_section.get("fixed_rate", 0.0))
+            fixed_rate = fuel_section.get("fixed_rate", 0.0)
+            if _fixed_rate_not_finite(fixed_rate):
+                # INSTRUCTION-577G: the same predicate as the two write routes.
+                raise ConfigurationError(fixed_rate_not_finite_msg(fuel, fixed_rate))
+            return FixedRateProvider(fuel, value=fixed_rate)
 
     raise ConfigurationError(
         f"Unknown provider '{provider_kind}' for fuel '{fuel}'. "
-        f"Valid: octopus, fixed (and edf_freephase for electricity)."
+        f"Valid: {', '.join(VALID_ELECTRICITY_PROVIDERS)} for electricity; "
+        f"octopus, fixed for gas; fixed for lpg and oil."
     )
 
 
@@ -700,8 +811,11 @@ __all__ = [
     "VALID_ELECTRICITY_PROVIDERS",
     "ELECTRICITY_FIXED_RATE_REQUIRED_MSG",
     "GAS_FIXED_RATE_REQUIRED_MSG",
+    "ELECTRICITY_TIME_OF_USE_BANDS_REQUIRED_MSG",
     "OCTOPUS_REQUIRED_CREDENTIALS",
     "validate_energy_fixed_rate",
+    "fixed_rate_not_finite_msg",
+    "validate_energy_time_of_use",
     "fuel_for_source",
     "create_tariff_providers",
     "create_export_provider",

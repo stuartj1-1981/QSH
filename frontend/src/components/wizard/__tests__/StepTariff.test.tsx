@@ -114,10 +114,10 @@ describe('StepTariff — electricity provider radio', () => {
     expect(screen.queryByPlaceholderText('sk_live_...')).toBeNull()
   })
 
-  it('selecting Fixed reveals £/kWh input', () => {
+  it('selecting Fixed reveals p/kWh input', () => {
     render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
     fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
-    expect(screen.getByText(/Electricity Rate/i)).toBeDefined()
+    expect(screen.getByText('Electricity Rate (p/kWh)')).toBeDefined()
   })
 })
 
@@ -402,7 +402,7 @@ describe('StepTariff — fixed_rate seeding (303)', () => {
     render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={onUpdate} />)
     fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
     const input = screen.getByLabelText(/Electricity Rate/i) as HTMLInputElement
-    fireEvent.change(input, { target: { value: '0.30' } })
+    fireEvent.change(input, { target: { value: '30' } })
     expect(lastEnergy(onUpdate)?.electricity?.fixed_rate).toBe(0.30)
   })
 })
@@ -413,9 +413,9 @@ describe('StepTariff — Fixed rate validation', () => {
     fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
     const input = screen.getByLabelText(/Electricity Rate/i) as HTMLInputElement
     expect(input.type).toBe('number')
-    expect(input.min).toBe('0.01')
-    expect(input.max).toBe('2')
-    expect(input.step).toBe('0.001')
+    expect(input.min).toBe('1')
+    expect(input.max).toBe('200')
+    expect(input.step).toBe('0.01')
   })
 })
 
@@ -754,5 +754,276 @@ describe('StepTariff — dual-source per-fuel Test Connection (164)', () => {
     const payload = lastEnergyPayload(onUpdate)
     expect(payload?.gas?.octopus_tariff_code).toBeUndefined()
     expect(payload?.electricity?.octopus_tariff_code).toBe('E-1R-AGILE-24-10-01-H')
+  })
+})
+
+// ── INSTRUCTION-577D: the Time of Use provider and its band editor ──────
+
+describe('StepTariff — time of use (577D)', () => {
+  function lastElectricity(onUpdate: ReturnType<typeof vi.fn>) {
+    const energyCalls = onUpdate.mock.calls.filter((c) => c[0] === 'energy')
+    return (energyCalls[energyCalls.length - 1]?.[1] as {
+      electricity?: { provider?: string; bands?: { start: string; rate: number }[] }
+    } | undefined)?.electricity
+  }
+
+  it('seeds one band on the switch and persists each edit', () => {
+    const onUpdate = vi.fn()
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect(lastElectricity(onUpdate)).toMatchObject({
+      provider: 'time_of_use',
+      bands: [{ start: '00:00', rate: 0.245 }],
+    })
+    fireEvent.click(screen.getByLabelText('Split band 1'))
+    expect(lastElectricity(onUpdate)?.bands).toEqual([
+      { start: '00:00', rate: 0.245 },
+      { start: '12:00', rate: 0.245 },
+    ])
+  })
+
+  it('seeds one band on mount for a time_of_use config with no bands', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepTariff
+        config={{ energy: { electricity: { provider: 'time_of_use' } }, heat_source: { type: 'heat_pump' } }}
+        onUpdate={onUpdate}
+      />,
+    )
+    expect(lastElectricity(onUpdate)?.bands).toEqual([{ start: '00:00', rate: 0.245 }])
+  })
+
+  it('seeds one band at the default on mount for a refused band list and a fixed rate of 0', () => {
+    const onUpdate = vi.fn()
+    // YAML reads an unquoted 23:00 as the number 1380, which the backend refuses.
+    const refused = [{ start: 1380, rate: 0.08 }] as unknown as { start: string; rate: number }[]
+    render(
+      <StepTariff
+        config={{
+          energy: { electricity: { provider: 'time_of_use', fixed_rate: 0, bands: refused } },
+          heat_source: { type: 'heat_pump' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    expect(lastElectricity(onUpdate)?.bands).toEqual([{ start: '00:00', rate: 0.245 }])
+    expect((screen.getByLabelText('Band 1 rate') as HTMLInputElement).value).toBe('24.5')
+  })
+
+  it('seeds one band at the fixed rate on the switch from Fixed', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepTariff
+        config={{ energy: { electricity: { provider: 'fixed', fixed_rate: 0.27 } }, heat_source: { type: 'heat_pump' } }}
+        onUpdate={onUpdate}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect(lastElectricity(onUpdate)?.bands).toEqual([{ start: '00:00', rate: 0.27 }])
+  })
+
+  it('seeds one band at the default rate on the switch when the fixed rate is 0', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepTariff
+        config={{ energy: { electricity: { provider: 'fixed', fixed_rate: 0 } }, heat_source: { type: 'heat_pump' } }}
+        onUpdate={onUpdate}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect(lastElectricity(onUpdate)?.bands).toEqual([{ start: '00:00', rate: 0.245 }])
+  })
+
+  it('sorts a band list kept from an earlier choice on the switch', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: {
+              provider: 'fixed',
+              fixed_rate: 0.27,
+              bands: [
+                { start: '23:00', rate: 0.08 },
+                { start: '06:00', rate: 0.3 },
+              ],
+            },
+          },
+          heat_source: { type: 'heat_pump' },
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-time_of_use'))
+    expect(lastElectricity(onUpdate)?.bands).toEqual([
+      { start: '06:00', rate: 0.3 },
+      { start: '23:00', rate: 0.08 },
+    ])
+  })
+
+  it('hydrates a saved band list sorted by start', () => {
+    render(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: {
+              provider: 'time_of_use',
+              bands: [
+                { start: '23:00', rate: 0.08 },
+                { start: '06:00', rate: 0.3 },
+              ],
+            },
+          },
+          heat_source: { type: 'heat_pump' },
+        }}
+        onUpdate={vi.fn()}
+      />,
+    )
+    expect((screen.getByLabelText('Band 1 start') as HTMLSelectElement).value).toBe('06:00')
+    expect(screen.getByTestId('tou-total').textContent).toBe('Total 24 h in 2 bands')
+  })
+})
+
+// ── INSTRUCTION-577F: the Fixed rate inputs take pence ──────────────────
+
+describe('StepTariff — the Fixed rate in pence (577F)', () => {
+  function lastEnergy(onUpdate: ReturnType<typeof vi.fn>) {
+    const energyCalls = onUpdate.mock.calls.filter((c) => c[0] === 'energy')
+    return energyCalls[energyCalls.length - 1]?.[1] as
+      | Record<string, { fixed_rate?: number } | undefined>
+      | undefined
+  }
+
+  it('shows each Fixed rate in p/kWh and persists it in £/kWh', () => {
+    const onUpdate = vi.fn()
+    render(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: { provider: 'fixed', fixed_rate: 0.245 },
+            gas: { provider: 'fixed', fixed_rate: 0.07 },
+            lpg: { provider: 'fixed', fixed_rate: 0.1 },
+            oil: { provider: 'fixed', fixed_rate: 0.08 },
+          },
+          heat_sources: [
+            { type: 'heat_pump' },
+            { type: 'gas_boiler' },
+            { type: 'lpg_boiler' },
+            { type: 'oil_boiler' },
+          ],
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const cases = [
+      { fuel: 'Electricity', key: 'electricity', shown: '24.5', typed: '27.5', saved: 0.275 },
+      { fuel: 'Gas', key: 'gas', shown: '7', typed: '6.24', saved: 0.0624 },
+      { fuel: 'LPG', key: 'lpg', shown: '10', typed: '9.9', saved: 0.099 },
+      { fuel: 'Oil', key: 'oil', shown: '8', typed: '7.1', saved: 0.071 },
+    ]
+    for (const c of cases) {
+      const input = screen.getByLabelText(`${c.fuel} Rate (p/kWh)`) as HTMLInputElement
+      expect(input.tagName).toBe('INPUT')
+      expect(input.value).toBe(c.shown)
+      fireEvent.change(input, { target: { value: c.typed } })
+      expect(lastEnergy(onUpdate)?.[c.key]?.fixed_rate).toBe(c.saved)
+    }
+  })
+
+  it('shows a hint under each Fixed rate below 1p/kWh, and states £/kWh on the Fallback Rates', () => {
+    const onUpdate = vi.fn()
+    const sources = [
+      { type: 'heat_pump' as const },
+      { type: 'gas_boiler' as const },
+      { type: 'lpg_boiler' as const },
+      { type: 'oil_boiler' as const },
+    ]
+    const { rerender } = render(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: { provider: 'fixed', fixed_rate: 0.00245 },
+            gas: { provider: 'fixed', fixed_rate: 0.0099 },
+            lpg: { provider: 'fixed', fixed_rate: 0.01 },
+            oil: { provider: 'fixed', fixed_rate: 0 },
+          },
+          heat_sources: sources,
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    const hint = (fuel: string) => {
+      const id = screen.getByLabelText(`${fuel} Rate (p/kWh)`).getAttribute('aria-describedby')
+      return id === null ? null : (document.getElementById(id)?.textContent ?? '')
+    }
+    expect(hint('Electricity')).toContain('Below 1p/kWh')
+    expect(hint('Gas')).toContain('Below 1p/kWh')
+    expect(hint('LPG')).toBeNull()
+    expect(hint('Oil')).toBeNull()
+    expect(screen.getAllByText(/Below 1p\/kWh/)).toHaveLength(2)
+    expect(screen.getAllByText('(£/kWh)', { exact: false })).toHaveLength(4)
+    // The hint changes no rate: nothing is persisted on render.
+    expect(lastEnergy(onUpdate)).toBeUndefined()
+    rerender(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: { provider: 'fixed', fixed_rate: 0.00245 },
+            gas: { provider: 'fixed', fixed_rate: 0.0099 },
+            lpg: { provider: 'fixed', fixed_rate: 0.245 },
+            oil: { provider: 'fixed', fixed_rate: -0.05 },
+          },
+          heat_sources: sources,
+        }}
+        onUpdate={onUpdate}
+      />,
+    )
+    expect(hint('LPG')).toBeNull()
+    expect(hint('Oil')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Electricity Rate (p/kWh)'), { target: { value: '24.5' } })
+    expect(hint('Electricity')).toBeNull()
+    expect(screen.getAllByText(/Below 1p\/kWh/)).toHaveLength(1)
+  })
+
+  it('persists a Fixed rate and a band rate below 1p/kWh: the hint blocks nothing', () => {
+    const onFixed = vi.fn()
+    const first = render(
+      <StepTariff
+        config={{ energy: { electricity: { provider: 'fixed', fixed_rate: 0.245 } }, heat_source: { type: 'heat_pump' } }}
+        onUpdate={onFixed}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Electricity Rate (p/kWh)'), { target: { value: '0.08' } })
+    expect(lastEnergy(onFixed)?.electricity?.fixed_rate).toBe(0.0008)
+    first.unmount()
+    const onBand = vi.fn()
+    render(
+      <StepTariff
+        config={{
+          energy: {
+            electricity: {
+              provider: 'time_of_use',
+              bands: [
+                { start: '06:00', rate: 0.3 },
+                { start: '23:00', rate: 0.08 },
+              ],
+            },
+          },
+          heat_source: { type: 'heat_pump' },
+        }}
+        onUpdate={onBand}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Band 2 rate'), { target: { value: '0.08' } })
+    const bands = (lastEnergy(onBand)?.electricity as { bands?: { rate: number }[] } | undefined)?.bands
+    expect(bands?.[1].rate).toBe(0.0008)
+  })
+
+  it('says in the tooltip of the Fixed rate that the value is in pence', () => {
+    render(<StepTariff config={HP_ONLY_CONFIG} onUpdate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('provider-electricity-provider-fixed'))
+    const label = screen.getByText('Electricity Rate (p/kWh)')
+    fireEvent.click(within(label.parentElement as HTMLElement).getByLabelText('Help'))
+    expect(screen.getByRole('tooltip').textContent).toContain('must be in pence per kWh')
   })
 })

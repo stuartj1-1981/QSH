@@ -25,6 +25,7 @@ export const providerKindSchema = z.enum([
   'fixed',
   'fallback',
   'ha_entity',  // 159A: parity with qsh/tariff/__init__.py SUPPORTED_PROVIDER_KINDS (158B); also the matching ProviderKind union in api.ts (158C).
+  'time_of_use',  // 577A: accepted before the backend lists it, so that no snapshot that names it is dropped.
 ])
 
 export const providerStatusSchema = z.object({

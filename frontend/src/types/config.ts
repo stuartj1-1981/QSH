@@ -300,8 +300,18 @@ export interface OctopusYaml {
 // INSTRUCTION-158C: + 'ha_entity' for HA-brokered rates (Octopus HACS
 // integration et al). The matching ElectricityTariffConfig.rates_entity
 // holds the HA entity ID; no API key required.
-export type ElectricityProviderKind = 'octopus' | 'edf_freephase' | 'fixed' | 'ha_entity'
+// INSTRUCTION-577C: + 'time_of_use' — a manual tariff of bands (TouBand).
+export type ElectricityProviderKind = 'octopus' | 'edf_freephase' | 'fixed' | 'ha_entity' | 'time_of_use'
 export type GasProviderKind = 'octopus' | 'fixed'
+
+// INSTRUCTION-577C: one band of a manual time-of-use day. `start` is "HH:MM"
+// on the half-hour (Europe/London clock time); the band ends where the next
+// band starts. lib/touBands.ts holds the arithmetic; the backend refuses a
+// list that breaks these rules (qsh/tariff/time_of_use.py::band_errors).
+export interface TouBand {
+  start: string
+  rate: number
+}
 
 export interface ElectricityTariffConfig {
   provider: ElectricityProviderKind
@@ -315,6 +325,7 @@ export interface ElectricityTariffConfig {
   fixed_rate?: number
   rates_entity?: string        // 158C: HA-brokered rates path (current day)
   rates_entity_next?: string   // 159C: HA-brokered rates path (next day, optional). Concatenated with rates_entity by the HA driver per 159B Task 5.
+  bands?: TouBand[]            // 577C: provider 'time_of_use' only
 }
 
 export interface GasTariffConfig {
