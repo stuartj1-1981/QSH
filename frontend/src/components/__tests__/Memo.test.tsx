@@ -63,7 +63,7 @@ describe('React.memo — no re-render with identical props', () => {
   })
 
   it('RecoveryCard does not change DOM output on rerender with same props', () => {
-    const props = { recoveryTimeHours: 1.5, capacityPct: 60 }
+    const props = { recoveryState: 'recovering' as const, recoveryTimeHours: 1.5, capacityPct: 60 }
     const { container, rerender } = render(<RecoveryCard {...props} />)
     const htmlBefore = container.innerHTML
     rerender(<RecoveryCard {...props} />)

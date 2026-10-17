@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ...forecast.compute import derive_daily_lows
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...utils import MISSING, resolve_control_enabled
+from ... import clock
 
 
 def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
@@ -362,7 +363,7 @@ class HADriver:
         # 00:00-~16:00 daily on HACS-brokered installs. Internal-entry malformed
         # warnings (octopus_electricity.py:105) are not gated and surface
         # independently for genuinely-bad payloads.
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         elec_section = config.get("energy", {}).get("electricity", {}) if isinstance(config.get("energy"), dict) else {}
         if not isinstance(elec_section, dict):
@@ -388,7 +389,7 @@ class HADriver:
             rates_entity = config.get("entities", {}).get("current_day_rates")
             rates_entity_next = None
 
-        suppress_empty = datetime.now(timezone.utc).hour < 16
+        suppress_empty = clock.now_dt(timezone.utc).hour < 16
 
         def _fetch_and_parse(entity_id, label, max_retries):
             """Fetch a rate entity and parse, retrying on empty up to
@@ -523,7 +524,7 @@ class HADriver:
         if away_active or per_zone_away:
             provider = self.get_forecast_provider()
             if provider.is_available:
-                now = time.time()
+                now = clock.now()
                 forecast_temps = derive_daily_lows(provider.fetch_bundle(now), now)
 
         # ── Refrigerant / Modbus sensors (hp_modbus config section) ──
@@ -750,7 +751,7 @@ class HADriver:
         if outputs.supervisory_release_requested and outputs.supervisory_release:
             from .hardware_dispatch import release_supervisory_surface
 
-            released_iso = datetime.now(timezone.utc).isoformat()
+            released_iso = clock.now_dt(timezone.utc).isoformat()
             for record in outputs.supervisory_release:
                 surface = record.get("surface")
                 if control_enabled:

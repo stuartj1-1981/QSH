@@ -21,11 +21,11 @@ Routes (INSTRUCTION-294A):
 
 import logging
 import math
-import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ... import clock
 from ...swarm.gate_state import GateState
 from ..state import shared_state
 
@@ -138,7 +138,7 @@ def get_apoptosis():
     cfg = getattr(getattr(runtime, "config", None), "apoptosis", None) if runtime is not None else None
     if pub is not None:
         pre_shutdown_active, pre_shutdown_remaining_hours = _pre_shutdown_state(
-            pub, cfg, time.time()
+            pub, cfg, clock.now()
         )
     else:
         pre_shutdown_active, pre_shutdown_remaining_hours = False, None
@@ -380,7 +380,7 @@ def get_global():
             "can_enable": False,
             "own_registry": _own_registry_unknown(),
         }
-    now = time.monotonic()
+    now = clock.monotonic()
     cache = runtime.global_gate_cache
     fresh = cache.fresh_global_state(now)
     return {
@@ -402,7 +402,7 @@ def set_live(body: _LiveEnableBody):
     runtime = shared_state.get_swarm()
     if runtime is None:
         raise HTTPException(status_code=503, detail="swarm runtime not yet wired")
-    ok, reason = runtime.global_gate_cache.set_live_enabled(body.enabled, time.monotonic())
+    ok, reason = runtime.global_gate_cache.set_live_enabled(body.enabled, clock.monotonic())
     if ok:
         return {"live_enabled": body.enabled}
     if reason == "global_not_open":
@@ -458,7 +458,7 @@ def clear_dormancy(body: _ClearBody):
         raise HTTPException(
             status_code=409, detail="unit is not in SENESCENT_DORMANT"
         )
-    now = time.time()
+    now = clock.now()
     pub.enter_recommissioning_soak(now)
     pub.consume_dormancy_cleared()  # N-2 — single clear, not replayable
     cfg = getattr(getattr(runtime, "config", None), "apoptosis", None)
@@ -497,7 +497,7 @@ def clear_self_suspended(body: _ClearBody):
         raise HTTPException(
             status_code=409, detail="unit is not in SELF_SUSPENDED"
         )
-    pub.enter_soak_resume(time.time(), operator_cleared=True)
+    pub.enter_soak_resume(clock.now(), operator_cleared=True)
     logging.getLogger("qsh.swarm").info(
         "SELF_SUSPENDED clear accepted: support_case_ref=%s", body.support_case_ref
     )

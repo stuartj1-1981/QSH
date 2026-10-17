@@ -18,9 +18,20 @@ import { ReconciliationDashboard } from '../components/forecast/ReconciliationDa
 import { CutoverGateStatusGrid } from '../components/forecast/CutoverGateStatusGrid'
 import { AlarmsPanel } from '../components/forecast/AlarmsPanel'
 import { HelpTip } from '../components/HelpTip'
+import { roomLabel } from '../lib/roomLabel'
 
 export function Forecast() {
   const { data: cycle } = useLive()
+
+  // INSTRUCTION-578 — the zones with no configured temperature source, by
+  // label, in the order of the user's locale. The installation load forecast
+  // needs a learned heat loss in every zone, and a zone that never had a
+  // sensor never learns one, so the panel shows the three load values as
+  // unavailable while this list is not empty and the values are null.
+  const zonesWithNoSensor = Object.entries(cycle?.rooms ?? {})
+    .filter(([, room]) => room.temperature_source === 'none_configured')
+    .map(([key, room]) => roomLabel(key, room))
+    .sort((a, b) => a.localeCompare(b))
 
   const { data: ffData, refetch: refetchFlags } = useFeatureFlags()
 
@@ -62,7 +73,10 @@ export function Forecast() {
           <HelpTip size={12} text="The current weather forecast the system is using, plus any decisions made on the strength of it that are still waiting for the real outcome to arrive." />
         </h2>
         <div className="space-y-4">
-          <ForecastStatePanel state={cycle?.forecast_state_snapshot} />
+          <ForecastStatePanel
+            state={cycle?.forecast_state_snapshot}
+            zonesWithNoSensor={zonesWithNoSensor}
+          />
           <PredictionRecordsTable records={cycle?.forecast_predicted_decisions} />
         </div>
       </section>

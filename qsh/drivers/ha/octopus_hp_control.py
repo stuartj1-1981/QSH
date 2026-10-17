@@ -28,7 +28,7 @@ If octopus_api_key is not configured, falls back to HA service calls.
 import json
 import logging
 import socket  # for socket.timeout exception type in _graphql_request retry branch
-import time    # also used for response-elapsed instrumentation in _graphql_request
+import time    # only for the two marked real reads (response elapsed) in _graphql_request
 import threading
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Tuple
@@ -37,6 +37,7 @@ from urllib.error import HTTPError, URLError
 
 from ...events import EventKind, EventSpec, get_annunciator
 from ...tariff import OCTOPUS_GRAPHQL_URL
+from ... import clock
 
 
 def _clean_temp(value):
@@ -196,7 +197,7 @@ def get_water_zone_activity() -> Tuple[Optional[bool], bool]:
 
     # TTL cache — serves only the last SUCCESSFULLY fetched value (a bool); a
     # None sentinel means "nothing cached yet". Failures/backoff never reach here.
-    now = time.time()
+    now = clock.now()
     if _activity_cache_value is not None and (now - _activity_cache_ts) <= _ACTIVITY_TTL_S:
         return (_activity_cache_value, True)
 
@@ -302,10 +303,10 @@ def _graphql_request(query, variables=None, token=None, url=None):
     attempts = 2 if REQUEST_RETRY_ON_TIMEOUT else 1
     for attempt in range(1, attempts + 1):
         try:
-            t0 = time.monotonic()
+            t0 = time.monotonic()  # clock: real — elapsed time of this HTTP call, for a log line and HA.octopus_api_slow
             with urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-                elapsed = time.monotonic() - t0
+                elapsed = time.monotonic() - t0  # clock: real — elapsed time of this HTTP call, for a log line and HA.octopus_api_slow
                 logging.debug(f"Octopus API OK in {elapsed:.2f}s (attempt {attempt}/{attempts})")
                 if elapsed >= SLOW_RESPONSE_THRESHOLD_S:
                     ann.entered(
@@ -368,7 +369,7 @@ def _ensure_token():
     global _token, _token_expires, _refresh_token, _consecutive_failures
 
     with _lock:
-        now = time.time()
+        now = clock.now()
 
         # Token still valid
         if _token and now < (_token_expires - TOKEN_REFRESH_MARGIN):
@@ -715,7 +716,7 @@ def get_status():
         return {
             "initialised": _initialised,
             "has_token": _token is not None,
-            "token_expires_in": max(0, int(_token_expires - time.time())) if _token else 0,
+            "token_expires_in": max(0, int(_token_expires - clock.now())) if _token else 0,
             "consecutive_failures": _consecutive_failures,
             "euid": _hp_euid,
             "account_number": _account_number or "not set",

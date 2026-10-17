@@ -14,6 +14,15 @@ from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Thresholds of classify_recovery_state (INSTRUCTION-582).
+# HP_RUNNING_KW: measured thermal output above which the solver treats the
+# heat pump as running. AT_COMFORT_HOURS: time below which every room is at
+# target. NO_DEMAND_PCT: capacity-bar percentage below which the bar reads
+# as no demand.
+HP_RUNNING_KW = 0.1
+AT_COMFORT_HOURS = 0.05
+NO_DEMAND_PCT = 1.0
+
 
 def calculate_per_room_ttc(
     room_temps: Dict[str, float],
@@ -43,7 +52,7 @@ def calculate_per_room_ttc(
           or -1.0 (cannot recover)
     """
     # --- Regime detection ---
-    hp_running = hp_thermal_kw > 0.1
+    hp_running = hp_thermal_kw > HP_RUNNING_KW
     equilibrium_regime = (
         hp_running
         and actual_loss > 0.1          # Startup/dropout guard (F3)
@@ -208,3 +217,43 @@ def calculate_per_room_ttc(
             system_ttc = max(system_ttc, t_hours)
 
     return (system_ttc, per_room)
+
+
+def classify_recovery_state(
+    system_ttc: float,
+    hp_thermal_kw: float,
+    capacity_pct: float,
+    min_load_pct: float,
+) -> str:
+    """Say what the time-to-comfort figure means.
+
+    The solver returns -1.0 for two different causes: the heat pump gives no
+    heat, or the heat pump runs and cannot reach the target. This function
+    separates the two, so that the display does not read "insufficient
+    capacity" when the heat pump is off because the demand is low.
+
+    Returns one of:
+        "insufficient_capacity" - heat pump runs, a room cannot reach target
+        "at_comfort"            - heat pump runs, every room is at target
+        "recovering"            - heat pump runs, system_ttc is the hours to go
+        "no_demand"             - heat pump off, demand below NO_DEMAND_PCT
+        "below_minimum"         - heat pump off, demand below the minimum load
+        "waiting"               - any other case: heat pump off with enough
+                                  demand to start, or a figure that is not
+                                  finite
+
+    capacity_pct and min_load_pct are the two figures of the capacity bar.
+    """
+    if hp_thermal_kw > HP_RUNNING_KW:
+        if not math.isfinite(system_ttc):
+            return "waiting"
+        if system_ttc < 0:
+            return "insufficient_capacity"
+        if system_ttc <= AT_COMFORT_HOURS:
+            return "at_comfort"
+        return "recovering"
+    if capacity_pct < NO_DEMAND_PCT:
+        return "no_demand"
+    if capacity_pct < min_load_pct:
+        return "below_minimum"
+    return "waiting"

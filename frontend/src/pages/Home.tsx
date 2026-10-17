@@ -166,6 +166,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
   }
 
   const recoveryTimeHours = status?.recovery_time_hours ?? initial?.recovery_time_hours ?? 0
+  const recoveryState = status?.recovery_state ?? initial?.recovery_state ?? 'waiting'
   const capacityPct = status?.capacity_pct ?? initial?.capacity_pct ?? 0
   const minLoadPct = status?.min_load_pct ?? initial?.min_load_pct ?? 0
   const comfortScheduleActive = status?.comfort_schedule_active ?? initial?.comfort_schedule_active ?? false
@@ -439,7 +440,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         recoveryTimeHours={recoveryTimeHours}
         capacityPct={capacityPct}
         minLoadPct={minLoadPct}
-        operatingState={operatingState}
+        recoveryState={recoveryState}
       />
 
       {/* Source selection panel (multi-source only) */}

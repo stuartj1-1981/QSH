@@ -5,7 +5,7 @@ import os
 import copy
 import yaml
 import requests
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 import time as _time
 
+from ... import clock
 from ...paths import YAML_PATH
 from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml, read_modify_write
 from qsh.config import validate_auxiliary_output_block
@@ -350,12 +351,12 @@ def _fetch_all_entities() -> List[Dict]:
                     requests 2.27, caught here).
       no_token    — SUPERVISOR_TOKEN absent; no request attempted.
     """
-    started = _time.monotonic()
+    started = _time.monotonic()  # clock: real — start of this computer's own HA request, for a log line
     ha_url, _, ha_headers = _get_ha_headers()
     if not ha_headers:
         logger.warning(
             "wizard/scan-entities: outcome=no_token elapsed=%.2fs entities=0",
-            _time.monotonic() - started,
+            _time.monotonic() - started,  # clock: real — elapsed time of this computer's own HA request, for a log line
         )
         return []
     try:
@@ -368,20 +369,20 @@ def _fetch_all_entities() -> List[Dict]:
         entities = resp.json()
         logger.info(
             "wizard/scan-entities: outcome=success elapsed=%.2fs entities=%d",
-            _time.monotonic() - started,
+            _time.monotonic() - started,  # clock: real — elapsed time of this computer's own HA request, for a log line
             len(entities),
         )
         return entities
     except requests.Timeout:
         logger.error(
             "wizard/scan-entities: outcome=timeout elapsed=%.2fs entities=0",
-            _time.monotonic() - started,
+            _time.monotonic() - started,  # clock: real — elapsed time of this computer's own HA request, for a log line
         )
         return []
     except requests.RequestException as e:
         logger.error(
             "wizard/scan-entities: outcome=http_error elapsed=%.2fs entities=0 error=%s",
-            _time.monotonic() - started,
+            _time.monotonic() - started,  # clock: real — elapsed time of this computer's own HA request, for a log line
             e,
         )
         return []
@@ -2042,7 +2043,7 @@ def _mqtt_scan_topics(req: MqttScanRequest) -> dict:
             return
         is_retained = bool(getattr(msg, "retain", False))
         topic = msg.topic
-        now = _time.time()
+        now = clock.now()
         with lock:
             entry = state.setdefault(topic, {
                 "payloads": [],
@@ -2062,7 +2063,8 @@ def _mqtt_scan_topics(req: MqttScanRequest) -> dict:
             entry["last_seen_ts"] = now
             entry["message_count"] += 1
 
-    started_at = _time.time()
+    started_at = clock.now()
+    scan_t0 = _time.time()  # clock: real — start of this computer's own MQTT scan, for duration_s
     try:
         client = paho.Client(paho.CallbackAPIVersion.VERSION2, client_id=req.client_id)
         if req.username:
@@ -2075,27 +2077,28 @@ def _mqtt_scan_topics(req: MqttScanRequest) -> dict:
         client.loop_start()
         if not connected.wait(timeout=5.0):
             client.loop_stop()
-            return {"topics": [], "scan_meta": _scan_meta(started_at, 0, 0, req.window_seconds)}
+            return {"topics": [], "scan_meta": _scan_meta(started_at, scan_t0, 0, 0, req.window_seconds)}
         _time.sleep(req.window_seconds)
         client.disconnect()
         client.loop_stop()
     except Exception as exc:
         logger.warning("MQTT scan failed: %s", exc)
-        return {"topics": [], "scan_meta": _scan_meta(started_at, 0, 0, req.window_seconds)}
+        return {"topics": [], "scan_meta": _scan_meta(started_at, scan_t0, 0, 0, req.window_seconds)}
 
     topics_out = _fold_scan_state(state, req)
     partial = sum(1 for t in topics_out if t["scan_completeness"] == "partial")
     return {
         "topics": topics_out,
-        "scan_meta": _scan_meta(started_at, len(topics_out), partial, req.window_seconds),
+        "scan_meta": _scan_meta(started_at, scan_t0, len(topics_out), partial, req.window_seconds),
     }
 
 
-def _scan_meta(started_at: float, total: int, partial: int, window: float = 0.0) -> dict:
+def _scan_meta(started_at: float, scan_t0: float, total: int, partial: int,
+               window: float = 0.0) -> dict:
     """Build the scan_meta envelope returned alongside the topics list."""
     return {
         "started_at": started_at,
-        "duration_s": _time.time() - started_at,
+        "duration_s": _time.time() - scan_t0,  # clock: real — elapsed time of this computer's own MQTT scan
         "window_seconds": window,
         "total_topics": total,
         "partial_topics": partial,
@@ -2394,7 +2397,7 @@ def deploy_config(req: WizardDeployRequest):
     # cleanly — plain scalars only break on colon-followed-by-space, and the
     # room-name suffix is the config key (no spaces). Pinned by
     # test_config_property_carrythrough.py.
-    _ack_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _ack_ts = clock.now_dt(timezone.utc).isoformat(timespec="seconds")
     req.config["wizard_acknowledgements"] = {rid: _ack_ts for rid in required_acks}
 
     # ── Telemetry: generate install_id before writing YAML (H1/H2 resolution) ──

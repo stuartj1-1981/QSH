@@ -1,10 +1,10 @@
 """Health check endpoint."""
 
 import logging
-import time
 
 from fastapi import APIRouter
 
+from ... import clock
 from ..state import shared_state
 from qsh.version import read_addon_version
 from qsh.utils import (
@@ -29,7 +29,7 @@ logging.info("health: addon_version=%s", _ADDON_VERSION)
 def health_check():
     """Simple health check — confirms API is running and pipeline is feeding data."""
     snap = shared_state.get_snapshot()
-    age = time.time() - snap.timestamp if snap.timestamp > 0 else -1
+    age = clock.now() - snap.timestamp if snap.timestamp > 0 else -1
     driver = shared_state.get_driver_status()
     if driver["status"] == "error":
         overall = "error"

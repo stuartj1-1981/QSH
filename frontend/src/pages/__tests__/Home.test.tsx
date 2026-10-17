@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 import { Home } from '../Home'
 import type { CycleMessage } from '../../types/api'
 import type { QshConfigYaml } from '../../types/config'
+import { cycleSnapshotSchema } from '../../types/schemas'
 
 // Mock all the hooks used by Home
 let mockLiveData: CycleMessage | null = null
@@ -472,5 +473,51 @@ describe('Home single-source comfort provenance — INSTRUCTION-550 OB-05', () =
     // Without this case, a panel that is read-only for any reason would
     // still pass — this is what distinguishes a test from an observation.
     expect(within(card).getAllByRole('button').length).toBe(3)
+  })
+})
+
+describe('Home time-to-comfort card — INSTRUCTION-582', () => {
+  afterEach(() => {
+    mockStatusData = null
+    mockLiveData = null
+  })
+
+  it('shows the text of the recovery state from the first status read', () => {
+    // The field report: demand 0.3 kW, heat pump off, solver time -1.
+    mockStatusData = { recovery_state: 'below_minimum', recovery_time_hours: -1, capacity_pct: 5, min_load_pct: 33 }
+    render(<Home engineering={false} />)
+    expect(screen.getByText('Demand below minimum')).toBeInTheDocument()
+  })
+
+  it('shows the text of the recovery state from the live status, which wins over the first read', () => {
+    mockStatusData = { recovery_state: 'below_minimum', recovery_time_hours: -1 }
+    mockLiveData = { status: { recovery_state: 'no_demand', recovery_time_hours: -1 } } as unknown as CycleMessage
+    render(<Home engineering={false} />)
+    expect(screen.getByText('No Demand')).toBeInTheDocument()
+  })
+
+  it('shows the time from the status when the state is recovering', () => {
+    mockStatusData = { recovery_state: 'recovering', recovery_time_hours: 0.42 }
+    render(<Home engineering={false} />)
+    expect(screen.getByText('25 min')).toBeInTheDocument()
+  })
+
+  it('does not read the solver time as a verdict when the status has no recovery state', () => {
+    mockStatusData = { recovery_time_hours: -1 }
+    render(<Home engineering={false} />)
+    expect(screen.getByTestId('recovery-card').textContent).toBe('Time to comfort\u2014')
+  })
+})
+
+describe('the live parse keeps the recovery state — INSTRUCTION-582 review Q1', () => {
+  it('passes status.recovery_state through cycleSnapshotSchema', () => {
+    const parsed = cycleSnapshotSchema.safeParse({
+      type: 'cycle',
+      timestamp: 1,
+      cycle_number: 1,
+      status: { recovery_state: 'no_demand' },
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({ status: { recovery_state: 'no_demand' } })
   })
 })

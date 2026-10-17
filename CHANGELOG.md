@@ -2,6 +2,77 @@
 
 ## [Unreleased]
 
+## [1.6.15] — 2026-10-17
+
+### Changed
+- The Time to comfort card on the Home page now says why the heat pump gives
+  no heat. It shows "No Demand" when the demand is below 1 % of the heat pump
+  capacity, and "Demand below minimum" when the demand is below the minimum
+  load of the heat pump. It showed "Insufficient capacity" in both cases, and
+  "At comfort" when every room was at target. "At comfort" now shows only
+  while the heat pump runs. The card shows "Insufficient capacity" only when
+  the heat pump runs and a room cannot reach its target. The status has a new
+  field, `recovery_state`.
+- In Settings, the TRV Setpoint Topic and Valve Setpoint Topic fields of a
+  room on an MQTT install take a list of topics, as the Valve Position Topic
+  field does. The `+` button adds a topic, and QSH publishes the same value
+  to every topic of the list. The wizard shows a list of two or more setpoint
+  topics as text and does not change it.
+- On the MQTT driver each room now reports whether it has a configured
+  temperature source, as rooms on the Home Assistant driver already do: a
+  room with a `room_temp` topic is `independent`, a room with none is
+  `none_configured`. The class comes from the configuration and does not
+  say whether the topic is reading. Before, every room on the MQTT driver
+  reported `unknown`. The class is shown in the live view and read by no
+  control path.
+- The Forecast page shows the three installation load values (4 h, 12 h
+  and 24 h) as `Unavailable`, with one tooltip that names the zones, when
+  a zone has no temperature sensor. The load forecast needs a learned heat
+  loss in every zone, and a zone with no sensor never learns one, so on
+  such an install the values were a dash with no reason given. A dash
+  still shows while the zones are learning.
+
+### Fixed
+- The flow arbiter no longer lets its trims build up through the ramp limit.
+  The recovery boost and the RL trim were added to a base that the ramp limit
+  had moved to one ramp step from the previous output, so each trim went into
+  the next cycle's limit and the flow target moved on, cycle by cycle. When
+  the recovery boost was larger than one ramp-down step, the target rose to
+  1 °C below the maximum flow temperature. The trims are now added to the
+  base flow (the deterministic flow with its boosts and bias) held between the
+  minimum and maximum flow temperatures, and the ramp limit then binds the
+  sum. During a recovery the target is that base plus at most 2 °C of boost,
+  times one less the RL blend; with RL active, the RL trim moves it by at most
+  3 °C times the blend. On a beta install, when the boost ended, the old target
+  fell at the full ramp-down rate, and a flow write during that fall was
+  followed by a compressor stop. An add-on that restarts during a recovery
+  takes the same fall one time, so update the add-on when the rooms are at
+  their setpoints.
+- Hydraulic protection no longer reads a flow-rate sensor that does not
+  report as a flow of 0.0 L/min. When the flow-rate entity is unavailable or
+  stale, an install with a flow-rate sensor runs the protection tier that it
+  has without one (the independent delta-T probes, the delta-T of the heat
+  pump, or short-cycle detection), and the warning event
+  `HYDRAULIC.tier_degraded` says so. Before, the heat pump stopped 10 minutes
+  after each start and started again 10 minutes later, for as long as the
+  sensor was down. A hydraulic trip now holds the restart inhibit for a
+  cooldown after the heat pump stops, for all four tiers: 15 minutes after
+  the first trip, then 22.5 and 34 minutes, up to 60 minutes (30 minutes
+  when the outdoor temperature is below the antifrost threshold; the hold
+  also applies there, and it outranks the antifrost guard). A trip is a stop
+  of the heat pump with the restart inhibit set on its last cycle. Only time
+  releases the hold. The count of trips stays until twice the cooldown has
+  passed with no new trip, also on Tier 4, where the count was cleared at the
+  release: a heat pump that trips again at once waits longer each time. The
+  warning event `HYDRAULIC.lockout` shows the hold. The operating state
+  `tier1_hydraulic_inhibit` of `sensor.qsh_operating_state` shows for the
+  whole hold, on every tier. Tier 1 and Tier 2 wait 120 s before they set the
+  restart inhibit. The 120 s start when the heat pump starts to draw power,
+  and again at the first heating cycle after hot water or shoulder mode. The
+  log lines "Tier 1 restart inhibit:", "Tier 2 restart inhibit:", "Tier 3
+  restart inhibit:" and "Tier 4 cooldown elapsed" are removed. The "restart
+  inhibit cleared" lines of Tier 2 and Tier 3 stay.
+
 ## [1.6.14] — 2026-10-13
 
 ### Added

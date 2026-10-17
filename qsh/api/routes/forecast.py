@@ -23,12 +23,13 @@ ForecastHistoryStore.iter_observations accessor (no private access).
 
 import logging
 import math
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+from ... import clock
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +214,7 @@ def get_cutover_gates(window_cycles: int = 168):
     cycle_period_s = float(config.get("update_interval_s", 300))
 
     tracker = get_cutover_gate_tracker()
-    now_ts = time.time()
+    now_ts = clock.now()
     cached = tracker.get_cached_gates(now_ts, cycle_period_s)
     if cached is not None:
         return cached

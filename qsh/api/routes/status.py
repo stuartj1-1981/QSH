@@ -119,6 +119,7 @@ def get_status():
         "total_demand": round(snap.total_demand, 2),
         "outdoor_temp": round(snap.outdoor_temp, 1),
         "recovery_time_hours": snap.recovery_time_hours,
+        "recovery_state": snap.recovery_state,
         # INSTRUCTION-438 D8 (36C Task 4) — additive key: resolved-control
         # provenance ([] when the driver offers no resolution).
         "control_sources": [asdict(cs) for cs in snap.control_sources],

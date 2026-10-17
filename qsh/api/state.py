@@ -90,6 +90,10 @@ class CycleSnapshot:
 
     # Recovery & capacity metrics
     recovery_time_hours: float = 0.0
+    # INSTRUCTION-582 — what the time-to-comfort figure means. One of the
+    # strings that classify_recovery_state returns. "waiting" until the first
+    # cycle has run.
+    recovery_state: str = "waiting"
     per_room_ttc: Dict[str, float] = field(default_factory=dict)
     capacity_pct: float = 0.0
     hp_capacity_kw: float = 0.0
@@ -919,7 +923,7 @@ class SharedState:
             if hp_thermal_kw <= 0 and ctx.sensor_data.hp_power > 0:
                 hp_thermal_kw = ctx.sensor_data.hp_power * ctx.sensor_data.hp_cop
 
-        from .ttc import calculate_per_room_ttc
+        from .ttc import calculate_per_room_ttc, classify_recovery_state
 
         actual_loss = ctx.thermal_state.actual_loss if ctx.thermal_state else 0.0
         room_demands = ctx.thermal_state.room_demands if ctx.thermal_state else {}
@@ -954,6 +958,15 @@ class SharedState:
         snap.hp_capacity_kw = bar_capacity_kw
 
         snap.min_load_pct = round((hp_min_output_kw / bar_capacity_kw * 100) if bar_capacity_kw > 0 else 0.0, 1)
+
+        # INSTRUCTION-582 — read the three figures as the status and the bar
+        # show them (rounded), so that the card and the bar agree.
+        snap.recovery_state = classify_recovery_state(
+            system_ttc=snap.recovery_time_hours,
+            hp_thermal_kw=hp_thermal_kw,
+            capacity_pct=snap.capacity_pct,
+            min_load_pct=snap.min_load_pct,
+        )
 
         # Away state from pipeline
         away_state = ctx.away_state

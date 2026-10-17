@@ -2,7 +2,8 @@ import requests
 import logging
 import os
 import enum
-import time as _time
+
+from ... import clock
 
 HA_URL = "http://supervisor/core"
 TOKEN = os.getenv("SUPERVISOR_TOKEN")
@@ -125,7 +126,7 @@ class _CircuitBreaker:
         """True if breaker is tripped and still in cooldown."""
         if self._consecutive_failures < self.MAX_FAILURES:
             return False
-        if _time.time() >= self._cooldown_until:
+        if clock.now() >= self._cooldown_until:
             # Cooldown expired — half-open, allow one attempt. This is the SINGLE
             # close path for a tripped breaker: while tripped, no call reaches
             # record_success (all read/write gates return before the HTTP
@@ -149,7 +150,7 @@ class _CircuitBreaker:
         called only by the fetch/write gates)."""
         return (
             self._consecutive_failures >= self.MAX_FAILURES
-            and _time.time() < self._cooldown_until
+            and clock.now() < self._cooldown_until
         )
 
     def note_suppressed_write(self, domain, service, entity):
@@ -177,7 +178,7 @@ class _CircuitBreaker:
     def record_failure(self):
         self._consecutive_failures += 1
         if self._consecutive_failures >= self.MAX_FAILURES:
-            self._cooldown_until = _time.time() + self.COOLDOWN_S
+            self._cooldown_until = clock.now() + self.COOLDOWN_S
             # A new open window starts counting suppressed writes fresh.
             self._suppressed_writes = 0
             logging.warning(

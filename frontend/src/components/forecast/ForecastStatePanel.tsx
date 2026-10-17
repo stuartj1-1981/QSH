@@ -1,17 +1,24 @@
 import { LineChart, Line, ResponsiveContainer, Tooltip } from 'recharts'
 import { CloudSun, Snowflake, Wind } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { HelpTip } from '../HelpTip'
 import type { ForecastStateSnapshot } from '../../types/api'
 
 interface ForecastStatePanelProps {
   state: ForecastStateSnapshot | undefined
+  // INSTRUCTION-578 — the labels of the zones that have no configured
+  // temperature source. The installation load values need a learned heat
+  // loss in every zone, and a zone that never had a sensor never learns one,
+  // so while this list is not empty and the three values are null they are
+  // unavailable, not pending.
+  zonesWithNoSensor?: string[]
 }
 
 function formatScalar(value: number | null, suffix: string = ''): string {
   return value === null ? '—' : `${value.toFixed(1)}${suffix}`
 }
 
-export function ForecastStatePanel({ state }: ForecastStatePanelProps) {
+export function ForecastStatePanel({ state, zonesWithNoSensor = [] }: ForecastStatePanelProps) {
   if (!state) {
     return (
       <div className="p-4 bg-[var(--bg-card)] rounded-lg text-[var(--text-muted)]">
@@ -22,6 +29,22 @@ export function ForecastStatePanel({ state }: ForecastStatePanelProps) {
 
   const tempsData = state.hourly_temps_first_6.map((t, i) => ({ i, t }))
   const solarData = state.hourly_solar_first_6.map((s, i) => ({ i, s }))
+
+  // INSTRUCTION-578 — the three load values are unavailable, not pending,
+  // when every one is null and a zone has no temperature source.
+  const loadUnavailable =
+    zonesWithNoSensor.length > 0 &&
+    state.forecast_load_kwh_4h === null &&
+    state.forecast_load_kwh_12h === null &&
+    state.forecast_load_kwh_24h === null
+  const formatLoad = (value: number | null): string =>
+    loadUnavailable ? 'Unavailable' : formatScalar(value, ' kWh')
+  const loadValueClass = cn('font-semibold', loadUnavailable && 'text-[var(--text-muted)]')
+  const loadTip =
+    'The load values need a temperature sensor in every zone. ' +
+    `Zones with no sensor: ${zonesWithNoSensor.join(', ')}. ` +
+    'Give each zone a temperature sensor, or remove the zone from the ' +
+    'configuration, to get the load values.'
 
   return (
     <div className="p-4 bg-[var(--bg-card)] rounded-lg">
@@ -39,15 +62,18 @@ export function ForecastStatePanel({ state }: ForecastStatePanelProps) {
         </div>
         <div className="p-2 bg-[var(--bg)] rounded">
           <div className="text-xs text-[var(--text-muted)]">Load 4h</div>
-          <div className="font-semibold">{formatScalar(state.forecast_load_kwh_4h, ' kWh')}</div>
+          <div className={cn(loadValueClass, 'flex items-center gap-1')}>
+            {formatLoad(state.forecast_load_kwh_4h)}
+            {loadUnavailable && <HelpTip size={12} text={loadTip} />}
+          </div>
         </div>
         <div className="p-2 bg-[var(--bg)] rounded">
           <div className="text-xs text-[var(--text-muted)]">Load 12h</div>
-          <div className="font-semibold">{formatScalar(state.forecast_load_kwh_12h, ' kWh')}</div>
+          <div className={loadValueClass}>{formatLoad(state.forecast_load_kwh_12h)}</div>
         </div>
         <div className="p-2 bg-[var(--bg)] rounded">
           <div className="text-xs text-[var(--text-muted)]">Load 24h</div>
-          <div className="font-semibold">{formatScalar(state.forecast_load_kwh_24h, ' kWh')}</div>
+          <div className={loadValueClass}>{formatLoad(state.forecast_load_kwh_24h)}</div>
         </div>
       </div>
       <div className="flex gap-2 mb-3 flex-wrap">
