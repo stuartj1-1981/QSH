@@ -10,11 +10,11 @@ in valve_control.py and are imported here.
 """
 
 import logging
-import time
 from typing import Dict, List, Optional, Set, Tuple
 
 from .integration import set_ha_service, fetch_ha_entity, WriteOutcome
 from ...utils import safe_float
+from ... import clock
 
 # Warn-once sets (log once per room, then suppress)
 _warned_type2_no_position: Set[str] = set()
@@ -256,7 +256,7 @@ def apply_direct_valve_control_type2(
         DISSIPATION_FLOOR_HOLD_S = 300
         diss_floor = control_state.dissipation_floor.get(room)
         if diss_floor is not None:
-            floor_age = time.time() - control_state.dissipation_floor_time.get(room, 0.0)
+            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
             if floor_age <= DISSIPATION_FLOOR_HOLD_S:
                 if target_position < diss_floor:
                     logging.debug(
@@ -275,7 +275,7 @@ def apply_direct_valve_control_type2(
         if last_pos is not None and abs(last_pos - target_position) < 2:
             logging.debug(f"Type2 {room} already at ~{target_position}% - skipping")
             return True
-        time_since_write = time.time() - control_state.last_valve_write_time.get(room, 0.0)
+        time_since_write = clock.now() - control_state.last_valve_write_time.get(room, 0.0)
         if time_since_write < control_state.valve_write_min_interval:
             logging.debug(
                 f"Type2 {room} debounce: {time_since_write:.0f}s < "
@@ -306,7 +306,7 @@ def apply_direct_valve_control_type2(
         if r_closing is WriteOutcome.SENT and r_opening is WriteOutcome.SENT:
             if control_state is not None:
                 control_state.last_valve_position[room] = target_position
-                control_state.last_valve_write_time[room] = time.time()
+                control_state.last_valve_write_time[room] = clock.now()
             logging.info(
                 f"{_mode_tag} ACTIVE: Set {room} Type2 valve to {target_position}% ({n} TRV{'s' if n > 1 else ''})"
             )
@@ -386,7 +386,7 @@ def apply_direct_valve_control_type1(
         DISSIPATION_FLOOR_HOLD_S = 300
         diss_floor = control_state.dissipation_floor.get(room)
         if diss_floor is not None:
-            floor_age = time.time() - control_state.dissipation_floor_time.get(room, 0.0)
+            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
             if floor_age <= DISSIPATION_FLOOR_HOLD_S:
                 if target_position < diss_floor:
                     logging.debug(
@@ -411,7 +411,7 @@ def apply_direct_valve_control_type1(
             if abs(last_hw - target_hw) < tolerance:
                 logging.debug(f"Type1 {room} already at ~{target_position}% ({target_hw}/{scale}) - skipping")
                 return True
-        time_since_write = time.time() - control_state.last_valve_write_time.get(room, 0.0)
+        time_since_write = clock.now() - control_state.last_valve_write_time.get(room, 0.0)
         if time_since_write < control_state.valve_write_min_interval:
             logging.debug(
                 f"Type1 {room} debounce: {time_since_write:.0f}s < "
@@ -435,7 +435,7 @@ def apply_direct_valve_control_type1(
         if result is WriteOutcome.SENT:
             if control_state is not None:
                 control_state.last_valve_position[room] = target_position
-                control_state.last_valve_write_time[room] = time.time()
+                control_state.last_valve_write_time[room] = clock.now()
             logging.info(
                 f"{_mode_tag} ACTIVE: Set {room} Type1 valve to {target_position}% ({target_hw}/{scale}) "
                 f"({n} TRV{'s' if n > 1 else ''})"
@@ -592,7 +592,7 @@ def apply_direct_valve_control(
         diss_floor = control_state.dissipation_floor.get(room)
         if diss_floor is not None:
             DISSIPATION_FLOOR_HOLD_S = 300
-            floor_age = time.time() - control_state.dissipation_floor_time.get(room, 0.0)
+            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
 
             if floor_age > DISSIPATION_FLOOR_HOLD_S:
                 logging.debug(f"{room} dissipation floor {diss_floor}% expired after {floor_age:.0f}s")

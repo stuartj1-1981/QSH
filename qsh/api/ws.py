@@ -136,6 +136,7 @@ def _format_snapshot(snap) -> dict:
             "heat_source": build_heat_source_payload(snap),
             "comfort_pct": round((1 - rooms_below / max(len(snap.rooms), 1)) * 100, 0),
             "recovery_time_hours": snap.recovery_time_hours,
+            "recovery_state": snap.recovery_state,
             "capacity_pct": snap.capacity_pct,
             "hp_capacity_kw": snap.hp_capacity_kw,
             "min_load_pct": snap.min_load_pct,

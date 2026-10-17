@@ -83,9 +83,9 @@ def resolve_hot_water_active(
             `classify_hot_water_payload`. Only entries with live=True vote.
         last_valid: last live-resolved hot_water_active, or None if never
             resolved live.
-        last_valid_ts: wall time (time.time()) of that last live resolution,
-            or None.
-        now: current wall time (time.time()).
+        last_valid_ts: wall time of that last live resolution (the `now`
+            of that call), or None.
+        now: current wall time; the callers pass `clock.now()`.
         hold_timeout_s: maximum age of `last_valid` that may still be held.
 
     Returns:

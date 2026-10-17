@@ -9,9 +9,10 @@ Thread-safe: shares the same lock pattern as SharedState.
 
 import logging
 import threading
-import time
 from collections import deque
 from typing import Any, Dict, List, Optional
+
+from .. import clock
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ class TrendBuffer:
         Returns:
             List of {t: epoch, v: float} dicts
         """
-        cutoff = time.time() - (hours * 3600)
+        cutoff = clock.now() - (hours * 3600)
         with self._lock:
             if room:
                 buf = self._rooms.get(room, {}).get(metric, deque())

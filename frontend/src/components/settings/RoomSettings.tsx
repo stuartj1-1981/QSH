@@ -4,8 +4,10 @@ import { usePatchConfig } from '../../hooks/useConfig'
 import { useEntityResolve } from '../../hooks/useEntityResolve'
 import { FACING_OPTIONS, type RoomConfigYaml, type RoomMqttTopicValue, type Driver, type AuxiliaryOutputYaml, type PropertyYaml, type FabricClass, type BatteryDeviceYaml, type WindowInferenceMode } from '../../types/config'
 import { stripFixedSetpointForControlMode } from '../../lib/roomConfig'
+import { dropEmptyTopics, SETPOINT_TOPIC_KEYS, type SetpointTopicKey } from '../../lib/topicList'
 import { EntityField } from './EntityField'
 import { TopicField } from './TopicField'
+import { TopicListField } from './TopicListField'
 import { AuxOutputEditor } from './AuxOutputEditor'
 import { OccupancyFields } from '../OccupancyFields'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
@@ -182,11 +184,19 @@ function isMultiEmitter(trv: RoomConfigYaml['trv_entity']): boolean {
  *  at least one entry is non-empty, dropped entirely otherwise. Single-element
  *  lists are not re-collapsed here; the in-component setters already normalise
  *  shape (single → scalar) so a list reaching this helper is always length >= 2
- *  or has an empty placeholder slot. */
+ *  or has an empty placeholder slot.
+ *  INSTRUCTION-581: valve_setpoint and trv_setpoint are cleaned with
+ *  dropEmptyTopics — blank entries are removed and the result collapses
+ *  (none -> dropped, one -> string, two or more -> list). */
 function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
   if (!room.mqtt_topics) return room
   const cleaned: Record<string, RoomMqttTopicValue | string[]> = {}
   for (const [k, v] of Object.entries(room.mqtt_topics)) {
+    if ((SETPOINT_TOPIC_KEYS as readonly string[]).includes(k)) {
+      const kept = dropEmptyTopics(v as string | string[] | undefined)
+      if (kept !== undefined) cleaned[k] = kept
+      continue
+    }
     if (Array.isArray(v)) {
       // Keep the list verbatim if any entry is non-empty.
       if (v.some((t) => typeof t === 'string' && t.trim())) {
@@ -531,6 +541,16 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
       mqtt_topics: { ...(room.mqtt_topics ?? {}), valve_position: normalised },
     })
   }, [editedRooms, updateRoom])
+
+  /** INSTRUCTION-581 — set a valve_setpoint or trv_setpoint value (string, list
+   *  or undefined). Blank entries stay in local state until save. */
+  const updateSetpointTopics = useCallback(
+    (roomName: string, key: SetpointTopicKey, next: string | string[] | undefined) => {
+      const room = editedRooms[roomName]
+      updateRoom(roomName, { mqtt_topics: { ...(room.mqtt_topics ?? {}), [key]: next } })
+    },
+    [editedRooms, updateRoom],
+  )
 
   /** Clear legacy HA fields for a room (on MQTT driver). */
   const clearLegacyHaFields = useCallback((name: string) => {
@@ -1225,31 +1245,25 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                     ))}
                   </div>
                 </div>
-                <TopicField
+                {/* INSTRUCTION-581 — list-form output topics. A list publishes
+                    the same value to every topic (backend: INSTRUCTION-222B). */}
+                <TopicListField
                   label="Valve Setpoint Topic"
-                  value={room.mqtt_topics?.valve_setpoint || ''}
-                  onChange={(v) =>
-                    updateRoom(name, {
-                      mqtt_topics: {
-                        ...room.mqtt_topics,
-                        valve_setpoint: v || undefined,
-                      },
-                    })
-                  }
+                  labelPlural="Valve Setpoint Topics"
+                  value={room.mqtt_topics?.valve_setpoint}
+                  onChange={(next) => updateSetpointTopics(name, 'valve_setpoint', next)}
                   placeholder={`rooms/${name}/valve/set`}
+                  extraPlaceholder={(n) => `rooms/${name}/valve/set/emitter${n}`}
+                  addTitle="Add additional valve setpoint topic (multi-emitter)"
                 />
-                <TopicField
+                <TopicListField
                   label="TRV Setpoint Topic"
-                  value={room.mqtt_topics?.trv_setpoint || ''}
-                  onChange={(v) =>
-                    updateRoom(name, {
-                      mqtt_topics: {
-                        ...room.mqtt_topics,
-                        trv_setpoint: v || undefined,
-                      },
-                    })
-                  }
+                  labelPlural="TRV Setpoint Topics"
+                  value={room.mqtt_topics?.trv_setpoint}
+                  onChange={(next) => updateSetpointTopics(name, 'trv_setpoint', next)}
                   placeholder={`rooms/${name}/setpoint`}
+                  extraPlaceholder={(n) => `rooms/${name}/setpoint/emitter${n}`}
+                  addTitle="Add additional TRV setpoint topic (multi-emitter)"
                 />
                 <OccupancyFields
                   room={room}

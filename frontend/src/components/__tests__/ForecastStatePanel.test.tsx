@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { ForecastStatePanel } from '../forecast/ForecastStatePanel'
 import type { ForecastStateSnapshot } from '../../types/api'
 
@@ -59,6 +59,56 @@ describe('ForecastStatePanel', () => {
     render(<ForecastStatePanel state={partial} />)
     const dashes = screen.getAllByText('—')
     expect(dashes.length).toBeGreaterThanOrEqual(2)
+  })
+
+  // INSTRUCTION-578 — the three load values are unavailable, not pending,
+  // when every one is null and a zone has no temperature source. One tooltip
+  // names the zones.
+  const _no_load: ForecastStateSnapshot = {
+    ..._full_state,
+    forecast_load_kwh_4h: null,
+    forecast_load_kwh_12h: null,
+    forecast_load_kwh_24h: null,
+  }
+
+  it('renders the three load values as Unavailable, with one tooltip that names the zones with no sensor', () => {
+    render(<ForecastStatePanel state={_no_load} zonesWithNoSensor={['hall', 'utility room']} />)
+    expect(screen.getAllByText('Unavailable')).toHaveLength(3)
+    expect(screen.queryByText('—')).not.toBeInTheDocument()
+    const help = screen.getAllByRole('button', { name: 'Help' })
+    expect(help).toHaveLength(1)
+    fireEvent.click(help[0])
+    // Equality, not containment: the whole text and nothing more.
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'The load values need a temperature sensor in every zone. ' +
+      'Zones with no sensor: hall, utility room. ' +
+      'Give each zone a temperature sensor, or remove the zone from the configuration, to get the load values.',
+    )
+  })
+
+  it('renders a null load value as "—" with no tooltip when another load value is a number, also when a zone has no sensor', () => {
+    const mixed: ForecastStateSnapshot = { ..._full_state, forecast_load_kwh_12h: null, forecast_load_kwh_24h: null }
+    render(<ForecastStatePanel state={mixed} zonesWithNoSensor={['hall']} />)
+    expect(screen.getByText('8.2 kWh')).toBeInTheDocument()
+    expect(screen.getAllByText('—')).toHaveLength(2)
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Help' })).not.toBeInTheDocument()
+  })
+
+  it('renders null load values as "—" with no tooltip when every zone has a sensor', () => {
+    render(<ForecastStatePanel state={_no_load} zonesWithNoSensor={[]} />)
+    expect(screen.getAllByText('—')).toHaveLength(3)
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Help' })).not.toBeInTheDocument()
+  })
+
+  it('renders numeric load values as numbers with no tooltip, also when a zone has no sensor', () => {
+    render(<ForecastStatePanel state={_full_state} zonesWithNoSensor={['hall']} />)
+    expect(screen.getByText('8.2 kWh')).toBeInTheDocument()
+    expect(screen.getByText('24.6 kWh')).toBeInTheDocument()
+    expect(screen.getByText('48.0 kWh')).toBeInTheDocument()
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Help' })).not.toBeInTheDocument()
   })
 
   it('renders cold-snap badge when active', () => {

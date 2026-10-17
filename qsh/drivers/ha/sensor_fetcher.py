@@ -6,7 +6,6 @@ Pure data containers (SensorData, TrvOffsetTracker) remain in sensors.py.
 
 import logging
 import math
-import time
 from typing import Any, Dict, Optional, Set, Tuple
 
 from . import octopus_hp_control
@@ -21,6 +20,7 @@ from ..hot_water_payloads import (
 )
 from ...hw_enable import resolve_hw_entity_ids
 from ...events import EventKind, EventSpec, get_annunciator
+from ... import clock
 
 
 # =========================================================================
@@ -263,7 +263,7 @@ def _observe_ha_age_shadow(entity_id: str, category: str, full: dict) -> None:
                 "last_updated": last_updated_raw,
             }
             return
-        age = time.time() - ts
+        age = clock.now() - ts
         HA_AGE_SHADOWS[entity_id] = {
             "ha_age_s": age,
             "shadow_stale": age > threshold,
@@ -1593,7 +1593,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     if hw_boolean_entity:
         hw_sources.append((bool_value, bool_live))
 
-    _hw_now = time.time()
+    _hw_now = clock.now()
     _hw_hold_timeout = config.get("hot_water_stale_hold_s", HW_STALE_HOLD_DEFAULT_S)
     (
         data.hot_water_active,

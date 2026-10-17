@@ -34,8 +34,10 @@ export interface RoomMqttTopics {
   // backend precedent). Each list entry maps to one emitter stem at the
   // driver layer.
   valve_position?: RoomMqttTopicValue | string[]
-  valve_setpoint?: string
-  trv_setpoint?: string
+  // INSTRUCTION-581 — output topics accept a list of topic strings. The driver
+  // publishes the same value to every topic in the list (INSTRUCTION-222B).
+  valve_setpoint?: string | string[]
+  trv_setpoint?: string | string[]
   occupancy_sensor?: string
 }
 

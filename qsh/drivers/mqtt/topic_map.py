@@ -1029,3 +1029,30 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                 ))
 
     return tm
+
+
+def room_temperature_sources(
+    tm: Optional[TopicMap], config: Dict[str, Any]
+) -> Dict[str, str]:
+    """Per-room temperature source class for every room in config["rooms"].
+
+    INSTRUCTION-579 — the MQTT counterpart of the Home Assistant driver's
+    ``fetch_room_temperature_sources``: the class says whether a room has a
+    configured temperature source, from the topic map alone, and nothing
+    about whether that source is reading. A room with a ``room_temp``
+    mapping in the topic map is ``"independent"`` (its value feeds
+    ``independent_sensors[room]``); a room with none is
+    ``"none_configured"``. The MQTT driver has no TRV temperature source,
+    so ``"trv"`` is never produced here. With no topic map (``tm`` is
+    ``None``, before ``setup``) every room is ``"none_configured"``, as
+    ``read_inputs`` reads no room then. Pure function; no broker read.
+    """
+    rooms_with_room_temp = {
+        m.room
+        for m in (tm.input_mappings if tm else [])
+        if m.field == "room_temp" and m.room
+    }
+    return {
+        room: ("independent" if room in rooms_with_room_temp else "none_configured")
+        for room in config.get("rooms", {})
+    }

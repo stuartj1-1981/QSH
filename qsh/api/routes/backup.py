@@ -2,7 +2,6 @@
 
 import os
 import json
-import time
 import logging
 import copy
 from io import BytesIO
@@ -12,6 +11,8 @@ import yaml
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
+
+from ... import clock
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,13 @@ def export_backup():
                 logger.warning("Backup: %s not found at any path", filename)
 
         meta = {
-            "exported_at": time.time(),
+            "exported_at": clock.now(),
             "version": "2.0",
         }
         zf.writestr("backup_meta.json", json.dumps(meta, indent=2))
 
     buffer.seek(0)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    timestamp = clock.strftime("%Y%m%d_%H%M%S")
     return StreamingResponse(
         buffer,
         media_type="application/zip",

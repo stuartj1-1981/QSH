@@ -8,6 +8,7 @@ import { WINDOW } from '../../lib/helpText'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
 import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
+import { topicsOf } from '../../lib/topicList'
 import { FACING_OPTIONS, type PropertyYaml, type RoomConfigYaml, type RoomMqttTopicValue, type MqttConfig, type MqttTopicCandidate, type QshConfigYaml, type BatteryDeviceYaml } from '../../types/config'
 
 /** Mirrors AREA_RECONCILIATION_TOLERANCE in qsh/api/routes/wizard.py — used
@@ -64,6 +65,20 @@ function rebuildBatteryDevices(
 interface StepRoomsProps {
   config: Partial<QshConfigYaml>
   onUpdate: (section: string, data: unknown) => void
+}
+
+/** INSTRUCTION-581 — a setpoint list of two or more topics is edited in
+ *  Settings. The wizard shows the list read-only so that an edit here cannot
+ *  collapse it to one topic. */
+function MultiTopicNote({ label, topics, testId }: { label: string; topics: string[]; testId: string }) {
+  return (
+    <div data-testid={testId}>
+      <label className="block text-sm font-medium text-[var(--text)] mb-1">{label}</label>
+      <p className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text-muted)]">
+        Topics set: {topics.join(', ')}. Change this list in Settings.
+      </p>
+    </div>
+  )
 }
 
 export function StepRooms({ config, onUpdate }: StepRoomsProps) {
@@ -692,18 +707,34 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         onChange={(v, fmt, jp) => updateRoomMqttTopic(name, 'valve_position', v, fmt, jp)}
                         scanResults={mqttScanResults}
                       />
-                      <TopicPicker
-                        label="Valve Setpoint (optional)"
-                        value={room.mqtt_topics?.valve_setpoint || ''}
-                        onChange={(v) => updateRoomMqttTopic(name, 'valve_setpoint', v)}
-                        scanResults={mqttScanResults}
-                      />
-                      <TopicPicker
-                        label="TRV Setpoint (optional)"
-                        value={room.mqtt_topics?.trv_setpoint || ''}
-                        onChange={(v) => updateRoomMqttTopic(name, 'trv_setpoint', v)}
-                        scanResults={mqttScanResults}
-                      />
+                      {topicsOf(room.mqtt_topics?.valve_setpoint).length >= 2 ? (
+                        <MultiTopicNote
+                          label="Valve Setpoint (optional)"
+                          topics={topicsOf(room.mqtt_topics?.valve_setpoint)}
+                          testId={`${name}-wizard-valve-setpoint-list`}
+                        />
+                      ) : (
+                        <TopicPicker
+                          label="Valve Setpoint (optional)"
+                          value={topicsOf(room.mqtt_topics?.valve_setpoint)[0] ?? ''}
+                          onChange={(v) => updateRoomMqttTopic(name, 'valve_setpoint', v)}
+                          scanResults={mqttScanResults}
+                        />
+                      )}
+                      {topicsOf(room.mqtt_topics?.trv_setpoint).length >= 2 ? (
+                        <MultiTopicNote
+                          label="TRV Setpoint (optional)"
+                          topics={topicsOf(room.mqtt_topics?.trv_setpoint)}
+                          testId={`${name}-wizard-trv-setpoint-list`}
+                        />
+                      ) : (
+                        <TopicPicker
+                          label="TRV Setpoint (optional)"
+                          value={topicsOf(room.mqtt_topics?.trv_setpoint)[0] ?? ''}
+                          onChange={(v) => updateRoomMqttTopic(name, 'trv_setpoint', v)}
+                          scanResults={mqttScanResults}
+                        />
+                      )}
                       <OccupancyFields
                         room={room}
                         onChange={(changes) => updateRoom(name, changes)}

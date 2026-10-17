@@ -14,12 +14,15 @@ Topology
   parent dir fsynced. The whole sequence runs under a singleton
   threading.Lock so concurrent in-process writers serialise.
 
-The four operator-facing write paths (Settings PATCH, wizard deploy,
-backup restore, schedule writes) call snapshot_capture() before their
-write. Other read_modify_write callers (control toggles, away mode,
-single-room edits, telemetry token rotation) do NOT snapshot — those
-are runtime/control-plane writes outside the operator-aligned change-
-control surface this module provides.
+Four write paths of qsh.yaml take a snapshot: the Settings PATCH, the
+wizard deploy and the backup restore call snapshot_capture() before
+their write, and snapshot_revert() captures the current file before it
+restores one. The schedule writes go to the schedule store, not to
+qsh.yaml, and take none. Other writers of qsh.yaml do NOT snapshot.
+Among them are the read_modify_write callers for control toggles, away
+mode, single-room edits and telemetry token rotation, which are
+runtime/control-plane writes outside the operator-aligned change-control
+surface this module provides.
 
 Atomicity scope
 ---------------
@@ -48,7 +51,7 @@ import os
 import shutil
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import Path
 from typing import Optional
 
@@ -56,6 +59,8 @@ import yaml
 
 from qsh import paths as _paths
 from qsh.api.secrets_paths import is_secret_path
+
+from .. import clock
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +172,7 @@ def _resolve_snapshot_dir(source_path: Optional[str] = None) -> Path:
 
 def _now_iso8601_utc() -> str:
     """ISO-8601 UTC with microseconds and Z suffix, colons preserved."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    return clock.now_dt(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def _ensure_snapshot_dir(snap_dir: Path) -> None:

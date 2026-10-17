@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as paho
 
+from ... import clock
 from .topic_map import extract_json_value
 
 logger = logging.getLogger(__name__)
@@ -262,7 +263,7 @@ class MQTTClient:
         """Message callback — thread-safe write to cache."""
         try:
             payload_str = msg.payload.decode("utf-8", errors="replace")
-            now_ts = time.time()
+            now_ts = clock.now()
             # INSTRUCTION-427 D2 — capture retain provenance. msg.retain is True
             # on a broker-replayed retained delivery (resubscribe/reconnect),
             # False on a live publish. The cache/ledger stamps below are

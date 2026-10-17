@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query, HTTPException
 
+from ... import clock
 from ...historian import get_historian
 
 router = APIRouter(prefix="/scop", tags=["scop"])
@@ -42,7 +43,7 @@ def resolve_window(window: str, tz_name: str = "Europe/London") -> Tuple[str, st
         raise ValueError(f"unknown window: {window!r}")
 
     tz = ZoneInfo(tz_name)
-    now_local = datetime.now(tz)
+    now_local = clock.now_dt(tz)
 
     if window == "today":
         midnight = datetime.combine(now_local.date(), dt_time.min, tzinfo=tz)
@@ -75,7 +76,7 @@ def resolve_window_start_dt(
         raise ValueError(f"unknown window: {window!r}")
 
     tz = ZoneInfo(tz_name)
-    now_local = datetime.now(tz)
+    now_local = clock.now_dt(tz)
 
     if window == "today":
         return datetime.combine(now_local.date(), dt_time.min, tzinfo=tz)

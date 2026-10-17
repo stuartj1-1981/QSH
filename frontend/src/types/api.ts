@@ -264,6 +264,19 @@ export interface HealthResponse {
   driver: { status: string; [key: string]: unknown }
 }
 
+/**
+ * What the time-to-comfort figure means (INSTRUCTION-582). The backend sets
+ * it in classify_recovery_state. `recovery_time_hours` is a time only when the
+ * state is `recovering`.
+ */
+export type RecoveryState =
+  | 'no_demand'
+  | 'below_minimum'
+  | 'insufficient_capacity'
+  | 'recovering'
+  | 'at_comfort'
+  | 'waiting'
+
 export interface StatusResponse {
   timestamp: number
   cycle_number: number
@@ -293,6 +306,7 @@ export interface StatusResponse {
   total_demand: number
   outdoor_temp: number
   recovery_time_hours: number
+  recovery_state?: RecoveryState
   capacity_pct: number
   hp_capacity_kw: number
   min_load_pct: number
@@ -378,6 +392,7 @@ export interface CycleMessage {
     total_demand: number
     outdoor_temp: number
     recovery_time_hours: number
+    recovery_state?: RecoveryState
     per_room_ttc?: Record<string, number>
     capacity_pct: number
     hp_capacity_kw: number

@@ -8,12 +8,13 @@ a persistent AwayStateStore is implemented (INSTRUCTION-BR03-AWAY).
 import json
 import os
 import logging
-import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from qsh.paths import find_state_file, save_state_file
+
+from ... import clock
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _record_activation(key: str) -> None:
     """
     ts = _load_timestamps()
     if key not in ts:
-        ts[key] = time.time()
+        ts[key] = clock.now()
         _save_timestamps(ts)
 
 
@@ -77,7 +78,7 @@ def _days_remaining(key: str, days_set: float) -> float:
     activated_at = ts.get(key)
     if activated_at is None:
         return days_set
-    elapsed_days = (time.time() - activated_at) / 86400.0
+    elapsed_days = (clock.now() - activated_at) / 86400.0
     remaining = days_set - elapsed_days
     # Round to nearest 0.5 day
     remaining = round(remaining * 2) / 2

@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from ... import clock
 from ...forecast.compute import derive_daily_lows
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
 from ...api.state import shared_state
@@ -42,6 +43,7 @@ from .topic_map import (
     parse_payload,
     parse_payload_string,
     parse_timestamp,
+    room_temperature_sources,
     _prefixed,
 )
 
@@ -344,12 +346,12 @@ def _resolve_signal_quality(
         # else clock a (topic arrival). field_last_present_ts <= value_entry[1]
         # by construction, so it only ever ages a field toward staleness — it
         # cannot make a field look fresher than the topic's last message.
-        clock = (
+        stamp_ts = (
             field_last_present_ts
             if field_last_present_ts is not None
             else value_entry[1]
         )
-        age = now - clock
+        age = now - stamp_ts
         if age > unavail:
             return ("unavailable", None, None)
         if age > fresh:
@@ -781,7 +783,7 @@ class MQTTDriver:
         ann = get_annunciator()
         full_topic = _prefixed(self._prefix, topic_suffix)
         entry = cache.get(full_topic)
-        if max_age_s is not None and entry is not None and (time.time() - entry[1]) > max_age_s:
+        if max_age_s is not None and entry is not None and (clock.now() - entry[1]) > max_age_s:
             ann.entered("MQTT.control_topic_expired", topic=full_topic)
             entry = None
         elif max_age_s is not None and entry is not None:
@@ -1098,7 +1100,7 @@ class MQTTDriver:
 
     def read_inputs(self, config: Dict) -> InputBlock:
         """Build InputBlock from MQTT topic cache."""
-        now = time.time()
+        now = clock.now()
         cache = self._mqtt.get_cache_snapshot() if self._mqtt else {}
         tm = self._topic_map
         # Keep _config in sync with the config passed in (may differ on first call)
@@ -1490,7 +1492,7 @@ class MQTTDriver:
             (hw_active_value, hw_active_live),
             (hw_boolean_value, hw_boolean_live),
         ]
-        _hw_now = time.time()
+        _hw_now = clock.now()
         _hw_hold_timeout = config.get("hot_water_stale_hold_s", HW_STALE_HOLD_DEFAULT_S)
         (
             hot_water_active,
@@ -2091,6 +2093,9 @@ class MQTTDriver:
 
         return InputBlock(
             room_temps=room_temps,
+            # INSTRUCTION-579 — the source class per room, from the topic map
+            # alone, as the Home Assistant driver reports it from its config.
+            room_temperature_source=room_temperature_sources(tm, config),
             independent_sensors=independent_sensors,
             valve_positions=valve_positions,
             valve_positions_per_emitter={

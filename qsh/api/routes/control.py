@@ -6,13 +6,13 @@ All write endpoints are config-based and work on all drivers.
 
 import os
 import logging
-import time
 from typing import Callable, Optional
 
 import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ... import clock
 from ..state import shared_state, PendingWriteback
 from .config import read_modify_write
 from qsh.occupancy.comfort_schedule import get_comfort_schedule_store
@@ -647,7 +647,7 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
         return
 
     driver = config.get("driver", "ha")
-    written_at = time.time()
+    written_at = clock.now()
     client_unavailable = False
     topic = None
     suffix = _writeback_topic_suffix(config, control_key)
@@ -970,7 +970,7 @@ def get_active_boosts():
         return {"boosts": {}}
 
     boosts = boost_ctrl.get_active_boosts()
-    now = time.time()
+    now = clock.now()
     return {
         "boosts": {
             room: {

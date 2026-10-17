@@ -1,11 +1,11 @@
 """HA COP fetcher — moved from utils.py to isolate HA dependency."""
 
 import logging
-import time
 import numpy as np
 
 from .integration import fetch_ha_entity
 from ...utils import safe_float
+from ... import clock
 
 _last_cop_warning = 0
 
@@ -39,7 +39,7 @@ def get_reliable_cop(config, cop_history):
     valid_history = [c for c in cop_history if 0.5 <= c <= 10.0]
     if valid_history:
         median_cop = float(np.median(valid_history))
-        now = time.time()
+        now = clock.now()
         if now - _last_cop_warning >= 60:
             logging.debug(f"COP unavailable/invalid (raw='{cop_raw}'), using history median: {median_cop:.2f}")
             _last_cop_warning = now

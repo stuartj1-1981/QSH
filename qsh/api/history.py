@@ -8,10 +8,11 @@ Thread-safe: uses the same lock pattern as SharedState.
 
 import logging
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
+
+from .. import clock
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class CycleHistory:
 
     def query(self, hours: float, metrics: Optional[List[str]] = None) -> List[dict]:
         """Return entries within the last `hours`, optionally filtered to specific metrics."""
-        cutoff = time.time() - (hours * 3600)
+        cutoff = clock.now() - (hours * 3600)
         with self._lock:
             entries = [e for e in self._buffer if e.timestamp >= cutoff]
 
@@ -91,7 +92,7 @@ class CycleHistory:
 
     def query_rooms(self, hours: float, fields: Optional[List[str]] = None) -> Dict[str, List[dict]]:
         """Return per-room history within the last `hours`."""
-        cutoff = time.time() - (hours * 3600)
+        cutoff = clock.now() - (hours * 3600)
         with self._lock:
             entries = [e for e in self._buffer if e.timestamp >= cutoff]
 
