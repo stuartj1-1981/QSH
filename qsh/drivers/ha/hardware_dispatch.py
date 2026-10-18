@@ -470,6 +470,32 @@ def compute_mode_readback(
     return applied_mode, new_mismatch_count
 
 
+def off_hold_applies(optimal_mode, prev_mode, last_sent_mode) -> bool:
+    """INSTRUCTION-584 — True when the flow sent this cycle is the off-hold flow.
+
+    QSH sends the off-hold flow (the minimum flow temperature that the user
+    set) when its mode decision is off, so that a heat source that starts by
+    itself (for example a Daikin frost-protection run) heats to that minimum
+    and not to the last weather-curve value. One case is excluded: the last
+    mode QSH sent is heat and the heat source ran in heat on the last cycle.
+    The off decision then waits for the mode debounce, and a low setpoint
+    would stop the compressor before the mode write does. In that case the
+    caller keeps the hold when the hold is already the flow last sent. On the
+    methods that send the mode with every flow write, the caller makes no
+    flow write that would send another mode before the mode debounce allows
+    it (apply_hardware_control).
+
+    Args:
+        optimal_mode: this cycle's mode decision ("heat" / "off").
+        prev_mode: the mode observed on the last cycle (from power draw).
+        last_sent_mode: the last mode the debouncer let through, read after
+            this cycle's should_update_mode call (None before the first send).
+    """
+    if optimal_mode != "off":
+        return False
+    return not (last_sent_mode == "heat" and prev_mode == "heat")
+
+
 def apply_hardware_control(
     config,
     optimal_mode,
@@ -489,6 +515,7 @@ def apply_hardware_control(
     prev_mismatch_count=0,
     return_temp=None,
     has_live_return_temp=False,
+    off_hold_flow=None,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -522,7 +549,49 @@ def apply_hardware_control(
     # The mode actually applied to the HP (observed readback or pre-readback
     # fallback) is computed by compute_mode_readback at the tail of this function.
 
-    should_update_flow = debouncer.should_update_flow(optimal_flow, prev_flow, current_time, urgent=urgent)
+    # INSTRUCTION-584 — the flow sent while QSH holds the heat source off is
+    # the off-hold flow, and a flow leaves with each mode write (paired). An
+    # off command always carries the hold (force), so a lost hold write is
+    # sent again with the next off. The case that off_hold_applies excludes
+    # does not apply once the hold is the flow last sent. optimal_flow is
+    # unchanged: the readback below still reads it.
+    # The mqtt and entity methods send the mode with every flow write. While
+    # the mode debounce runs, no flow write is made on them that would send a
+    # mode other than the last mode sent: an off decision after a heat command
+    # (the heat source runs or is still idle), and a heat decision after an off
+    # while the heat source is not running in heat. A heat decision with the
+    # heat source running in heat, and a cycle without a hold, do not wait.
+    # The debouncer is not called in the waiting cases: a call that returns
+    # True records a flow as sent. After the mode call above, last_mode is
+    # "off" with a heat decision and a heat source not in heat only while the
+    # debounce still runs.
+    flow_carries_mode = config.get("control_method") in ("mqtt", "entity")
+    hold_applies = off_hold_flow is not None and (
+        off_hold_applies(optimal_mode, prev_mode, debouncer.last_mode)
+        or (optimal_mode == "off" and debouncer.last_flow == off_hold_flow)
+    )
+    # The debouncer state of the wait is read only when a hold exists, so a
+    # cycle without a hold reads what it read before INSTRUCTION-584.
+    mode_debounce_runs = (
+        off_hold_flow is not None
+        and current_time - debouncer.last_mode_change < debouncer.mode_debounce_time
+    )
+    off_waits_for_mode_debounce = (
+        flow_carries_mode and optimal_mode == "off"
+        and mode_debounce_runs and debouncer.last_mode == "heat"
+    )
+    heat_waits_for_mode_debounce = (
+        flow_carries_mode and off_hold_flow is not None and optimal_mode == "heat"
+        and prev_mode != "heat" and debouncer.last_mode == "off"
+    )
+    dispatch_flow = off_hold_flow if hold_applies else optimal_flow
+    if off_waits_for_mode_debounce or heat_waits_for_mode_debounce:
+        should_update_flow = False
+    else:
+        should_update_flow = debouncer.should_update_flow(
+            dispatch_flow, prev_flow, current_time, urgent=urgent,
+            paired=should_update_mode, force=hold_applies and should_update_mode,
+        )
     should_update_trvs = debouncer.should_update_trvs(room_targets, current_time, urgent=urgent)
 
     # ====================================================================
@@ -580,25 +649,25 @@ def apply_hardware_control(
 
     if control_method == "octopus_api":
         if should_update_flow:
-            _apply_flow_octopus_api(optimal_flow, flow_min, flow_max)
+            _apply_flow_octopus_api(dispatch_flow, flow_min, flow_max)
         if should_update_mode:
             _apply_mode_octopus_api(optimal_mode)
 
     elif control_method == "ha_service":
         if should_update_flow:
-            _apply_flow_ha_service(config, optimal_flow)
+            _apply_flow_ha_service(config, dispatch_flow)
         if should_update_mode:
             _apply_mode_ha_service(config, optimal_mode)
 
     elif control_method == "mqtt":
         # MQTT publishes flow + mode together (cheap, retained)
         if should_update_flow or should_update_mode:
-            _apply_flow_mqtt(config, optimal_flow, optimal_mode)
+            _apply_flow_mqtt(config, dispatch_flow, optimal_mode)
 
     elif control_method == "entity":
         # Entity output always writes (let user automation handle debouncing)
         if should_update_flow or should_update_mode:
-            _apply_flow_entity(config, optimal_flow, optimal_mode)
+            _apply_flow_entity(config, dispatch_flow, optimal_mode)
 
     elif control_method == "trvs_only":
         logging.debug("TRVs-only mode: no heat source control")

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.6.16] — 2026-10-18
+
+### Fixed
+- In winter mode, the heat pump is no longer stopped on a single satisfied reading. The building must stay satisfied for a configurable dwell (900 s by default, at most 3600 s) before a mid-run stop or off decision takes effect. The heat pump also restarts when the building falls behind by a margin, without the one-hour restart wait. The operating state reads Winter (Monitoring) while the heat pump is off, so the live view no longer draws it as running.
+- The flow setpoint lowers by at most 2 °C per write from the last flow sent. Before, one write could carry the whole change of a flow window, which on a beta install swung the flow between 28.0 and 34.6 °C over about 90 minutes. Rises are not limited. A fall of 15 °C now takes about 80 minutes at the default write budget.
+- The tariff optimiser keeps its classification and commitment between cycles, and sizes each peak drop from a single base flow instead of compounding drops.
+- While the heat pump is held off, QSH sends the user's minimum flow temperature rather than the calculated flow. A heat pump that starts by itself for its own frost protection no longer heats to the last calculated flow.
+
 ## [1.6.15] — 2026-10-17
 
 ### Changed

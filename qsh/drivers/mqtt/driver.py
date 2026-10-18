@@ -2224,6 +2224,13 @@ class MQTTDriver:
                 getattr(outputs, "swarm_dormancy_countdown_hours", None),
             )
 
+        # INSTRUCTION-584 — while the command is off, the flow sent is the
+        # off-hold flow (the minimum flow temperature that the user set), not
+        # the computed flow.
+        _hp_flow = outputs.applied_flow
+        if outputs.optimal_mode == "off" and outputs.off_hold_flow is not None:
+            _hp_flow = outputs.off_hold_flow
+
         if outputs.hardware_changed:
             if control_enabled:
                 if not routing.dispatch_flow_mode:
@@ -2245,7 +2252,7 @@ class MQTTDriver:
                     # readback (applied_mode).  On MQTT installs applied_mode == observed
                     # mode (compute_mode_readback), so publishing it would be self-
                     # fulfilling stuck-off while the HP is idle.
-                    self._mqtt.publish(routing.mqtt_flow_topic, str(outputs.applied_flow))
+                    self._mqtt.publish(routing.mqtt_flow_topic, str(_hp_flow))
                     self._mqtt.publish(routing.mqtt_mode_topic, outputs.optimal_mode)
                 else:
                     # Fall-back: existing shared output_mappings (prefixed) — unchanged path.
@@ -2253,7 +2260,7 @@ class MQTTDriver:
                     # published value is intentionally the command (optimal_mode).
                     for om in self._topic_map.output_mappings:
                         if om.field == "applied_flow":
-                            self._mqtt.publish(om.topic, str(outputs.applied_flow))
+                            self._mqtt.publish(om.topic, str(_hp_flow))
                         elif om.field == "applied_mode":
                             self._mqtt.publish(om.topic, outputs.optimal_mode)
             else:
