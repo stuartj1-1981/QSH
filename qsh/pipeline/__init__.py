@@ -401,7 +401,12 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
     if resolved.get("apply_dissipation_fn") is None:
 
         def _noop_dissipation(*a, **kw):
-            return {}
+            # INSTRUCTION-591 (T7 step 0) — matches the three values
+            # apply_dissipation_control returns (fired, total_disp_kw,
+            # successful_opens), consumed at valve_controller.py:91.
+            # Dissipation still does not run on MQTT or mock (O-6); this
+            # only fixes the return shape so the unpack no longer raises.
+            return False, 0.0, 0
 
         resolved["apply_dissipation_fn"] = _noop_dissipation
 
@@ -414,6 +419,19 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
             return 0.0, 0
 
         resolved["apply_hybrid_fn"] = _noop_hybrid
+
+    # INSTRUCTION-591 (T7 step 1) — the MQTT direct-valve compute. Relative
+    # import: the production image copies only the `qsh` tree to `/qsh` and
+    # runs `python -m qsh` (Dockerfile:30-36), so the absolute package name
+    # `quantum_swarm_heating.qsh` does not import there. Not set for `mock`
+    # (O-4) — the twin/mock path is not wired by this instruction. Unlike the
+    # sibling DI slots above, there is no `is None` guard: this unconditionally
+    # replaces any caller-supplied override for an `mqtt` config — a test that
+    # injects a spy builds the ValveController directly instead.
+    if driver_type == "mqtt":
+        from ..valve_control import compute_direct_targets
+
+        resolved["compute_direct_targets_fn"] = compute_direct_targets
 
     logger.info("Pipeline DI: using no-op stubs for %s driver", driver_type)
     return resolved
@@ -483,6 +501,7 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         room_control_state=room_control_state,
         apply_dissipation_fn=kw.get("apply_dissipation_fn"),
         apply_hybrid_fn=kw.get("apply_hybrid_fn"),
+        compute_direct_targets_fn=kw.get("compute_direct_targets_fn"),
     )
     # INSTRUCTION-117D Task 2d: single pipeline-owned CycleProtectionState /
     # CycleProtectionGate. One physical heat source → one pair of timers.

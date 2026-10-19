@@ -313,7 +313,12 @@ class HADriver:
     def read_inputs(self, config: Dict) -> InputBlock:
         """Fetch all external signals from Home Assistant."""
         from .integration import fetch_ha_entity
-        from .sensor_fetcher import fetch_all_sensor_data, get_flow_temp_limits, resolve_external_setpoints
+        from .sensor_fetcher import (
+            fetch_all_sensor_data,
+            fresh_independent_sensors,
+            get_flow_temp_limits,
+            resolve_external_setpoints,
+        )
         from ...tariff.octopus_electricity import parse_octopus_rate_array, pick_octopus_rate
         from ...tariff.static_export import resolve_static_export_rate
 
@@ -563,6 +568,7 @@ class HADriver:
             room_temps=dict(sensor_data.room_temps),
             room_temperature_source=dict(getattr(sensor_data, "room_temperature_source", {})),
             independent_sensors=dict(sensor_data.independent_sensors),
+            fresh_independent_sensors=fresh_independent_sensors(sensor_data.independent_sensors),
             trv_temps=dict(sensor_data.trv_temps),
             trv_setpoints=dict(sensor_data.trv_setpoints),
             outdoor_temp=sensor_data.outdoor_temp,

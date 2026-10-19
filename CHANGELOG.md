@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.6.17] — 2026-10-19
+
+### Fixed
+- Direct valve control on Home Assistant and MQTT installs. On Home Assistant, direct valves were never driven by room temperature (they always saw zero deficit); they now respond to the actual room reading. On MQTT, automatic direct valve positions are now calculated and published, which they were not before. If a direct room has no fresh temperature reading, QSH falls back to a safe default position and raises a visible alert instead of failing silently. In shadow mode nothing is sent.
+
 ## [1.6.16] — 2026-10-18
 
 ### Fixed

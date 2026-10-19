@@ -35,6 +35,9 @@ from ...valve_control import (
     VALVE_HARDWARE_DIRECT_TYPE1,
     VALVE_HARDWARE_DIRECT_TYPE2,
     VALVE_HARDWARE_GENERIC,
+    direct_is_hold,
+    direct_base_target,
+    direct_slew_limit,
 )
 
 
@@ -284,14 +287,14 @@ def apply_direct_valve_control_type2(
             return True
 
     # Slew rate limiting
+    # INSTRUCTION-591 — shared with the MQTT compute (valve_control.direct_slew_limit).
     if control_state is not None:
         last_pos = control_state.last_valve_position.get(room)
         if last_pos is not None:
-            MAX_SLEW = 10
-            delta = target_position - last_pos
-            if abs(delta) > MAX_SLEW:
-                target_position = int(last_pos + MAX_SLEW * (1 if delta > 0 else -1))
-                logging.debug(f"Type2 {room} slew limited to {target_position}% (from {last_pos}%)")
+            _slewed = direct_slew_limit(target_position, last_pos)
+            if _slewed != target_position:
+                logging.debug(f"Type2 {room} slew limited to {_slewed}% (from {last_pos}%)")
+            target_position = _slewed
 
     if dfan_control:
         # INSTRUCTION-408 — outcome, not intent. The tracked commanded position
@@ -560,32 +563,17 @@ def apply_direct_valve_control(
         logging.debug(f"Direct valve control not available for {room} (hw={hardware_type})")
         return False
 
-    # Deficit-based target position with heat_up_rate damping
-    DEAD_BAND = 0.3
+    # Deficit-based target position with heat_up_rate damping.
+    # INSTRUCTION-591 — the hold test and the base target are the shared law
+    # (valve_control.direct_is_hold / direct_base_target), so the MQTT compute
+    # and this dispatch cannot drift apart on the same inputs.
+    if control_state is not None:
+        last_pos = control_state.last_valve_position.get(room)
+        if direct_is_hold(deficit, heat_up_rate, last_pos):
+            logging.debug(f"{room} direct: deficit={deficit:+.2f}°C within dead-band — holding at {last_pos}%")
+            return True
 
-    if abs(deficit) <= DEAD_BAND and abs(heat_up_rate) < 0.10:
-        if control_state is not None:
-            last_pos = control_state.last_valve_position.get(room)
-            if last_pos is not None:
-                logging.debug(f"{room} direct: deficit={deficit:+.2f}°C within dead-band — holding at {last_pos}%")
-                return True
-
-    if deficit > 2.0:
-        target_position = 100
-    elif deficit > 0.5:
-        target_position = 65 + int((deficit - 0.5) / 1.5 * 35)
-        if heat_up_rate > 0.15:
-            target_position = max(50, target_position - 15)
-        elif heat_up_rate > 0.08:
-            target_position = max(55, target_position - 8)
-    elif deficit > 0.0:
-        target_position = 30 + int(deficit / 0.5 * 35)
-        if heat_up_rate > 0.10:
-            target_position = max(20, target_position - 15)
-        elif heat_up_rate > 0.05:
-            target_position = max(25, target_position - 8)
-    else:
-        target_position = max(0, 30 + int(deficit * 30))
+    target_position = direct_base_target(deficit, heat_up_rate)
 
     # Respect dissipation floor
     if control_state is not None:
