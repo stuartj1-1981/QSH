@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -1109,6 +1110,11 @@ class MQTTDriver:
         # ── Map cached values → InputBlock fields ──
         room_temps: Dict[str, float] = {}
         independent_sensors: Dict[str, float] = {}
+        # INSTRUCTION-591 — the subset of independent_sensors whose best-ranked
+        # candidate is graded "good" and finite. Declared here (not inside the
+        # `if tm:` block below) so a topic map of None still gives a (empty)
+        # dict rather than a NameError at the InputBlock build.
+        fresh_room_temps: Dict[str, float] = {}
         valve_positions: Dict[str, float] = {}
         # INSTRUCTION-224C — per-emitter valve readings. Outer key: room.
         # Inner key: emitter stem from _mqtt_emitter_stem(topic). Aggregate
@@ -1423,6 +1429,18 @@ class MQTTDriver:
                 )
                 room_temps[room] = best_value
                 independent_sensors[room] = best_value
+                # INSTRUCTION-591 — the fresh subset: best-ranked candidate
+                # among those graded "good" and finite. A room whose only
+                # candidates are "stale" (or non-finite) is absent here, even
+                # though it is present in independent_sensors above.
+                _fresh_candidates = [
+                    c for c in candidates if c[1] == "good" and math.isfinite(c[0])
+                ]
+                if _fresh_candidates:
+                    _fresh_value, _, _ = min(
+                        _fresh_candidates, key=lambda c: _SQ_RANK.get(c[1], 99)
+                    )
+                    fresh_room_temps[room] = _fresh_value
                 # INSTRUCTION-427 D1/D6 — align the carried freshness record for
                 # this room to the WINNING candidate's mapping, so the estimator-
                 # boundary shadow (D6) reads the grade of the value actually used.
@@ -2097,6 +2115,9 @@ class MQTTDriver:
             # alone, as the Home Assistant driver reports it from its config.
             room_temperature_source=room_temperature_sources(tm, config),
             independent_sensors=independent_sensors,
+            # INSTRUCTION-591 — the good-and-finite subset, for the direct
+            # valve law's fresh/no-reading distinction.
+            fresh_independent_sensors=fresh_room_temps,
             valve_positions=valve_positions,
             valve_positions_per_emitter={
                 _r: dict(_em) for _r, _em in valve_positions_per_emitter.items()
@@ -2327,22 +2348,22 @@ class MQTTDriver:
         # the override is re-asserted every cycle regardless of pipeline coverage.
         effective_setpoints: Dict[str, float] = dict(outputs.valve_setpoints)
         manual_rooms_active: set = set()
-        for room in manual_state.configured_direct_rooms(config):
-            entry = manual_state.get(room)
-            if entry.mode == "MANUAL":
-                # Defensive: position_pct cannot be None for a MANUAL entry per
-                # set_manual's validation (225A Task 1), but the type is Optional[int]
-                # at the dataclass level, so guard explicitly. Skip the room and log
-                # rather than crash the publish loop on contract violation.
-                if entry.position_pct is None:
-                    # INSTRUCTION-460 — edge-gated; announce-once-per-process
-                    # per room. Was an unconditional per-cycle warning.
-                    get_annunciator().entered(
-                        "MQTT.manual_state_contract_violation", room=room,
-                    )
-                    continue
-                effective_setpoints[room] = float(entry.position_pct)
-                manual_rooms_active.add(room)
+        # INSTRUCTION-591 (T6) — one predicate, shared with the MQTT compute
+        # (compute_direct_targets): the manual_state helper below.
+        for room, position_pct in manual_state.manual_rooms_and_positions(config).items():
+            # Defensive: position_pct cannot be None for a MANUAL entry per
+            # set_manual's validation (225A Task 1), but the type is Optional[int]
+            # at the dataclass level, so guard explicitly. Skip the room and log
+            # rather than crash the publish loop on contract violation.
+            if position_pct is None:
+                # INSTRUCTION-460 — edge-gated; announce-once-per-process
+                # per room. Was an unconditional per-cycle warning.
+                get_annunciator().entered(
+                    "MQTT.manual_state_contract_violation", room=room,
+                )
+                continue
+            effective_setpoints[room] = float(position_pct)
+            manual_rooms_active.add(room)
 
         # INSTRUCTION-460 — Manual-override membership, annunciated ON_CHANGE
         # and called unconditionally every cycle, outside and above the publish

@@ -116,6 +116,9 @@ def _register_events() -> None:
 # =========================================================================
 _last_valid_outdoor_temp: Optional[float] = None
 _last_valid_independent: Dict[str, float] = {}
+# INSTRUCTION-590 — sensor keys that took the fresh branch this cycle, set by
+# fetch_independent_sensors and cleared at the top of every call.
+_fresh_independent_keys: Set[str] = set()
 # INSTRUCTION-224B: per-emitter keying for stale-fallback memory. Outer key is
 # (room, stem). For rooms with no derived stems (control_mode "none" or
 # operator-declared legacy _heating entity), the synthetic stem "" is used so
@@ -312,6 +315,9 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
     _register_events()
     ann = get_annunciator()
     sensors = {}
+    # INSTRUCTION-590 — cleared at the top of every call; a key is added back
+    # only on this cycle's fresh branch, below.
+    _fresh_independent_keys.clear()
 
     sensor_keys = {key for key in config["entities"] if key.startswith("independent_sensor")}
 
@@ -337,6 +343,11 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
                 temp = safe_float(temp_raw, fallback_temp)
                 sensors[sensor_key] = temp
                 _last_valid_independent[sensor_key] = temp
+                # INSTRUCTION-590 — every key taking this branch is fresh,
+                # including an unparseable or missing state (O-7b, current
+                # code): safe_float substitutes the fallback and it is still
+                # a fresh read, not a no-reading case.
+                _fresh_independent_keys.add(sensor_key)
                 # Fresh recovery: clear any stale latches for this sensor.
                 ann.exited("HA.sensor_stale_lastvalid", key=sensor_key)
                 ann.exited("HA.sensor_stale_no_history", key=sensor_key)
@@ -362,6 +373,13 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
             sensors[sensor_key] = _last_valid_independent.get(sensor_key, config.get("overtemp_protection", 23.0))
 
     return sensors
+
+
+def fresh_independent_sensors(values: Dict[str, float]) -> Dict[str, float]:
+    """The subset of ``values`` (an ``independent_sensors`` dict) whose key
+    took the fresh branch on the most recent ``fetch_independent_sensors``
+    call (INSTRUCTION-590)."""
+    return {k: v for k, v in values.items() if k in _fresh_independent_keys}
 
 
 def fetch_trv_temperatures(config: Dict) -> Dict[str, float]:
