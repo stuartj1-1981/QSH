@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.6.18] — 2026-10-20
+
+### Fixed
+- In winter mode (antifrost override active), the flow setpoint is now the flow
+  at which the radiators give the house's heat loss at the room targets, based
+  on each room's radiator output. Previously it came from a straight line
+  between minimum and maximum flow, plus 2 °C on every cycle, which could drive
+  flow to 42–44 °C at mild outdoor temperatures. The fixed 2 °C offset is gone.
+  While rooms are below target, the flow also carries the power needed to
+  recover them, based on each room's thermal mass. The flow falls by 2 °C for
+  each °C the rooms are above target (by at most 5 °C), never below minimum
+  flow, and rises by at most 2 °C when rooms are below target. Rooms without a
+  set radiator output are not counted. The winter flow now depends on the
+  radiator output set for each room, so a value set higher than the real output
+  gives too little heat in cold weather.
+- Direct valves (TRVs under direct position control) moved up to once a minute
+  per room after 1.6.17. For Type 1 and Type 2 valves, the automatic law now
+  moves a room's valve at most once every 10 minutes on Home Assistant and MQTT.
+  Generic valves and valves without a hardware type are unchanged. Manual
+  positions and dissipation valve openings are not delayed. After a manual
+  position, a dissipation opening or a park, the automatic law waits up to
+  10 minutes on Home Assistant.
+
 ## [1.6.17] — 2026-10-19
 
 ### Fixed

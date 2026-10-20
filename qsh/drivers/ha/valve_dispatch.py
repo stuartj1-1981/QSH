@@ -38,6 +38,8 @@ from ...valve_control import (
     direct_is_hold,
     direct_base_target,
     direct_slew_limit,
+    DIRECT_LAW_MIN_MOVE_INTERVAL_S,
+    DIRECT_LAW_LIMITED_HARDWARE,
 )
 
 
@@ -572,6 +574,26 @@ def apply_direct_valve_control(
         if direct_is_hold(deficit, heat_up_rate, last_pos):
             logging.debug(f"{room} direct: deficit={deficit:+.2f}°C within dead-band — holding at {last_pos}%")
             return True
+
+    # INSTRUCTION-594 — the AUTO law moves a Type 1 or Type 2 valve at most
+    # once in 600 s. Each SENT write of those writers starts the hold: the
+    # law, the dissipation floor, MANUAL and the park (owner ruling O-4).
+    # Generic hardware, and a room with no hardware key, are not changed
+    # by 594 (O-3): on HA their writer records no write time, so they have
+    # no write-rate limit.
+    # A MANUAL room is not held here: the writer below writes its position
+    # and keeps the 60 s interval for it (INSTRUCTION-225A).
+    if control_state is not None and hardware_type in DIRECT_LAW_LIMITED_HARDWARE:
+        from ... import manual_state
+
+        if manual_state.get(room).mode != "MANUAL":
+            since_write = clock.now() - control_state.last_valve_write_time.get(room, 0.0)
+            if since_write < DIRECT_LAW_MIN_MOVE_INTERVAL_S:
+                logging.debug(
+                    f"{room} direct: {since_write:.0f}s since the last valve write "
+                    f"< {DIRECT_LAW_MIN_MOVE_INTERVAL_S:.0f}s - holding"
+                )
+                return True
 
     target_position = direct_base_target(deficit, heat_up_rate)
 
