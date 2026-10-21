@@ -234,10 +234,10 @@ def apply_direct_valve_control_type2(
     if _entry.mode == "MANUAL":
         # PCS7-style block-level MANUAL override (INSTRUCTION-225 §2.2).
         # Operator-explicit action overrides supervisory output AND shadow mode.
-        # Dissipation floor is bypassed below — it's a control-policy artefact
-        # (owned by the dissipation controller), not a hardware-protection limit;
-        # operator overrides policy. Slew and debounce are NOT bypassed — those
-        # protect the actuator and apply regardless of who is commanding.
+        # The MANUAL position replaces the AUTO target, which may be the law
+        # or the dissipation setpoint (INSTRUCTION-596). Slew and debounce are
+        # NOT bypassed — those protect the actuator and apply regardless of
+        # who is commanding.
         target_position = _entry.position_pct
         dfan_control = True  # MANUAL bypasses shadow mode per INSTRUCTION-225 §2.4
         _mode_tag = "MANUAL"
@@ -253,26 +253,10 @@ def apply_direct_valve_control_type2(
 
     target_position = int(max(0, min(100, target_position)))
 
-    # AUTO-only: dissipation floor is a control-policy artefact owned by the
-    # dissipation controller, not a hardware-protection limit. MANUAL operator
-    # action overrides policy. Slew + debounce below are NOT gated on _mode_tag
-    # because they protect the actuator and apply to operator commands too.
-    if control_state is not None and _mode_tag == "AUTO":
-        DISSIPATION_FLOOR_HOLD_S = 300
-        diss_floor = control_state.dissipation_floor.get(room)
-        if diss_floor is not None:
-            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
-            if floor_age <= DISSIPATION_FLOOR_HOLD_S:
-                if target_position < diss_floor:
-                    logging.debug(
-                        f"Type2 {room} FLOOR: {target_position}% raised to "
-                        f"{diss_floor}% ({DISSIPATION_FLOOR_HOLD_S - floor_age:.0f}s remaining)"
-                    )
-                    target_position = max(target_position, diss_floor)
-            else:
-                logging.debug(f"{room} dissipation floor {diss_floor}% expired after {floor_age:.0f}s")
-                control_state.dissipation_floor[room] = None
-                control_state.dissipation_floor_time[room] = 0.0
+    # INSTRUCTION-596 — the writer applies no dissipation floor: the target
+    # was marshalled by the selector of apply_direct_valve_control. Slew and
+    # debounce below are NOT gated on _mode_tag because they protect the
+    # actuator and apply to operator commands too.
 
     # Debounce
     if control_state is not None:
@@ -365,10 +349,10 @@ def apply_direct_valve_control_type1(
     if _entry.mode == "MANUAL":
         # PCS7-style block-level MANUAL override (INSTRUCTION-225 §2.2).
         # Operator-explicit action overrides supervisory output AND shadow mode.
-        # Dissipation floor is bypassed below — it's a control-policy artefact
-        # (owned by the dissipation controller), not a hardware-protection limit;
-        # operator overrides policy. Slew and debounce are NOT bypassed — those
-        # protect the actuator and apply regardless of who is commanding.
+        # The MANUAL position replaces the AUTO target, which may be the law
+        # or the dissipation setpoint (INSTRUCTION-596). Slew and debounce are
+        # NOT bypassed — those protect the actuator and apply regardless of
+        # who is commanding.
         target_position = _entry.position_pct
         dfan_control = True  # MANUAL bypasses shadow mode per INSTRUCTION-225 §2.4
         _mode_tag = "MANUAL"
@@ -383,26 +367,10 @@ def apply_direct_valve_control_type1(
     scale = config.get("room_valve_scale", {}).get(room, 255)
     target_position = int(max(0, min(100, target_position)))
 
-    # AUTO-only: dissipation floor is a control-policy artefact owned by the
-    # dissipation controller, not a hardware-protection limit. MANUAL operator
-    # action overrides policy. Slew + debounce below are NOT gated on _mode_tag
-    # because they protect the actuator and apply to operator commands too.
-    if control_state is not None and _mode_tag == "AUTO":
-        DISSIPATION_FLOOR_HOLD_S = 300
-        diss_floor = control_state.dissipation_floor.get(room)
-        if diss_floor is not None:
-            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
-            if floor_age <= DISSIPATION_FLOOR_HOLD_S:
-                if target_position < diss_floor:
-                    logging.debug(
-                        f"Type1 {room} FLOOR: {target_position}% raised to "
-                        f"{diss_floor}% ({DISSIPATION_FLOOR_HOLD_S - floor_age:.0f}s remaining)"
-                    )
-                    target_position = max(target_position, diss_floor)
-            else:
-                logging.debug(f"{room} dissipation floor {diss_floor}% expired after {floor_age:.0f}s")
-                control_state.dissipation_floor[room] = None
-                control_state.dissipation_floor_time[room] = 0.0
+    # INSTRUCTION-596 — the writer applies no dissipation floor: the target
+    # was marshalled by the selector of apply_direct_valve_control. Slew and
+    # debounce below are NOT gated on _mode_tag because they protect the
+    # actuator and apply to operator commands too.
 
     # Convert 0-100% to device scale
     target_hw = int(round(target_position * scale / 100.0))
@@ -557,13 +525,47 @@ def apply_direct_valve_control(
     """
     if degraded_zones and room in degraded_zones:
         logging.debug(f"{room} degraded (loss of TRV authority) — skipping direct control")
+        if control_state is not None:
+            control_state.direct_law_target[room] = None  # INSTRUCTION-596: no IN0
         return False
 
     available, hardware_type = check_direct_valve_available(room, config)
 
     if not available:
         logging.debug(f"Direct valve control not available for {room} (hw={hardware_type})")
+        if control_state is not None:
+            control_state.direct_law_target[room] = None  # INSTRUCTION-596: no IN0
         return False
+
+    # INSTRUCTION-596 — IN0 of the selector: the law target, computed on each
+    # cycle, also while the selector outputs the dissipation setpoint. It is
+    # the base target of the shared law plus the balance offset; in the
+    # dead band it is the last IN0 (the law holds). The 600 s hold of the law
+    # and the slew delay the write of the target; they do not change it. The
+    # stop test of the dissipation episode reads IN0 and never the setpoint.
+    law_target = direct_base_target(deficit, heat_up_rate)
+    if balancing_detector is not None:
+        law_target = max(0, min(100, law_target + balancing_detector.get_balance_offset(room)))
+    if control_state is not None:
+        last_in0 = control_state.direct_law_target.get(room)
+        if not direct_is_hold(deficit, heat_up_rate, last_in0):
+            control_state.direct_law_target[room] = law_target
+
+    # INSTRUCTION-596 — the selector (SEL_R). The valve has one writer, and
+    # the signal is marshalled before the write. While the dissipation
+    # episode holds a setpoint for this room, the selector outputs that
+    # setpoint in place of the law target: no dead-band hold, no 600 s hold
+    # of the law. The writer below applies MANUAL, the 2 % debounce, the
+    # 60 s interval and the 10 % slew, as for any target. When the episode
+    # ends the setpoint is cleared and the law target is selected again.
+    if control_state is not None:
+        dissipation_sp = control_state.dissipation_floor.get(room)
+        if dissipation_sp is not None:
+            target_position = int(dissipation_sp)
+            logging.debug(f"{room} direct: dissipation setpoint {target_position}% selected")
+            return apply_valve_position(
+                room, target_position, hardware_type, config, dfan_control, control_state
+            )
 
     # Deficit-based target position with heat_up_rate damping.
     # INSTRUCTION-591 — the hold test and the base target are the shared law
@@ -577,7 +579,8 @@ def apply_direct_valve_control(
 
     # INSTRUCTION-594 — the AUTO law moves a Type 1 or Type 2 valve at most
     # once in 600 s. Each SENT write of those writers starts the hold: the
-    # law, the dissipation floor, MANUAL and the park (owner ruling O-4).
+    # law, the dissipation setpoint, MANUAL and the park (INSTRUCTION-594
+    # owner ruling O-4).
     # Generic hardware, and a room with no hardware key, are not changed
     # by 594 (O-3): on HA their writer records no write time, so they have
     # no write-rate limit.
@@ -595,30 +598,7 @@ def apply_direct_valve_control(
                 )
                 return True
 
-    target_position = direct_base_target(deficit, heat_up_rate)
-
-    # Respect dissipation floor
-    if control_state is not None:
-        diss_floor = control_state.dissipation_floor.get(room)
-        if diss_floor is not None:
-            DISSIPATION_FLOOR_HOLD_S = 300
-            floor_age = clock.now() - control_state.dissipation_floor_time.get(room, 0.0)
-
-            if floor_age > DISSIPATION_FLOOR_HOLD_S:
-                logging.debug(f"{room} dissipation floor {diss_floor}% expired after {floor_age:.0f}s")
-                control_state.dissipation_floor[room] = None
-                control_state.dissipation_floor_time[room] = 0.0
-            else:
-                if target_position < diss_floor:
-                    logging.debug(
-                        f"{room} deficit target {target_position}% raised to "
-                        f"dissipation floor {diss_floor}% ({DISSIPATION_FLOOR_HOLD_S - floor_age:.0f}s remaining)"
-                    )
-                target_position = max(target_position, diss_floor)
-
-    if balancing_detector is not None:
-        offset = balancing_detector.get_balance_offset(room)
-        target_position = max(0, min(100, target_position + offset))
+    target_position = law_target
 
     logging.debug(
         f"{room} direct: deficit={deficit:+.1f}°C rate={heat_up_rate:.2f}°C/min "
@@ -645,7 +625,9 @@ def apply_valve_position(
     control_state: Optional[RoomControlState] = None,
 ) -> bool:
     """
-    Unified position dispatch for dissipation control.
+    Unified position dispatch for a pre-calculated target: the dissipation
+    setpoint that the selector of apply_direct_valve_control outputs
+    (INSTRUCTION-596), and the degraded-zone park.
 
     Unlike apply_direct_valve_control (which takes deficit), this takes
     a pre-calculated target position and dispatches by hardware type.

@@ -116,6 +116,8 @@ def get_sysid_room(room: str):
             "fixed_setpoint": fixed_setpoints.get(room),
             # INSTRUCTION-420 — see /sysid endpoint above.
             "sensor_cadence": sysid.sensor_cadence(room),
+            # INSTRUCTION-592 — the floor-lock window.
+            "floor_window": {k: room_state.get(k) for k in _FLOOR_WINDOW_KEYS},
         }
     except HTTPException:
         raise
@@ -127,7 +129,9 @@ def get_sysid_room(room: str):
 # ledger emitted by SystemIdentifier.get_room_state (the 415 per-cycle ledger
 # is deleted with the per-cycle U read). The taxonomy is total: each event (a
 # transition in the anchored direction, in U context) increments
-# u_event_candidates and exactly one of the six classes after it.
+# u_event_candidates and exactly one of the six classes after it. After the
+# INSTRUCTION-592 split of the outlier class the count is qualified plus six
+# rejection classes (window, sign, rate, no_c, floor, cap): seven keys in all.
 _U_LEDGER_KEYS = (
     "u_event_candidates",
     "u_event_qualified",
@@ -135,7 +139,22 @@ _U_LEDGER_KEYS = (
     "u_event_rejected_sign",
     "u_event_rejected_rate",
     "u_event_rejected_no_c",
-    "u_event_rejected_outlier",
+    "u_event_rejected_floor",
+    "u_event_rejected_cap",
+)
+
+# INSTRUCTION-592 — the floor-lock window, returned under its own additive key
+# (not in _U_LEDGER_KEYS, which coerces every key to int).
+_FLOOR_WINDOW_KEYS = (
+    "u_floor_locked",
+    "u_floor_window_start_ts",
+    "u_floor_window_last_restart_ts",
+    "u_floor_window_regime",
+    "u_floor_window_candidates",
+    "u_floor_window_band",
+    "u_floor_window_floor_rejects",
+    "u_floor_window_cap_rejects",
+    "u_floor_window_qualified",
 )
 
 

@@ -283,7 +283,7 @@ function SysidTable({ rooms }: { rooms: Record<string, SysidRoom> }) {
 // room becomes diagnosable in one glance: the dominant rejection class names
 // the mechanism. INSTRUCTION-573B — the ledger is the INSTRUCTION-419 event
 // ledger: one entry per interval between two readings in the anchored
-// direction, while the room is eligible for a U read. The six classes sum to
+// direction, while the room is eligible for a U read. The seven classes sum to
 // the room's event count. The ledger is counted since the last start.
 const U_LEDGER_CLASSES: { key: string; label: string }[] = [
   { key: 'room_u_event_qualified', label: 'qualified' },
@@ -291,7 +291,8 @@ const U_LEDGER_CLASSES: { key: string; label: string }[] = [
   { key: 'room_u_event_rejected_sign', label: 'sign' },
   { key: 'room_u_event_rejected_rate', label: 'rate' },
   { key: 'room_u_event_rejected_no_c', label: 'no-C' },
-  { key: 'room_u_event_rejected_outlier', label: 'outlier' },
+  { key: 'room_u_event_rejected_floor', label: 'floor' },
+  { key: 'room_u_event_rejected_cap', label: 'cap' },
 ]
 
 const WINDOW_HOURS = MAX_EVENT_WINDOW_S / 3600
@@ -366,7 +367,7 @@ function SysidRoomDetailPanel({ room }: { room: string }) {
       <div className="flex items-center gap-1 font-medium text-[var(--text-muted)]">
         U observation ledger
         <HelpTip
-          text={`Since the last start, every interval between two readings of this room in one direction, while the room was eligible for a heat-loss (U) observation, resolved to exactly one class below. ‘qualified’ = accepted; the rest name why the interval was discarded: ‘window’ = readings more than ${WINDOW_HOURS} hours apart, ‘sign’ = warming while the source was off, ‘rate’ = cooling faster than ${MAX_U_RATE_C_PER_H} °C per hour, ‘no-C’ = no usable thermal-mass prior, ‘outlier’ = implausible computed U.`}
+          text={`Since the last start, every interval between two readings of this room in one direction, while the room was eligible for a heat-loss (U) observation, resolved to exactly one class below. ‘qualified’ = accepted; the rest name why the interval was discarded: ‘window’ = readings more than ${WINDOW_HOURS} hours apart, ‘sign’ = warming while the source was off, ‘rate’ = cooling faster than ${MAX_U_RATE_C_PER_H} °C per hour, ‘no-C’ = no usable thermal-mass prior, ‘floor’ = computed U below the floor, ‘cap’ = computed U above the cap.`}
           size={12}
         />
       </div>

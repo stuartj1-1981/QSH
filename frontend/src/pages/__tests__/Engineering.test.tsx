@@ -85,7 +85,8 @@ const MOCK_ROOM_DETAIL = {
     room_u_event_rejected_sign: 12,
     room_u_event_rejected_rate: 5,
     room_u_event_rejected_no_c: 0,
-    room_u_event_rejected_outlier: 1,
+    room_u_event_rejected_floor: 1,
+    room_u_event_rejected_cap: 0,
   },
 }
 
@@ -282,13 +283,14 @@ describe('Engineering room detail (INSTRUCTION-415 ledger + INSTRUCTION-422 rese
   it('row click expands the detail with the U rejection ledger, dominant class emphasised', () => {
     expandRow()
     const ledger = screen.getByTestId('u-rejection-ledger')
-    // All six event-ledger classes render with their counts (573B).
+    // All seven event-ledger classes render with their counts (573B).
     expect(ledger).toHaveTextContent('qualified 3')
     expect(ledger).toHaveTextContent('window 41')
     expect(ledger).toHaveTextContent('sign 12')
     expect(ledger).toHaveTextContent('rate 5')
     expect(ledger).toHaveTextContent('no-C 0')
-    expect(ledger).toHaveTextContent('outlier 1')
+    expect(ledger).toHaveTextContent('floor 1')
+    expect(ledger).toHaveTextContent('cap 0')
     expect(ledger).not.toHaveTextContent('flat')
     expect(ledger).not.toHaveTextContent('Δext')
     // Starved room (3 obs < 10) + window-dominant → the mechanism copy names

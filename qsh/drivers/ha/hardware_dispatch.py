@@ -247,11 +247,15 @@ def _clamp_and_round_flow(config, flow_svc, optimal_flow):
     return rounded
 
 
-def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max):
+def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max) -> bool:
     """Clamp to user-configured flow_min/flow_max from HOUSE_CONFIG, then
     dispatch via Octopus GraphQL API (which has its own internal 30-70 °C
     protection). User config takes precedence — the API protection is a
     safety net, not the primary bound.
+
+    INSTRUCTION-595 — returns True only when the Octopus API returned a
+    transaction ID for the write; False when it returned none or the API is
+    not available. The caller records the flow as sent only on True.
     """
     from . import octopus_hp_control as octopus_api
 
@@ -271,8 +275,25 @@ def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max):
         )
         if txid is None:
             logging.error("Octopus API: flow temp update failed (no HA fallback)")
-    else:
-        logging.error("Octopus API: not available, cannot set flow temp")
+            return False
+        return True
+    logging.error("Octopus API: not available, cannot set flow temp")
+    return False
+
+
+# INSTRUCTION-595 — a flow write that the heat source did not confirm.
+FLOW_WRITE_UNCONFIRMED_EVENT = "HA.flow_write_unconfirmed"
+
+
+def _register_flow_write_event() -> None:
+    from ...events import EventKind, EventSpec, get_annunciator
+    get_annunciator().register(EventSpec(
+        name=FLOW_WRITE_UNCONFIRMED_EVENT,
+        kind=EventKind.LATCHED,
+        payload_fields=("commanded_c", "recorded_c", "method"),
+        latch_key=(),
+        default_level=logging.WARNING,
+    ))
 
 
 def _apply_flow_ha_service(config, optimal_flow):
@@ -649,7 +670,20 @@ def apply_hardware_control(
 
     if control_method == "octopus_api":
         if should_update_flow:
-            _apply_flow_octopus_api(dispatch_flow, flow_min, flow_max)
+            flow_sent = _apply_flow_octopus_api(dispatch_flow, flow_min, flow_max)
+            _register_flow_write_event()
+            from ...events import get_annunciator
+            if not flow_sent:
+                debouncer.flow_send_unconfirmed()
+                get_annunciator().entered(
+                    FLOW_WRITE_UNCONFIRMED_EVENT,
+                    commanded_c=round(dispatch_flow, 1),
+                    recorded_c=(None if debouncer.last_flow is None
+                                else round(debouncer.last_flow, 1)),
+                    method="octopus_api",
+                )
+            else:
+                get_annunciator().exited(FLOW_WRITE_UNCONFIRMED_EVENT, level=logging.INFO)
         if should_update_mode:
             _apply_mode_octopus_api(optimal_mode)
 

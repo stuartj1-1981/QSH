@@ -517,8 +517,9 @@ export interface SysidRoom {
  *  INSTRUCTION-419 event ledger (room_u_event_candidates,
  *  room_u_event_qualified, room_u_event_rejected_window,
  *  room_u_event_rejected_sign, room_u_event_rejected_rate,
- *  room_u_event_rejected_no_c, room_u_event_rejected_outlier), counted since
- *  the last start. The six classes sum to room_u_event_candidates. */
+ *  room_u_event_rejected_no_c, room_u_event_rejected_floor,
+ *  room_u_event_rejected_cap), counted since
+ *  the last start. The seven classes sum to room_u_event_candidates. */
 export interface SysidRoomDetail extends SysidRoom {
   room: string
   gate_stats: Record<string, number>
