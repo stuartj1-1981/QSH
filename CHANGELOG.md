@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [1.6.19] — 2026-10-21
+
+### Changed
+- System identification now reports when most of a room's heat-loss readings
+  fall below the minimum allowed value, which leaves the room's heat-loss
+  figure at its starting estimate. A room raises the event
+  SYSID.u_floor_locked when 80 % or more of its readings over 3 days (at
+  least 20) are below the minimum, and clears it below 50 %. The rejection
+  class u_event_rejected_outlier is split into u_event_rejected_floor (below
+  the minimum) and u_event_rejected_cap (above the maximum). The Engineering
+  page shows floor and cap in place of outlier, and GET /api/sysid/{room}
+  returns the window under floor_window. Learned values, starting estimates
+  and every control output are unchanged.
+
+### Fixed
+- On Home Assistant, direct valves (TRVs under direct position control) no
+  longer move up and down by 10 % about every 10 minutes while the heat pump
+  runs and the rooms are warm. Two parts of QSH wrote the same valve: the
+  direct law closed it and the dissipation opened it again. Now each valve
+  has one writer. The dissipation gives a room a valve setpoint for the whole
+  dissipation episode, and the direct law sends that setpoint in place of its
+  own target. An episode starts when the average valve opening is below 60 %.
+  It ends when the targets of the direct law (for other rooms, their valve
+  openings) average 70 % or more and the valves are open 60 % or more on
+  average. A room that becomes 1 °C or more warmer than its target is
+  released to the direct law during the episode.
+- On Home Assistant, a cycle with a degraded room zone and a dissipation call
+  at the same time raised a TypeError in the valve controller. The dissipation
+  now takes and forwards the degraded zones.
+- With the Octopus API control method (Octopus Cosy), a flow temperature
+  write that the Octopus API did not accept, for example during a network or
+  DNS fault, was recorded as sent. QSH then showed the new flow and did not
+  send it again until the calculated flow moved by more than the minimum
+  step; on one install the heat pump ran at 30 °C for two hours against a
+  command of 39.4 °C. Now the flow is recorded as sent only when the Octopus
+  API accepts it. A write that is not accepted is sent again at the earliest
+  after the flow debounce time (10 minutes by default), and the event
+  HA.flow_write_unconfirmed is raised until a write is accepted.
+
 ## [1.6.18] — 2026-10-20
 
 ### Fixed

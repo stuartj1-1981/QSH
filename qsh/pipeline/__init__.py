@@ -170,10 +170,11 @@ def _resolve_ha_defaults(kwargs):
     # Valve functions: bind HA dispatch callables into the pure logic functions
     # so ValveController can call them with the original positional signature.
     if resolved.get("apply_dissipation_fn") is None:
+        # INSTRUCTION-596 — the dissipation writes no valve, so it is given
+        # no write function; the direct law is the one writer.
         from ..drivers.ha.valve_dispatch import (
             get_room_valve_fraction,
             check_direct_valve_available,
-            apply_valve_position,
         )
         from ..valve_control import apply_dissipation_control as _pure_dissipation
 
@@ -187,6 +188,7 @@ def _resolve_ha_defaults(kwargs):
             avg_open_frac,
             dfan_control,
             excluded_rooms=None,
+            degraded_zones=None,
         ):
             return _pure_dissipation(
                 config,
@@ -199,8 +201,8 @@ def _resolve_ha_defaults(kwargs):
                 dfan_control,
                 get_valve_fraction_fn=get_room_valve_fraction,
                 check_valve_available_fn=check_direct_valve_available,
-                apply_valve_position_fn=apply_valve_position,
                 excluded_rooms=excluded_rooms,
+                degraded_zones=degraded_zones,
             )
 
         resolved["apply_dissipation_fn"] = _bound_dissipation
