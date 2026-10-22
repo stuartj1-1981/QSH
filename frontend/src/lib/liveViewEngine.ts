@@ -1,4 +1,5 @@
 import type { LiveViewData, LiveViewRoom } from './liveViewTypes'
+import { isHeatPumpType } from './heat-source-types'
 
 /**
  * Render-time gate: when the room is in mid-deficit ('heating') but the
@@ -975,7 +976,7 @@ export class LiveViewEngine {
       ctx.arc(bx, by, this.$s(8), 0, Math.PI * 2)
       // All boiler sub-types currently use amber palette.
       // LiveViewSource.type enum retained for future per-type differentiation.
-      ctx.fillStyle = this.data.source.type === 'heat_pump' ? this.C.green : this.C.amber
+      ctx.fillStyle = isHeatPumpType(this.data.source.type) ? this.C.green : this.C.amber
       ctx.fill()
       ctx.fillStyle = this.C.text
       ctx.font = `bold ${this.$s(8)}px sans-serif`

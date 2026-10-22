@@ -9,7 +9,7 @@ import math
 from typing import Any, Dict, Optional, Set, Tuple
 
 from . import octopus_hp_control
-from .integration import fetch_ha_entity, fetch_ha_entity_full
+from .integration import TransportHold, fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
 from ...sensors import SensorData, sensor_health
 from ..resolve import resolve_value
@@ -1656,6 +1656,21 @@ def _ha_get_state(config: Dict, entity_id: str):
     return safe_float(raw, None)
 
 
+# INSTRUCTION-598 — the external setpoints and flow limits hold their last
+# valid reading while the HA channel is down. An entity fault (HA reports the
+# entity 'unavailable', or does not hold it) keeps the internal fallback.
+_SETPOINT_HOLD = TransportHold("setpoint")
+
+
+def _ha_get_state_held(config: Dict, entity_id: str):
+    """read_fn adapter: _ha_get_state, with the transport hold of INSTRUCTION-598."""
+    value = _ha_get_state(config, entity_id)
+    if value is not None:
+        _SETPOINT_HOLD.fresh(entity_id, entity_id, value)
+        return value
+    return _SETPOINT_HOLD.held(entity_id, entity_id)
+
+
 # =========================================================================
 # EXTERNAL SETPOINT RESOLUTION (INSTRUCTION-42A)
 # =========================================================================
@@ -1691,7 +1706,7 @@ def resolve_external_setpoints(config: Dict) -> None:
         entity_key=_comfort_entity_key,
         internal_key="pid_target_internal",
         default=20.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     config["comfort_temp"] = safe_float(
         comfort_rv.value,
@@ -1704,7 +1719,7 @@ def resolve_external_setpoints(config: Dict) -> None:
         entity_key="entities.antifrost_oat_threshold",
         internal_key="antifrost_oat_threshold_internal",
         default=7.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     config.setdefault("antifrost", {})["oat_threshold"] = safe_float(
         antifrost_rv.value,
@@ -1726,7 +1741,7 @@ def resolve_external_setpoints(config: Dict) -> None:
         entity_key="entities.shoulder_threshold",
         internal_key="hp_min_output_kw_internal",
         default=2.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     config["hp_min_output_kw"] = safe_float(
         shoulder_rv.value,
@@ -1739,7 +1754,7 @@ def resolve_external_setpoints(config: Dict) -> None:
         entity_key="entities.overtemp_protection",
         internal_key="overtemp_protection_internal",
         default=23.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     config["overtemp_protection"] = safe_float(
         overtemp_rv.value,
@@ -1754,7 +1769,7 @@ def get_flow_temp_limits(config: Dict) -> Tuple[float, float]:
         entity_key="entities.flow_min_temp",
         internal_key="flow_min_internal",
         default=25.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     flow_min = safe_float(flow_min_rv.value, config.get("flow_min_internal", config.get("flow_min", 25.0)))
 
@@ -1763,7 +1778,7 @@ def get_flow_temp_limits(config: Dict) -> Tuple[float, float]:
         entity_key="entities.flow_max_temp",
         internal_key="flow_max_internal",
         default=50.0,
-        read_fn=_ha_get_state,
+        read_fn=_ha_get_state_held,
     )
     flow_max = safe_float(flow_max_rv.value, config.get("flow_max_internal", config.get("flow_max", 55.0)))
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
 import { Zap, Flame, ArrowLeftRight, Leaf, PoundSterling, AlertTriangle } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { isHeatPumpType } from '../lib/heat-source-types'
 import type { SourceSelectionState, SourceState } from '../types/api'
 
 interface SourceSelectorProps {
@@ -11,7 +12,7 @@ interface SourceSelectorProps {
 }
 
 function sourceIcon(type: string) {
-  if (type === 'heat_pump') return Zap
+  if (isHeatPumpType(type)) return Zap
   return Flame
 }
 
@@ -26,7 +27,7 @@ function reasonLabel(r: string): string {
 }
 
 function efficiencyLabel(src: SourceState): string {
-  if (src.type === 'heat_pump') return `COP ${src.efficiency.toFixed(1)}`
+  if (isHeatPumpType(src.type)) return `COP ${src.efficiency.toFixed(1)}`
   return `Eff ${(src.efficiency * 100).toFixed(0)}%`
 }
 
@@ -203,6 +204,7 @@ function ModeButton({
 
 const SOURCE_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   heat_pump: Zap,
+  gshp: Zap,
   gas_boiler: Flame,
   lpg_boiler: Flame,
   oil_boiler: Flame,
@@ -222,7 +224,7 @@ function SourceCard({ source, isActive, engineering, effectivePrice, tariffPrice
   // below a fixed export rate is not "solar-adjusted"). Boiler shows its pump
   // adder when non-zero. Undefined fields (older payloads) render nothing extra.
   const showEffective =
-    engineering && source.type === 'heat_pump' &&
+    engineering && isHeatPumpType(source.type) &&
     effectivePrice !== undefined && tariffPrice !== undefined
   const parasitic = source.parasitic_per_kwh
   const showParasitic = engineering && parasitic !== undefined && parasitic > 0

@@ -316,7 +316,7 @@ export interface StatusResponse {
   // tolerance against pre-438 backends.
   control_sources?: ControlSource[]
   // INSTRUCTION-117E Task 3b: legacy shim; populated only when
-  // heat_source.type === 'heat_pump'.
+  // a heat-pump-class source (`heat_pump` or `gshp`).
   hp: HpState | null
   rooms_total: number
   rooms_below_target: number

@@ -3,6 +3,7 @@ import { Zap, Wind, AlertTriangle, Flame, EyeOff, Snowflake } from 'lucide-react
 import { cn } from '../lib/utils'
 import { roomLabel } from '../lib/roomLabel'
 import { sourceShortName } from '../lib/sourceLabels'
+import { isHeatPumpType } from '../lib/heat-source-types'
 import { DEFAULT_TARIFF_AGGRESSION_MODE, TARIFF_LABELS } from '../lib/tariff'
 import type {
   RoomState,
@@ -174,7 +175,7 @@ export const StatusBanner = memo(function StatusBanner({
     : []
 
   // Task 4a: icon branches on source type.
-  const isHeatPump = heatSource.type === 'heat_pump'
+  const isHeatPump = isHeatPumpType(heatSource.type)
   const SourceIcon = isHeatPump ? Zap : Flame
   const sourceIconClass = isHeatPump ? 'text-[var(--amber)]' : 'text-orange-500'
 
@@ -554,7 +555,7 @@ function ActiveSourceBadge({
 
   const isFailover = sourceSelection.reason === 'failover'
   const chipText = SOURCE_REASON_CHIP_TEXT[sourceSelection.reason]
-  const Icon = heatSourceType === 'heat_pump' ? HeatPumpIcon : BoilerIcon
+  const Icon = isHeatPumpType(heatSourceType) ? HeatPumpIcon : BoilerIcon
 
   // Tooltip body: detail line + any blocked_switches (suppressed under failover).
   const tooltipLines: string[] = []

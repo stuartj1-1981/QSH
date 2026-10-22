@@ -7,6 +7,8 @@
  * pure-component-export.
  */
 
+import { isHeatPumpType } from './heat-source-types'
+
 /**
  * Long-form cost-tile label.
  *
@@ -22,7 +24,7 @@ export function costLabelFor(
   heatSourceCount: number,
 ): string {
   if (heatSourceCount > 1) return 'Heating cost today'
-  if (activeSource === 'heat_pump') return 'HP cost today'
+  if (isHeatPumpType(activeSource)) return 'HP cost today'
   if (activeSource === 'gas_boiler') return 'Gas cost today'
   if (activeSource === 'lpg_boiler') return 'LPG cost today'
   if (activeSource === 'oil_boiler') return 'Oil cost today'
@@ -32,7 +34,7 @@ export function costLabelFor(
 /** Tight single-token form for in-line copy (alarm body, status pills,
  *  ARIA labels). Replaces hardcoded "HP" everywhere it appeared. */
 export function sourceShortName(activeSource: string | null | undefined): string {
-  if (activeSource === 'heat_pump') return 'HP'
+  if (isHeatPumpType(activeSource)) return 'HP'
   if (activeSource === 'gas_boiler') return 'Gas'
   if (activeSource === 'lpg_boiler') return 'LPG'
   if (activeSource === 'oil_boiler') return 'Oil'

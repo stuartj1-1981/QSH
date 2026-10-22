@@ -39,6 +39,52 @@ def _read_dfan_control_state(_config: Dict, entity_id: str) -> Optional[bool]:
     return raw == "on"
 
 
+# INSTRUCTION-598 — one TransportHold per input kind, made on first use.
+_HOLDS: Dict[str, Any] = {}
+
+
+def _transport_hold(kind: str):
+    from .integration import TransportHold
+    hold = _HOLDS.get(kind)
+    if hold is None:
+        hold = _HOLDS[kind] = TransportHold(kind)
+    return hold
+
+
+def _read_dfan_control_state_held(config: Dict, entity_id: str) -> Optional[bool]:
+    """INSTRUCTION-598 — _read_dfan_control_state, with the transport hold of
+    the shadow state only. A valid 'off' (False) that this process read not
+    more than TRANSPORT_HOLD_LIMIT_S before is held while the HA channel is
+    down. With no such reading, or after that time, the resolver falls back to
+    control_enabled, as at the pin (OI-8, owner ruling R5). A valid 'on'
+    (True) is not held: on a transport fault the resolver falls back to
+    control_enabled, as at the pin (OI-8, owner ruling R4)."""
+    state = _read_dfan_control_state(config, entity_id)
+    hold = _transport_hold("control_enabled")
+    if state is False:
+        hold.fresh(entity_id, entity_id, False)
+        return False
+    if state is True:
+        hold.drop(entity_id, entity_id)
+        return True
+    return hold.held(entity_id, entity_id)
+
+
+def _occupancy_reading(room: str, entity_id: str, raw: Any) -> "tuple[str, str]":
+    """INSTRUCTION-598 — (state, signal quality) of a room occupancy sensor.
+    'on' or 'off' is good. On a transport fault the last valid reading is held
+    and reported 'stale'. Anything else is 'unavailable', and SensorController
+    applies the room's occupancy_fallback."""
+    hold = _transport_hold("occupancy")
+    if raw in ("on", "off"):
+        hold.fresh(room, entity_id, raw)
+        return raw, "good"
+    held = hold.held(room, entity_id)
+    if held is not None:
+        return held, "stale"
+    return "unavailable", "unavailable"
+
+
 def _resolve_cooling_sensor_entity(config: Dict) -> Optional[str]:
     """Entity id mapped to the active heat source's optional cooling-status
     sensor (heat_sources[i].sensors.cooling_active), absent-tolerant.
@@ -349,7 +395,7 @@ class HADriver:
                 entity_key="entities.dfan_control_toggle",
                 internal_key="control_enabled",
                 default=MISSING,
-                read_fn=_read_dfan_control_state,
+                read_fn=_read_dfan_control_state_held,
             ).value,
             layer="ha_read",
         )
@@ -502,13 +548,10 @@ class HADriver:
             if occ_sensor_cfg:
                 occ_sensor_entity = occ_sensor_cfg["entity"]
                 raw = fetch_ha_entity(occ_sensor_entity, default="unavailable")
-                if raw in ("on", "off"):
-                    occupancy_sensor_states[room] = raw
-                else:
-                    occupancy_sensor_states[room] = "unavailable"
-                signal_quality[f"occupancy_sensor.{room}"] = (
-                    "good" if raw in ("on", "off") else "unavailable"
-                )
+                (
+                    occupancy_sensor_states[room],
+                    signal_quality[f"occupancy_sensor.{room}"],
+                ) = _occupancy_reading(room, occ_sensor_entity, raw)
 
             # Per-zone window contact (optional — raw binary state, 569A)
             win_sensor_cfg = config.get("room_window_sensors", {}).get(room)

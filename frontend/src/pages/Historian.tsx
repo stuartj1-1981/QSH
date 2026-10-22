@@ -11,6 +11,7 @@ import {
 } from 'recharts'
 import { Download } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { isHeatPumpType } from '../lib/heat-source-types'
 import {
   useHistorianMeasurements,
   useHistorianQuery,
@@ -94,9 +95,9 @@ export function Historian() {
   const availableFields = useMemo(() => {
     if (measurement !== 'qsh_system') return rawFields
     return rawFields
-      .filter((f) => sourceType === 'heat_pump' || (f !== 'hp_power_kw' && f !== 'cop'))
+      .filter((f) => isHeatPumpType(sourceType) || (f !== 'hp_power_kw' && f !== 'cop'))
       .map((f) =>
-        sourceType === 'heat_pump' && (f === 'hp_power_kw' || f === 'cop')
+        isHeatPumpType(sourceType) && (f === 'hp_power_kw' || f === 'cop')
           ? `${f} (legacy)`
           : f,
       )
