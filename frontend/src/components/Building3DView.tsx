@@ -8,6 +8,7 @@ import type { CycleMessage, RoomState } from '../types/api'
 import type { RoomEnvelopeYaml, FaceValue } from '../types/config'
 import { normaliseFaceRefs } from '../types/config'
 import { cn } from '../lib/utils'
+import { isHeatPumpType } from '../lib/heat-source-types'
 import { roomLabelTitleCase } from '../lib/roomLabel'
 
 interface Building3DViewProps {
@@ -55,7 +56,7 @@ function cycleToBuildingLive(msg: CycleMessage): BuildingLiveData {
   // over line numbers because Task 1's edit moves the sibling site
   // in the same instruction.
   const hs = status?.heat_source
-  const isHp = hs?.type === 'heat_pump'
+  const isHp = isHeatPumpType(hs?.type)
   const copLive = isHp && hs?.performance.source === 'live'
     ? hs.performance.value
     : 0

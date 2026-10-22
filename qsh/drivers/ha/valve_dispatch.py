@@ -12,7 +12,7 @@ in valve_control.py and are imported here.
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
-from .integration import set_ha_service, fetch_ha_entity, WriteOutcome
+from .integration import set_ha_service, fetch_ha_entity, WriteOutcome, TransportHold, ha_transport_fault
 from ...utils import safe_float
 from ... import clock
 
@@ -66,6 +66,23 @@ def _warn_direct_unavailable(room: str, hardware_type: str, missing: List[str]) 
 # =============================================================================
 
 
+# INSTRUCTION-598 — the last valid direct-valve availability of each room,
+# held while the HA channel is down.
+_DIRECT_VALVE_HOLD = TransportHold("direct_valve")
+
+
+def _held_direct_availability(room: str, missing: List[str], hardware_type: str):
+    """INSTRUCTION-598 — when every missing entity failed on the transport,
+    the room's last valid (available, hardware_type), else None. When no
+    missing entity failed on the transport, the unavailable result is the
+    room's valid result."""
+    if all(ha_transport_fault(e) for e in missing):
+        return _DIRECT_VALVE_HOLD.held(room, missing[0])
+    if not any(ha_transport_fault(e) for e in missing):
+        _DIRECT_VALVE_HOLD.fresh(room, missing[0], (False, hardware_type))
+    return None
+
+
 def check_direct_valve_available(room: str, config: Dict) -> Tuple[bool, str]:
     """
     Check if direct valve control is available for a room.
@@ -91,8 +108,12 @@ def check_direct_valve_available(room: str, config: Dict) -> Tuple[bool, str]:
             if fetch_ha_entity(closing, default=None, suppress_log=True) is None
         ]
         if missing:
+            held = _held_direct_availability(room, missing, hardware_type)
+            if held is not None:
+                return held
             _warn_direct_unavailable(room, hardware_type, missing)
             return False, hardware_type
+        _DIRECT_VALVE_HOLD.fresh(room, pairs[0][0], (True, VALVE_HARDWARE_DIRECT_TYPE2))
         return True, VALVE_HARDWARE_DIRECT_TYPE2
 
     elif hardware_type == VALVE_HARDWARE_DIRECT_TYPE1:
@@ -102,8 +123,12 @@ def check_direct_valve_available(room: str, config: Dict) -> Tuple[bool, str]:
             if fetch_ha_entity(e, default=None, suppress_log=True) is None
         ]
         if missing:
+            held = _held_direct_availability(room, missing, hardware_type)
+            if held is not None:
+                return held
             _warn_direct_unavailable(room, hardware_type, missing)
             return False, hardware_type
+        _DIRECT_VALVE_HOLD.fresh(room, entities[0], (True, VALVE_HARDWARE_DIRECT_TYPE1))
         return True, VALVE_HARDWARE_DIRECT_TYPE1
 
     elif hardware_type == VALVE_HARDWARE_GENERIC:

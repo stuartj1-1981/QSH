@@ -11,6 +11,7 @@ import qsh.config  # noqa: F401 — module import (NOT `from qsh.config import C
                     # pattern in is_setup_mode() reads the current value per request.
 
 from ..drivers.ha.hardware_dispatch import READBACK_MISMATCH_ALARM_THRESHOLD
+from ..heat_source_limits import is_heat_pump_family
 from qsh.tariff import (
     Fuel,
     ProviderKind,
@@ -358,7 +359,7 @@ def build_hp_shim(snap: "CycleSnapshot") -> Optional[Dict[str, Any]]:
     sensor-loss fallback), `cop` is JSON null rather than the fallback
     baseline (2.5 for HP).
     """
-    if snap.active_source_type != "heat_pump":
+    if not is_heat_pump_family(snap.active_source_type):
         return None
     return {
         "power_kw": round(snap.active_source_input_power_kw, 3),
@@ -457,7 +458,7 @@ def _resolve_snapshot_hp_cop(ctx) -> Optional[float]:
     if ctx.inputs.hp_power < caps.off_power_threshold_kw:
         return None
     perf = ctx.active_source_performance
-    if caps.source_type == "heat_pump" and perf.source == "config":
+    if is_heat_pump_family(caps.source_type) and perf.source == "config":
         return None
     return ctx.live_cop if ctx.live_cop else ctx.inputs.hp_cop
 

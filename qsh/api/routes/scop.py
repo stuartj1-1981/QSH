@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Query, HTTPException
 
 from ... import clock
+from ...heat_source_limits import is_heat_pump_family
 from ...historian import get_historian
 
 router = APIRouter(prefix="/scop", tags=["scop"])
@@ -156,7 +157,7 @@ def get_scop(
             "mode": mode,
         }
 
-    if h.active_source_type not in (None, "heat_pump"):
+    if h.active_source_type is not None and not is_heat_pump_family(h.active_source_type):
         return {
             "available": False,
             "message": "SCOP is HP-specific. Active source is not a heat pump.",

@@ -13,6 +13,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional
 
 from .. import clock
+from ..heat_source_limits import is_heat_pump_family
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class TrendBuffer:
     def append(self, snapshot: Any) -> None:
         """Extract metrics from a CycleSnapshot and append to buffers."""
         ts = snapshot.timestamp
-        is_hp = getattr(snapshot, "active_source_type", "heat_pump") == "heat_pump"
+        is_hp = is_heat_pump_family(getattr(snapshot, "active_source_type", "heat_pump"))
         with self._lock:
             # System metrics
             for metric in SYSTEM_METRICS:

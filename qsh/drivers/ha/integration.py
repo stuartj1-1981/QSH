@@ -112,15 +112,26 @@ def _annunciate_no_supervisor_token(caller: str) -> None:
 
 
 class _CircuitBreaker:
-    """Simple circuit breaker: 5 failures -> 15 min cooldown."""
+    """Circuit breaker: 5 consecutive failures open it. The cooldown is
+    30 s at a first trip and rises through COOLDOWN_STEPS_S at each trip that
+    follows less than TRIP_LEVEL_RESET_S after the one before (INSTRUCTION-598)."""
 
     MAX_FAILURES = 5
-    COOLDOWN_S = 900  # 15 minutes
+    COOLDOWN_S = 900  # the longest cooldown: 15 minutes
+    # INSTRUCTION-598 — the cooldown of each trip, by trip level. A short HA
+    # outage (a Supervisor update, about 25 s) closes after the first step.
+    COOLDOWN_STEPS_S = (30, 60, 120, 240, 480, 900)
+    # A trip this time or more after the one before starts at the first
+    # step again. A success does not reset the level: a fault that trips the
+    # breaker on each cycle after it closes stays at the longest cooldown.
+    TRIP_LEVEL_RESET_S = 1800
 
     def __init__(self):
         self._consecutive_failures = 0
         self._cooldown_until = 0.0
         self._suppressed_writes = 0
+        self._trip_level = 0       # INSTRUCTION-598
+        self._last_trip_at = None  # INSTRUCTION-598 — clock.now() of the last trip
 
     def is_open(self) -> bool:
         """True if breaker is tripped and still in cooldown."""
@@ -178,12 +189,20 @@ class _CircuitBreaker:
     def record_failure(self):
         self._consecutive_failures += 1
         if self._consecutive_failures >= self.MAX_FAILURES:
-            self._cooldown_until = clock.now() + self.COOLDOWN_S
+            now = clock.now()
+            if self._last_trip_at is None or now - self._last_trip_at >= self.TRIP_LEVEL_RESET_S:
+                self._trip_level = 0
+            cooldown_s = self.COOLDOWN_STEPS_S[
+                min(self._trip_level, len(self.COOLDOWN_STEPS_S) - 1)
+            ]
+            self._trip_level += 1
+            self._last_trip_at = now
+            self._cooldown_until = now + cooldown_s
             # A new open window starts counting suppressed writes fresh.
             self._suppressed_writes = 0
             logging.warning(
                 f"HA circuit breaker: {self.MAX_FAILURES} consecutive failures — "
-                f"pausing API calls for {self.COOLDOWN_S // 60} minutes"
+                f"pausing API calls for {cooldown_s} s"
             )
 
 
@@ -194,6 +213,106 @@ def ha_api_available() -> bool:
     """INSTRUCTION-408 — API-channel health for supervisory consumers
     (DegradationController gate). Pure; safe to call every cycle."""
     return not _breaker.is_tripped()
+
+
+# INSTRUCTION-598 — a read that fails because the HA channel is down (the
+# breaker is open, a transport error, an HTTP error other than 404) is a
+# transport fault. An entity that HA reports 'unavailable', or does not hold
+# (404), is an entity fault. The HA driver holds an input's last valid value
+# on a transport fault only; on an entity fault the input keeps its own
+# fallback. API-channel loss is not device loss (INSTRUCTION-408). Ages are
+# read on the monotonic clock, so a step of the wall clock does not make a
+# fault or a held value current for longer.
+TRANSPORT_HOLD_LIMIT_S = 1800.0  # the oldest value a hold gives
+TRANSPORT_FAULT_FRESH_S = 10.0   # a recorded fault is current for this time
+INPUT_HELD_EVENT = "HA.input_held_transport"
+_transport_faults = {}  # entity_id -> clock.monotonic() of its last transport fault
+
+
+def _note_read(entity_id, transport_fault):
+    if transport_fault:
+        _transport_faults[entity_id] = clock.monotonic()
+    else:
+        _transport_faults.pop(entity_id, None)
+
+
+def ha_transport_fault(entity_id) -> bool:
+    """INSTRUCTION-598 — True when the last fetch_ha_entity read of entity_id
+    failed on the transport, not more than TRANSPORT_FAULT_FRESH_S ago."""
+    at = _transport_faults.get(entity_id)
+    return at is not None and 0.0 <= clock.monotonic() - at <= TRANSPORT_FAULT_FRESH_S
+
+
+def reset_transport_faults_for_testing():
+    _transport_faults.clear()
+
+
+def _register_input_held_event():
+    try:
+        from ...events import EventKind, EventSpec, get_annunciator
+        get_annunciator().register(EventSpec(
+            name=INPUT_HELD_EVENT,
+            kind=EventKind.LATCHED,
+            payload_fields=("kind", "key", "entity", "age_s"),
+            latch_key=("kind", "key"),
+            default_level=logging.WARNING,
+        ))
+    except Exception:
+        logging.debug("HA.input_held_transport event registration failed", exc_info=True)
+
+
+# Module scope (T-46). _annunciate_input_held registers again before each
+# emission; register() is idempotent, and the second call survives an
+# annunciator reset, as _annunciate_no_supervisor_token does.
+_register_input_held_event()
+
+
+def _annunciate_input_held(entered, kind, key, entity_id, age_s, level):
+    try:
+        from ...events import get_annunciator
+        _register_input_held_event()
+        ann = get_annunciator()
+        if entered:
+            ann.entered(INPUT_HELD_EVENT, kind=kind, key=key, entity=entity_id, age_s=age_s)
+        else:
+            ann.exited(INPUT_HELD_EVENT, level=level, kind=kind, key=key, entity=entity_id)
+    except Exception:
+        logging.debug("HA.input_held_transport emission failed", exc_info=True)
+
+
+class TransportHold:
+    """INSTRUCTION-598 — the last valid value of each key of one input kind.
+    held() gives it back only when the read of the entity failed on the
+    transport and the value is not older than TRANSPORT_HOLD_LIMIT_S; else
+    None, and the caller applies the input's own fallback."""
+
+    def __init__(self, kind):
+        self.kind = kind
+        self._values = {}
+
+    def fresh(self, key, entity_id, value):
+        self._values[key] = (value, clock.monotonic())
+        _annunciate_input_held(False, self.kind, key, entity_id, None, logging.INFO)
+
+    def drop(self, key, entity_id):
+        """Forget the key: a valid reading that must not be held."""
+        self._values.pop(key, None)
+        _annunciate_input_held(False, self.kind, key, entity_id, None, logging.INFO)
+
+    def held(self, key, entity_id):
+        record = self._values.get(key)
+        age_s = None if record is None else clock.monotonic() - record[1]
+        if record is None or age_s < 0.0 or not ha_transport_fault(entity_id):
+            _annunciate_input_held(False, self.kind, key, entity_id, None, logging.INFO)
+            return None
+        if age_s > TRANSPORT_HOLD_LIMIT_S:
+            _annunciate_input_held(False, self.kind, key, entity_id, None, logging.WARNING)
+            return None
+        _annunciate_input_held(True, self.kind, key, entity_id, round(age_s), None)
+        return record[0]
+
+    def clear(self):
+        self._values.clear()
 
 
 def _entity_label(data) -> str:
@@ -238,22 +357,29 @@ def fetch_ha_entity(entity_id, attr=None, default=None, suppress_log=False):
         _annunciate_no_supervisor_token("fetch_ha_entity")
         return default
     if _breaker.is_open():
+        _note_read(entity_id, True)  # INSTRUCTION-598
         return default
     try:
         response = requests.get(f"{HA_URL}/api/states/{entity_id}", headers=headers, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         _breaker.record_success()
+        _note_read(entity_id, False)  # INSTRUCTION-598
         data = response.json()
         if attr:
             return data.get("attributes", {}).get(attr, default)
         return data.get("state", default)
     except requests.exceptions.HTTPError as e:
+        # INSTRUCTION-598 — a 404 is an entity HA does not hold; every other
+        # HTTP error is a transport fault (a 400 from a Supervisor that is
+        # still starting, 22 October 2026).
+        _note_read(entity_id, e.response.status_code != 404)
         if e.response.status_code == 404 and suppress_log:
             return default  # Silent for existence checks
         _breaker.record_failure()
         logging.error(f"Error fetching entity {entity_id}: {e}")
         return default
     except requests.exceptions.RequestException as e:
+        _note_read(entity_id, True)  # INSTRUCTION-598
         _breaker.record_failure()
         logging.error(f"Error fetching entity {entity_id}: {e}")
         return default

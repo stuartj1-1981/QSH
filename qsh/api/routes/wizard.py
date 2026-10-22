@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 import time as _time
 
 from ... import clock
+from ...heat_source_limits import is_heat_pump_family
 from ...paths import YAML_PATH
 from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml, read_modify_write
 from qsh.config import validate_auxiliary_output_block
@@ -968,7 +969,7 @@ def validate_config(req: WizardValidateRequest):
             hs = cfg.get("heat_source", {})
         if not hs.get("type"):
             errors.append("heat_source.type is required")
-        elif hs["type"] not in ("heat_pump", "gas_boiler", "oil_boiler"):
+        elif hs["type"] not in ("heat_pump", "gshp", "gas_boiler", "oil_boiler"):
             errors.append(f"Invalid heat_source.type: {hs['type']}")
 
         # Efficiency bounds — warn rather than error so genuine outliers can
@@ -987,7 +988,7 @@ def validate_config(req: WizardValidateRequest):
                 )
             else:
                 hs_type = hs.get("type")
-                if hs_type == "heat_pump" and (eff_f < 1.5 or eff_f > 6.0):
+                if is_heat_pump_family(hs_type) and (eff_f < 1.5 or eff_f > 6.0):
                     warnings.append(
                         f"heat_source.efficiency {eff_f} outside typical "
                         f"heat-pump COP range 1.5–6.0 — check this "
@@ -2570,7 +2571,7 @@ def backfill_capacity(req: CapacityBackfillRequest) -> Dict[str, Any]:
             return raw
         # Flat schema fallback.
         flat_type = raw.get("heat_source_type")
-        if flat_type == "heat_pump":
+        if is_heat_pump_family(flat_type):
             raw["hp_capacity_kw"] = req.capacity_kw
             written["schema"] = "flat"
             written["key"] = "hp_capacity_kw"

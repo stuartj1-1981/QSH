@@ -27,7 +27,7 @@ export interface LiveViewRoom {
 
 /** Heat source appearance */
 export interface LiveViewSource {
-  type: 'heat_pump' | 'gas_boiler' | 'lpg_boiler' | 'oil_boiler'
+  type: 'heat_pump' | 'gshp' | 'gas_boiler' | 'lpg_boiler' | 'oil_boiler'
   name: string
   isMultiSource: boolean
 }

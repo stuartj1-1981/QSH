@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.6.20] — 2026-10-22
+
+### Fixed
+- QSH no longer replaces its Home Assistant inputs with fallbacks during a
+  short loss of connection. It now holds the last valid values for up to 30
+  minutes, and the connection breaker pauses for longer on repeated trips.
+- Ground-source heat pumps now start correctly and display as heat pumps in
+  the interface. Only shadow mode is currently supported.
+- Type 2 valves in direct mode now move to the degrees QSH commands, by
+  forcing the setpoint to 35 degrees.
+
 ## [1.6.19] — 2026-10-21
 
 ### Changed

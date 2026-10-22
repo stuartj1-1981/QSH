@@ -14,7 +14,7 @@ Control methods:
 import logging
 import math
 from typing import Optional
-from .integration import WriteOutcome, fetch_ha_entity, fetch_ha_entity_full, set_ha_service
+from .integration import WriteOutcome, fetch_ha_entity, fetch_ha_entity_full, ha_api_available, set_ha_service
 from qsh.signal_bus import FLOW_BELOW_RETURN_MARGIN_C
 
 
@@ -621,6 +621,8 @@ def apply_hardware_control(
     if should_update_trvs:
         persistent_zones = set(config.get("persistent_zones", []))
         rooms_set = []
+        from . import valve_dispatch as _vd
+        from qsh.valve_control import TYPE2_TRV_SETPOINT_C, VALVE_HARDWARE_DIRECT_TYPE2
         for room in config["rooms"]:
             if room in persistent_zones:
                 continue  # Don't override user-set TRV setpoints
@@ -629,33 +631,54 @@ def apply_hardware_control(
             valve_entity = f"number.qsh_{room}_valve_target"
             config_mode = config["room_control_mode"].get(room, "indirect")
 
-            if entity_key in config["entities"]:
-                if config_mode == "indirect" or (
-                    config_mode == "direct" and fetch_ha_entity(valve_entity, default=None, suppress_log=True) is None
-                ):
-                    # Apply TRV sensor offset compensation
-                    # room_targets[room] is the REAL desired temperature
-                    # Compensated setpoint accounts for TRV reading hot
-                    real_target = room_targets[room]
-                    if trv_offset_tracker is not None:
-                        temperature = trv_offset_tracker.get_compensated_setpoint(room, real_target)
-                    else:
-                        temperature = real_target
+            if entity_key not in config["entities"]:
+                continue
 
-                    data = {"entity_id": config["entities"][entity_key], "temperature": temperature}
-                    outcome = set_ha_service("climate", "set_temperature", data)
-                    # INSTRUCTION-575C — the write record HardwareController's
-                    # TRV setpoint readback check compares against. Only a
-                    # write Home Assistant accepted is recorded: a rejected or
-                    # breaker-suppressed write is not a device fault.
-                    if outcome is WriteOutcome.SENT:
-                        debouncer.last_trv_written[room] = temperature
+            # INSTRUCTION-599 — a direct Type 2 room whose closing-degree
+            # entities resolve (check_direct_valve_available) gets
+            # TYPE2_TRV_SETPOINT_C, raw (no offset compensation), so the TRV
+            # follows the degrees QSH writes. A Type 2 room for which the check
+            # returns False falls back to the setpoint fan-out below, as at the
+            # pin (§8 OI-3).
+            type2_degrees = (
+                config_mode == "direct"
+                and config.get("room_valve_hardware", {}).get(room) == VALVE_HARDWARE_DIRECT_TYPE2
+                and _vd.check_direct_valve_available(room, config)[0]
+            )
 
-                    offset = trv_offset_tracker.get_offset(room) if trv_offset_tracker else 0.0
-                    if abs(offset) > 0.3:
-                        rooms_set.append(f"{room}:{temperature:.1f}(+{offset:.1f})")
-                    else:
-                        rooms_set.append(f"{room}:{temperature:.1f}")
+            if type2_degrees:
+                temperature = TYPE2_TRV_SETPOINT_C
+                offset = 0.0
+            elif config_mode == "indirect" or (
+                config_mode == "direct" and fetch_ha_entity(valve_entity, default=None, suppress_log=True) is None
+            ):
+                # Apply TRV sensor offset compensation
+                # room_targets[room] is the REAL desired temperature
+                # Compensated setpoint accounts for TRV reading hot
+                real_target = room_targets[room]
+                if trv_offset_tracker is not None:
+                    temperature = trv_offset_tracker.get_compensated_setpoint(room, real_target)
+                else:
+                    temperature = real_target
+                offset = trv_offset_tracker.get_offset(room) if trv_offset_tracker else 0.0
+            else:
+                continue
+
+            data = {"entity_id": config["entities"][entity_key], "temperature": temperature}
+            outcome = set_ha_service("climate", "set_temperature", data)
+            # INSTRUCTION-575C — the write record HardwareController's
+            # TRV setpoint readback check compares against. Only a
+            # write Home Assistant accepted is recorded: a rejected or
+            # breaker-suppressed write is not a device fault.
+            if outcome is WriteOutcome.SENT:
+                debouncer.last_trv_written[room] = temperature
+
+            if type2_degrees:
+                rooms_set.append(f"{room}:{temperature:.1f}(type2)")
+            elif abs(offset) > 0.3:
+                rooms_set.append(f"{room}:{temperature:.1f}(+{offset:.1f})")
+            else:
+                rooms_set.append(f"{room}:{temperature:.1f}")
 
         if rooms_set:
             logging.debug(
@@ -721,7 +744,7 @@ def apply_hardware_control(
 
     # Readback computation is the driver-agnostic shared helper (the same one
     # the MQTT injection calls), so HA and MQTT cannot drift. INSTRUCTION-339A.
-    return compute_mode_readback(
+    applied_mode, new_mismatch_count = compute_mode_readback(
         prev_mismatch_count=prev_mismatch_count,
         optimal_mode=optimal_mode,
         prev_mode=prev_mode,
@@ -731,6 +754,15 @@ def apply_hardware_control(
         has_live_return_temp=has_live_return_temp,
         should_update_mode=should_update_mode,
     )
+    # INSTRUCTION-598 — while the HA breaker is open the power reading is not
+    # a measurement (an HA read that fails leaves its default) and, with an HA
+    # control method, no command reaches the heat source. A mismatch is not
+    # evidence of an unresponsive heat source: the count does not advance.
+    # The applied mode is not changed, so a mode write the breaker blocked is
+    # sent again.
+    if not ha_api_available():
+        new_mismatch_count = prev_mismatch_count
+    return applied_mode, new_mismatch_count
 
 
 def apply_source_command(config, commands, dfan_control=True):

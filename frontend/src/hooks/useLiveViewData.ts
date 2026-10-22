@@ -3,6 +3,7 @@ import { useLive } from './useLive'
 import { useSysid } from './useSysid'
 import { apiUrl } from '../lib/api'
 import { parseOperatingState } from '../lib/parseOperatingState'
+import { isHeatPumpType } from '../lib/heat-source-types'
 import type { LiveViewData, LiveViewRoom, LiveViewSource, LiveViewDHW } from '../lib/liveViewTypes'
 import type { HwPlanType } from '../types/config'
 
@@ -51,7 +52,7 @@ export function useLiveViewData(): {
       )
       const srcType = activeSrc?.type ?? 'heat_pump'
       source = {
-        type: (srcType === 'heat_pump' || srcType === 'gas_boiler' ||
+        type: (srcType === 'heat_pump' || srcType === 'gshp' || srcType === 'gas_boiler' ||
                srcType === 'lpg_boiler' || srcType === 'oil_boiler')
           ? srcType : 'heat_pump',
         name: sourceSelection.active_source,
@@ -79,7 +80,7 @@ export function useLiveViewData(): {
     // not appear on the live canvas. The downstream renderer suppresses
     // the readout via `cop != null && cop > 0`, so 0 is the off-sentinel.
     const hs = live.status?.heat_source
-    const isHp = hs?.type === 'heat_pump'
+    const isHp = isHeatPumpType(hs?.type)
     const copLive = isHp && hs?.performance.source === 'live'
       ? hs.performance.value
       : 0

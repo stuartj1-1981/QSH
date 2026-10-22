@@ -379,6 +379,7 @@ def fuel_for_source(source_type: str) -> Fuel:
     validated against VALID_HEAT_SOURCE_TYPES in qsh/config.py."""
     return {
         "heat_pump": "electricity",
+        "gshp": "electricity",
         "gas_boiler": "gas",
         "lpg_boiler": "lpg",
         "oil_boiler": "oil",
