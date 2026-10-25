@@ -13,17 +13,17 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 
 from ... import clock
+from ... import paths
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
-# State file paths
+# State file paths: each name under the config mount, then the data mount,
+# read through qsh.paths once, at import (INSTRUCTION-585B).
 STATE_FILES = {
-    "qsh.yaml": ["/config/qsh.yaml", "/data/qsh.yaml"],
-    "sysid_state.json": ["/config/sysid_state.json", "/data/sysid_state.json"],
-    "qsh_state.json": ["/config/qsh_state.json", "/data/qsh_state.json"],
-    "schedule_state.json": ["/config/schedule_state.json", "/data/schedule_state.json"],
+    name: [os.path.join(paths.CONFIG_DIR, name), os.path.join(paths.DATA_DIR, name)]
+    for name in ("qsh.yaml", "sysid_state.json", "qsh_state.json", "schedule_state.json")
 }
 
 
@@ -200,7 +200,7 @@ async def restore_backup(
 
     # Signal restart to reload state
     try:
-        with open("/config/qsh_restart_requested", "w") as f:
+        with open(paths.RESTART_FLAG, "w") as f:
             f.write("1")
     except OSError:
         pass

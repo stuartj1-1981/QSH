@@ -23,6 +23,7 @@ from qsh.config_io import (
     yaml_lock as _yaml_lock,
     atomic_write_yaml as _atomic_write_yaml,
 )
+from qsh import paths
 from qsh.paths import YAML_PATH
 
 logger = logging.getLogger(__name__)
@@ -30,8 +31,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 YAML_SEARCH_PATHS = [
-    "/config/qsh.yaml",
-    "/data/qsh.yaml",
+    paths.YAML_PATH,
+    os.path.join(paths.DATA_DIR, "qsh.yaml"),
     os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "qsh.yaml"
     ),
@@ -763,6 +764,21 @@ def patch_config_section(section: str, body=Body(...)):
             # will reject, so the response carries a warning instead.
             _rooms_not_bootable_warning = True
 
+    # INSTRUCTION-570A — the location level on the Settings save path, checked
+    # before the snapshot, as the three arms above are. The rule is
+    # qsh.telemetry_location's. The detail is a string, so that the Settings
+    # page shows it as text.
+    if section == "telemetry":
+        from qsh.telemetry_location import check_location
+
+        _tel_body = body.get("data", body) if isinstance(body, dict) else body
+        if isinstance(_tel_body, dict) and _tel_body.get("agreed") is True:
+            _loc_err = check_location(
+                _tel_body.get("location_level"), _tel_body.get("location_code")
+            )
+            if _loc_err is not None:
+                raise HTTPException(status_code=422, detail=_loc_err)
+
     # INSTRUCTION-192: pre-write snapshot. SourceMissingError is treated
     # as fatal here — patch_config_section requires an existing qsh.yaml
     # (the section being patched lives in it). Other failures abort the
@@ -800,6 +816,12 @@ def patch_config_section(section: str, body=Body(...)):
         ) from exc
 
     incoming = body.get("data", body) if isinstance(body, dict) else body
+
+    # INSTRUCTION-570A — the stored form: the canonical pair, or neither key.
+    if section == "telemetry" and isinstance(incoming, dict):
+        from qsh.telemetry_location import canonicalise_location
+
+        canonicalise_location(incoming)
 
     # INSTRUCTION-305: reject an unbootable fixed-without-rate energy config at
     # the route BEFORE read_modify_write and BEFORE the restart-flag write, so
@@ -1169,7 +1191,7 @@ def patch_config_section(section: str, body=Body(...)):
 
     # Always restart to adopt changes
     try:
-        with open("/config/qsh_restart_requested", "w") as f:
+        with open(paths.RESTART_FLAG, "w") as f:
             f.write("1")
     except OSError:
         pass
@@ -1227,7 +1249,7 @@ def delete_config_section(section: str):
 
     if needs_restart:
         try:
-            with open("/config/qsh_restart_requested", "w") as f:
+            with open(paths.RESTART_FLAG, "w") as f:
                 f.write("1")
         except OSError:
             pass

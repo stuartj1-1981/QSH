@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..state import shared_state
+from ... import paths
 
 router = APIRouter()
 
@@ -49,7 +50,7 @@ def set_source_selection_mode(body: ModeRequest):
     import yaml
     import os
 
-    yaml_paths = ["/config/qsh.yaml", "/data/qsh.yaml"]
+    yaml_paths = [paths.YAML_PATH, os.path.join(paths.DATA_DIR, "qsh.yaml")]
     yaml_path = None
     for p in yaml_paths:
         if os.path.isfile(p):
@@ -90,7 +91,7 @@ def set_source_selection_preference(body: PreferenceRequest):
     import yaml
     import os
 
-    yaml_paths = ["/config/qsh.yaml", "/data/qsh.yaml"]
+    yaml_paths = [paths.YAML_PATH, os.path.join(paths.DATA_DIR, "qsh.yaml")]
     yaml_path = None
     for p in yaml_paths:
         if os.path.isfile(p):

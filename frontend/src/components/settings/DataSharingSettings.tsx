@@ -3,9 +3,12 @@ import { useState, useEffect } from 'react'
 import { Save, Loader2, BarChart3, AlertCircle } from 'lucide-react'
 import { usePatchConfig } from '../../hooks/useConfig'
 import { useStatus } from '../../hooks/useStatus'
+import { useSwarmUnitId } from '../../hooks/useSwarmUnitId'
 import { UK_REGIONS } from '../../lib/regions'
+import { telemetryLocationFields } from '../../lib/locationLevels'
 import { cn } from '../../lib/utils'
-import type { TelemetryYaml, Driver } from '../../types/config'
+import { LocationLevelChooser } from '../LocationLevelChooser'
+import type { TelemetryYaml, Driver, LocationLevel } from '../../types/config'
 
 interface DataSharingSettingsProps {
   telemetry?: TelemetryYaml
@@ -29,6 +32,10 @@ export function DataSharingSettings({
     existingRegion && !isUkRegion ? 'international' : 'uk'
   )
   const [region, setRegion] = useState(existingRegion)
+  const [locationLevel, setLocationLevel] = useState<LocationLevel>(
+    initial?.location_level ?? 'region'
+  )
+  const [locationCode, setLocationCode] = useState(initial?.location_code ?? '')
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(initialDisclaimer ?? false)
   const [showRestartNotice, setShowRestartNotice] = useState(false)
 
@@ -42,6 +49,8 @@ export function DataSharingSettings({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
     setRegionMode(r && !isUk ? 'international' : 'uk')
     setRegion(r)
+    setLocationLevel(initial?.location_level ?? 'region')
+    setLocationCode(initial?.location_code ?? '')
   }, [initial])
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local form state from refetched config is intentional
@@ -52,6 +61,7 @@ export function DataSharingSettings({
   const { patch, saving, error } = usePatchConfig()
   // INSTRUCTION-255: read last permanent telemetry failure for diagnostics.
   const { data: status } = useStatus()
+  const { unitId: swarmUnitId, failed: swarmUnitIdFailed } = useSwarmUnitId()
   const lastFailure = status?.telemetry_last_permanent_failure ?? null
 
   const save = async () => {
@@ -68,7 +78,11 @@ export function DataSharingSettings({
       }
     }
 
-    const r1 = await patch('telemetry', { agreed, region: agreed ? region : undefined })
+    const r1 = await patch('telemetry', {
+      agreed,
+      region: agreed ? region : undefined,
+      ...telemetryLocationFields(agreed, regionMode, locationLevel, locationCode),
+    })
     if (!r1) return
     const r2 = await patch('disclaimer_accepted', disclaimerAccepted)
     if (!r2) return
@@ -130,7 +144,7 @@ export function DataSharingSettings({
             />
           </button>
           <span className="text-sm text-[var(--text)]">
-            Share anonymised operational data to help improve QSH for everyone
+            Share operational data to help improve QSH for everyone
           </span>
         </div>
 
@@ -159,6 +173,8 @@ export function DataSharingSettings({
                 onClick={() => {
                   setRegionMode('international')
                   setRegion('')
+                  setLocationLevel('region')
+                  setLocationCode('')
                 }}
                 className={cn(
                   'px-3 py-1.5 text-sm rounded-md transition-colors',
@@ -191,6 +207,16 @@ export function DataSharingSettings({
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
               />
             )}
+
+            <LocationLevelChooser
+              regionMode={regionMode}
+              level={locationLevel}
+              code={locationCode}
+              onChange={(level, code) => {
+                setLocationLevel(level)
+                setLocationCode(code)
+              }}
+            />
           </div>
         ) : (
           <p className="text-sm text-[var(--text-muted)] italic">
@@ -219,6 +245,20 @@ export function DataSharingSettings({
               </div>
             )}
           </div>
+        )}
+        {swarmUnitId && (
+          <div className="mt-2 space-y-1 text-xs text-[var(--text-muted)]">
+            <p>
+              Swarm unit ID:{' '}
+              <span className="font-mono select-all text-[var(--text)]">{swarmUnitId}</span>
+            </p>
+            <p>Give this ID if you ask for a copy of your data or for its deletion.</p>
+          </div>
+        )}
+        {swarmUnitIdFailed && (
+          <p className="mt-2 text-xs text-[var(--text-muted)]">
+            The swarm unit ID could not be read. Open this page again to see it.
+          </p>
         )}
       </div>
 

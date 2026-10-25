@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { DataSharingSettings } from '../DataSharingSettings'
+import { apiUrl } from '../../../lib/api'
 import type { StatusResponse } from '../../../types/api'
 
 const mockPatch = vi.fn()
@@ -21,6 +22,13 @@ describe('DataSharingSettings', () => {
     mockPatch.mockReset()
     mockPatch.mockResolvedValue({ updated: 'test', restart_required: true, message: 'ok' })
     mockStatus = null
+    // INSTRUCTION-570C: the page reads the swarm unit ID. The default read never
+    // settles, so no test reads the network or sets state after it ends.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('renders with no telemetry config — toggle OFF, region hidden, disclaimer unchecked', () => {
@@ -185,5 +193,141 @@ describe('DataSharingSettings', () => {
     // The rendered string lives inside a sibling text node alongside the
     // 'Date dropped' prefix; locate by substring rather than exact match.
     expect(screen.getByText(new RegExp(rendered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument()
+  })
+  // -------------------------------------------------------------------------
+  // INSTRUCTION-570C — the location level
+  // -------------------------------------------------------------------------
+
+  const DISTRICT = { agreed: true, region: 'London', location_level: 'district' as const, location_code: 'ZZ99' }
+
+  function telemetryCalls() {
+    return mockPatch.mock.calls.filter((c) => c[0] === 'telemetry')
+  }
+
+  it('a save sends the fragment as typed', async () => {
+    render(<DataSharingSettings telemetry={DISTRICT} disclaimerAccepted={true} driver="ha" onRefetch={() => {}} />)
+    fireEvent.change(screen.getByLabelText('First part of your postcode'), { target: { value: ' zz99 ' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(telemetryCalls()).toHaveLength(1))
+    expect(telemetryCalls()[0][1]).toEqual({
+      agreed: true,
+      region: 'London',
+      location_level: 'district',
+      location_code: ' zz99 ',
+    })
+  })
+
+  it('a save at the region level sends no location level', async () => {
+    render(<DataSharingSettings telemetry={DISTRICT} disclaimerAccepted={true} driver="ha" onRefetch={() => {}} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Region only' }))
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(telemetryCalls()).toHaveLength(1))
+    expect(telemetryCalls()[0][1]).not.toHaveProperty('location_level')
+  })
+
+  it('a save with data sharing turned off sends neither location field', async () => {
+    render(<DataSharingSettings telemetry={DISTRICT} disclaimerAccepted={true} driver="ha" onRefetch={() => {}} />)
+    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(telemetryCalls()).toHaveLength(1))
+    const body = telemetryCalls()[0][1]
+    expect(body).toEqual({ agreed: false, region: undefined })
+    expect(body).not.toHaveProperty('location_level')
+    expect(body).not.toHaveProperty('location_code')
+  })
+
+  it('a save in International mode sends the region only', async () => {
+    render(
+      <DataSharingSettings
+        telemetry={{ ...DISTRICT, region: 'Northern France' }}
+        disclaimerAccepted={true}
+        driver="ha"
+        onRefetch={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => expect(telemetryCalls()).toHaveLength(1))
+    expect(telemetryCalls()[0][1]).toEqual({ agreed: true, region: 'Northern France' })
+  })
+
+  it('International then UK leaves the region level and no postcode box', () => {
+    render(<DataSharingSettings telemetry={DISTRICT} driver="ha" onRefetch={() => {}} />)
+    fireEvent.click(screen.getByText('International'))
+    fireEvent.click(screen.getByText('UK'))
+    expect(screen.getByRole('radio', { name: 'Region only' })).toBeChecked()
+    expect(screen.queryByLabelText('First part of your postcode')).toBeNull()
+  })
+
+  it('with data sharing off shows no level control', () => {
+    render(
+      <DataSharingSettings
+        telemetry={{ agreed: false, location_level: 'district', location_code: 'ZZ99' }}
+        driver="ha"
+        onRefetch={() => {}}
+      />
+    )
+    expect(screen.queryByRole('radiogroup')).toBeNull()
+    expect(screen.queryAllByRole('radio')).toHaveLength(0)
+  })
+
+  it('shows the stored level after a refetch', () => {
+    const { rerender } = render(
+      <DataSharingSettings telemetry={{ ...DISTRICT, location_code: 'zz99' }} driver="ha" onRefetch={() => {}} />
+    )
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('zz99')
+    rerender(
+      <DataSharingSettings
+        telemetry={{ ...DISTRICT, location_level: 'sector', location_code: 'ZZ99 9' }}
+        driver="ha"
+        onRefetch={() => {}}
+      />
+    )
+    expect(screen.getByRole('radio', { name: 'Postcode sector' })).toBeChecked()
+    const box = screen.getByLabelText('First part of your postcode and the next digit') as HTMLInputElement
+    expect(box.value).toBe('ZZ99 9')
+  })
+
+  // -------------------------------------------------------------------------
+  // INSTRUCTION-570C — the swarm unit ID (parent R18)
+  // -------------------------------------------------------------------------
+
+  function stubStatus(body: unknown) {
+    const stub = vi.fn().mockResolvedValue({ json: () => Promise.resolve(body) })
+    vi.stubGlobal('fetch', stub)
+    return stub
+  }
+
+  it('shows the swarm unit ID in full with data sharing off', async () => {
+    const stub = stubStatus({ enabled: false, unit_id: 'unit-zz99-0001' })
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    expect(await screen.findByText('unit-zz99-0001')).toBeInTheDocument()
+    expect(screen.getByText('Give this ID if you ask for a copy of your data or for its deletion.')).toBeInTheDocument()
+    expect(stub).toHaveBeenCalledTimes(1)
+    expect(stub.mock.calls[0][0]).toBe(apiUrl('api/swarm/status'))
+  })
+
+  it('shows the swarm unit ID with data sharing on', async () => {
+    stubStatus({ enabled: true, unit_id: 'unit-zz99-0001' })
+    render(<DataSharingSettings telemetry={{ agreed: true, region: 'London' }} driver="ha" onRefetch={() => {}} />)
+    expect(await screen.findByText('unit-zz99-0001')).toBeInTheDocument()
+  })
+
+  it('shows no ID line and no failure for a unit with no swarm identity', async () => {
+    const json = vi.fn().mockResolvedValue({ enabled: false, unit_id: null })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json }))
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    await waitFor(() => expect(json).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(screen.queryByText(/Swarm unit ID:/)).toBeNull()
+    expect(screen.queryByText(/could not be read/)).toBeNull()
+  })
+
+  it('says so when the swarm unit ID cannot be read', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network')))
+    render(<DataSharingSettings driver="ha" onRefetch={() => {}} />)
+    expect(
+      await screen.findByText('The swarm unit ID could not be read. Open this page again to see it.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Swarm unit ID:/)).toBeNull()
   })
 })

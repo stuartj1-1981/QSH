@@ -30,6 +30,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ... import paths
 from ..snapshots import (
     Snapshot,
     SnapshotCaptureError,
@@ -182,7 +183,7 @@ def revert_to_snapshot(snapshot_id: str, body: RevertRequest) -> dict[str, Any]:
 
     # Restart-request — same flag file written by patch_config_section.
     try:
-        with open("/config/qsh_restart_requested", "w") as f:
+        with open(paths.RESTART_FLAG, "w") as f:
             f.write("1")
     except OSError:
         # Non-fatal: the supervisor will pick up the new YAML on the

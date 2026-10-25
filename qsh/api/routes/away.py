@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from qsh import paths
 from qsh.paths import find_state_file, save_state_file
 
 from ... import clock
@@ -40,7 +41,7 @@ def _load_timestamps() -> dict:
 def _save_timestamps(data: dict) -> None:
     """Write activation timestamps to persistent storage."""
     try:
-        path = Path(os.path.join("/config", _AWAY_TIMESTAMPS_FILENAME))
+        path = Path(os.path.join(paths.CONFIG_DIR, _AWAY_TIMESTAMPS_FILENAME))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data))
         save_state_file(str(path))  # best-effort copy to /data/
