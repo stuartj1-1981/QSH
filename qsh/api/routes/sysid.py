@@ -118,6 +118,9 @@ def get_sysid_room(room: str):
             "sensor_cadence": sysid.sensor_cadence(room),
             # INSTRUCTION-592 — the floor-lock window.
             "floor_window": {k: room_state.get(k) for k in _FLOOR_WINDOW_KEYS},
+            # INSTRUCTION-600 — the last rejected floor/cap read (volatile).
+            "u_event_last_rejected_value": room_state.get("u_event_last_rejected_value"),
+            "u_event_last_rejected_rate": room_state.get("u_event_last_rejected_rate"),
         }
     except HTTPException:
         raise

@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [1.6.21] — 2026-10-25
+
+### Added
+- Data sharing location level: the setup wizard and Settings > Data Sharing
+  now offer a location level — region only (the default), postcode district
+  or postcode sector — and explains what each level lets your home use. An
+  install that turned data sharing on before this release keeps it on and
+  shares the region only, as before. Nothing more is shared unless you choose
+  a higher location level in Settings > Data Sharing.
+- The wizard's list of what is collected now covers ten categories of data,
+  and Settings > Data Sharing shows your swarm unit ID, to quote in a request
+  for a copy of your data or for its deletion.
+
+### Changed
+- The privacy policy has changed. It now lists every category of data QSH
+  sends when data sharing is on, describes the three location levels.
+- A new install now starts with data sharing off. It stays off unless you turn
+  it on. Existing installs keep the choice they made.
+- QSH no longer sends each room's occupancy state to the swarm. Room
+  temperatures, setpoints and valve positions are sent as before.
+- When the swarm server refuses a registration, QSH now waits 24 hours before
+  trying again, where before it retried at every start. The log says why the
+  server refused.
+
+### Fixed
+- With data sharing off, or not yet answered, QSH now sends nothing to the
+  swarm and deletes any swarm data still waiting to be sent. Before, a unit
+  that had registered could keep sending after data sharing was turned off.
+  Heating control is unchanged.
+- The swarm event for a change of room target temperature now identifies the
+  room by its position rather than by its configured name.
+- Rooms whose thermal-mass starting estimate was too low now take a corrected
+  value from their passive-cooling measurements, without waiting for further
+  learning.
+
 ## [1.6.20] — 2026-10-22
 
 ### Fixed

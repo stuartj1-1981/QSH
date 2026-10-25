@@ -503,11 +503,15 @@ export interface SummerYaml {
 
 export type HwPlanType = 'W' | 'Y' | 'S' | 'S+' | 'C' | 'Combi'
 
+export type LocationLevel = 'region' | 'district' | 'sector'
+
 export interface TelemetryYaml {
   agreed?: boolean
   install_id?: string
   api_token?: string | null
   region?: string
+  location_level?: LocationLevel
+  location_code?: string | null
   endpoint?: string
 }
 

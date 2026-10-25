@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 import time as _time
 
 from ... import clock
+from ... import paths
 from ...heat_source_limits import is_heat_pump_family
 from ...paths import YAML_PATH
 from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml, read_modify_write
@@ -1496,6 +1497,16 @@ def validate_config(req: WizardValidateRequest):
             # Full validation: if agreed, region must be present
             if not region:
                 errors.append("Telemetry agreed but no region specified")
+        # INSTRUCTION-570A — the location level, on the step arm and the full
+        # arm. The rule is qsh.telemetry_location's; this route holds no copy.
+        if agreed is True:
+            from qsh.telemetry_location import check_location
+
+            _loc_err = check_location(
+                telemetry.get("location_level"), telemetry.get("location_code")
+            )
+            if _loc_err is not None:
+                errors.append(_loc_err)
 
     if req.step == "disclaimer" or req.step is None:
         if req.step == "disclaimer":
@@ -1872,15 +1883,16 @@ def persist_octopus_tariff_codes(req: PersistOctopusTariffCodesRequest):
     flag_write_failed = False
     if any_persisted:
         try:
-            with open("/config/qsh_restart_requested", "w") as f:
+            with open(paths.RESTART_FLAG, "w") as f:
                 f.write("1")
             restart_required = True
         except OSError as e:
             logger.error(
                 "persist-octopus-tariff-codes: persisted tariff code(s) "
                 "but failed to write restart flag at "
-                "/config/qsh_restart_requested: %s — user must restart "
+                "%s: %s — user must restart "
                 "manually for changes to take effect",
+                paths.RESTART_FLAG,
                 e,
             )
             flag_write_failed = True
@@ -2400,6 +2412,13 @@ def deploy_config(req: WizardDeployRequest):
     # test_config_property_carrythrough.py.
     _ack_ts = clock.now_dt(timezone.utc).isoformat(timespec="seconds")
     req.config["wizard_acknowledgements"] = {rid: _ack_ts for rid in required_acks}
+
+    # ── INSTRUCTION-570A: the stored form of the location level ──
+    # validate_config has refused an inadmissible pair above (422).
+    if isinstance(req.config.get("telemetry"), dict):
+        from qsh.telemetry_location import canonicalise_location
+
+        canonicalise_location(req.config["telemetry"])
 
     # ── Telemetry: generate install_id before writing YAML (H1/H2 resolution) ──
     telemetry_cfg = req.config.get("telemetry", {})

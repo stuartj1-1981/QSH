@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { BarChart3 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { UK_REGIONS } from '../../lib/regions'
-import type { QshConfigYaml } from '../../types/config'
+import { telemetryLocationFields } from '../../lib/locationLevels'
+import { LocationLevelChooser } from '../LocationLevelChooser'
+import type { LocationLevel, QshConfigYaml } from '../../types/config'
 
 interface StepTelemetryAgreementProps {
   config: Partial<QshConfigYaml>
@@ -13,16 +15,24 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
   const existingRegion = config.telemetry?.region ?? ''
   const isUkRegion = UK_REGIONS.includes(existingRegion as typeof UK_REGIONS[number])
 
-  const [agreed, setAgreed] = useState(config.telemetry?.agreed ?? true)
+  const [agreed, setAgreed] = useState(config.telemetry?.agreed ?? false)
   const [regionMode, setRegionMode] = useState<'uk' | 'international'>(
     existingRegion && !isUkRegion ? 'international' : 'uk'
   )
   const [region, setRegion] = useState(existingRegion)
+  const [locationLevel, setLocationLevel] = useState<LocationLevel>(
+    config.telemetry?.location_level ?? 'region'
+  )
+  const [locationCode, setLocationCode] = useState(config.telemetry?.location_code ?? '')
   const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => {
-    onUpdate('telemetry', { agreed, region: agreed ? region : undefined })
-  }, [agreed, region, onUpdate])
+    onUpdate('telemetry', {
+      agreed,
+      region: agreed ? region : undefined,
+      ...telemetryLocationFields(agreed, regionMode, locationLevel, locationCode),
+    })
+  }, [agreed, region, regionMode, locationLevel, locationCode, onUpdate])
 
   return (
     <div className="space-y-8">
@@ -32,11 +42,11 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
       </div>
 
       <p className="text-sm text-[var(--text-muted)] leading-relaxed">
-        QSH collects anonymised operational data from every installation. This data —
-        thermal parameters, heat pump performance, energy metrics, and climate region —
-        is used to improve the algorithms for everyone. No personal information is collected.
-        Room names are replaced with indices. No addresses, postcodes, occupancy schedules,
-        or tariff details are transmitted.
+        QSH collects operational data from installations that agree to share it. This data —
+        thermal parameters, heat pump performance, room temperatures and target temperatures,
+        energy metrics, and the location detail you choose below — is used to improve the
+        algorithms for everyone. Room names are replaced with indices. QSH does not ask for
+        your name, your address or your full postcode.
       </p>
 
       {/* Expandable details */}
@@ -52,11 +62,15 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
         {detailsOpen && (
           <ul className="space-y-2 px-4 pb-4 text-sm text-[var(--text-muted)]">
             <li><strong className="text-[var(--text)]">Thermal parameters</strong> — learned heat loss, thermal mass, and solar gain per zone</li>
-            <li><strong className="text-[var(--text)]">Building metadata</strong> — approximate floor area, zone count, emitter types</li>
-            <li><strong className="text-[var(--text)]">Heat pump characteristics</strong> — make/model category, declared output, fuel type</li>
-            <li><strong className="text-[var(--text)]">Climate region</strong> — the region you select below</li>
+            <li><strong className="text-[var(--text)]">Building metadata</strong> — approximate floor area, zone count, emitter types; construction year, fabric class and storeys if you entered them</li>
+            <li><strong className="text-[var(--text)]">Heat sources</strong> — type, fuel type, declared output, and the label in your configuration</li>
+            <li><strong className="text-[var(--text)]">Location</strong> — your region; the first part of your postcode, or the first part and the next digit, only if you choose that below</li>
             <li><strong className="text-[var(--text)]">Control performance</strong> — optimisation blend factor, comfort and efficiency scores</li>
             <li><strong className="text-[var(--text)]">Energy metrics</strong> — daily consumption (kWh), COP, normalised cost per degree-hour</li>
+            <li><strong className="text-[var(--text)]">Operating state, about every 15 minutes</strong> — outdoor temperature, heat pump readings, and each zone's indoor temperature, target temperature and valve position</li>
+            <li><strong className="text-[var(--text)]">Events</strong> — fast outdoor temperature changes, the heat pump turning on or off, target temperature changes, QSH control turned on or off, alarms clearing, and controller health events</li>
+            <li><strong className="text-[var(--text)]">Equipment present</strong> — which optional sensors and integrations the installation has</li>
+            <li><strong className="text-[var(--text)]">Software and connection</strong> — the QSH version, the time QSH last started, the time of each message</li>
           </ul>
         )}
       </div>
@@ -80,7 +94,7 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
           />
         </button>
         <span className="text-sm text-[var(--text)]">
-          Share anonymised operational data to help improve QSH for everyone
+          Share operational data to help improve QSH for everyone
         </span>
       </div>
 
@@ -109,6 +123,8 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
               onClick={() => {
                 setRegionMode('international')
                 setRegion('')
+                setLocationLevel('region')
+                setLocationCode('')
               }}
               className={cn(
                 'px-3 py-1.5 text-sm rounded-md transition-colors',
@@ -141,6 +157,16 @@ export function StepTelemetryAgreement({ config, onUpdate }: StepTelemetryAgreem
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
             />
           )}
+
+          <LocationLevelChooser
+            regionMode={regionMode}
+            level={locationLevel}
+            code={locationCode}
+            onChange={(level, code) => {
+              setLocationLevel(level)
+              setLocationCode(code)
+            }}
+          />
         </div>
       ) : (
         <p className="text-sm text-[var(--text-muted)] italic">

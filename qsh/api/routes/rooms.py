@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 from typing import Any, Optional, Union, Dict, List
 
+from qsh import paths
 from qsh.config import ROOM_DISPLAY_NAME_MAX, validate_auxiliary_output_block
 
 from .config import read_modify_write
@@ -386,7 +387,7 @@ def _face_contains_room(face_val, room_name: str) -> bool:
 
 def _signal_restart():
     try:
-        with open("/config/qsh_restart_requested", "w") as f:
+        with open(paths.RESTART_FLAG, "w") as f:
             f.write("1")
     except OSError:
         pass
