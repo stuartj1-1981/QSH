@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Set, Tuple
 from . import octopus_hp_control
 from .integration import TransportHold, fetch_ha_entity, fetch_ha_entity_full
 from ...utils import safe_float
+from ...signal_bus import normalise_battery_power_kw
 from ...sensors import SensorData, sensor_health
 from ..resolve import resolve_value
 from ..hot_water_payloads import (
@@ -1279,10 +1280,13 @@ def fetch_energy_data(config: Dict) -> Dict[str, float]:
         "battery_soc": _default_soc,
         "solar_production": 0.0,
         "grid_power": 0.0,
+        "has_live_grid_power": False,
         "excess_solar": 0.0,
         "export_kw": 0.0,
         "has_solar": False,
         "has_battery": False,
+        "battery_power": 0.0,
+        "has_live_battery_power": False,
     }
 
     solar_entity = entities.get("solar_production")
@@ -1306,6 +1310,7 @@ def fetch_energy_data(config: Dict) -> Dict[str, float]:
             grid_kw = grid_val / _get_power_divisor(grid_entity)
             result["grid_power"] = grid_kw
             result["export_kw"] = max(0, -grid_kw) if grid_kw < 0 else 0.0
+            result["has_live_grid_power"] = True
 
     battery_entity = entities.get("battery_soc")
     if battery_entity:
@@ -1316,6 +1321,19 @@ def fetch_energy_data(config: Dict) -> Dict[str, float]:
         else:
             result["battery_soc"] = _default_soc
             result["has_battery"] = False
+
+    # INSTRUCTION-606A — home battery power, kW by the entity's unit (as the
+    # grid read), in the QSH sign convention. Kept only when fresh.
+    power_entity = entities.get("battery_power")
+    if power_entity:
+        bp_raw, is_fresh = _fetch_with_staleness(power_entity, "energy", default=None)
+        bp_val = safe_float(bp_raw, None)
+        if is_fresh and bp_val is not None and math.isfinite(bp_val):
+            result["battery_power"] = normalise_battery_power_kw(
+                bp_val / _get_power_divisor(power_entity),
+                (config.get("battery") or {}).get("power_invert") is True,
+            )
+            result["has_live_battery_power"] = True
 
     return result
 
@@ -1556,8 +1574,11 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
     data.battery_soc = energy_data["battery_soc"]
     data.solar_production = energy_data["solar_production"]
     data.grid_power = energy_data["grid_power"]
+    data.has_live_grid_power = energy_data.get("has_live_grid_power", False)  # INSTRUCTION-606B
     data.has_solar = energy_data["has_solar"]
     data.has_battery = energy_data["has_battery"]
+    data.battery_power = energy_data.get("battery_power", 0.0)
+    data.has_live_battery_power = energy_data.get("has_live_battery_power", False)
 
     # INSTRUCTION-371A — per-device battery SoC (additive alongside the
     # system-level battery_soc above; does not alter it).

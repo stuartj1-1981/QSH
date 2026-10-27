@@ -507,6 +507,21 @@ describe('Home time-to-comfort card — INSTRUCTION-582', () => {
     render(<Home engineering={false} />)
     expect(screen.getByTestId('recovery-card').textContent).toBe('Time to comfort\u2014')
   })
+
+  it('reads the unreachable rooms from the live status, which wins over the first read (INSTRUCTION-603B)', () => {
+    mockStatusData = { recovery_state: 'recovering', recovery_time_hours: 1, ttc_unreachable_rooms: ['a', 'b', 'c'] }
+    mockLiveData = {
+      status: { recovery_state: 'recovering', recovery_time_hours: 1, ttc_unreachable_rooms: ['den'] },
+    } as unknown as CycleMessage
+    render(<Home engineering={false} />)
+    expect(screen.getByTestId('recovery-unreachable').textContent).toBe('1 room cannot reach target')
+  })
+
+  it('shows no unreachable line when neither read has the key (INSTRUCTION-603B)', () => {
+    mockStatusData = { recovery_state: 'recovering', recovery_time_hours: 1 }
+    render(<Home engineering={false} />)
+    expect(screen.queryByTestId('recovery-unreachable')).toBeNull()
+  })
 })
 
 describe('the live parse keeps the recovery state — INSTRUCTION-582 review Q1', () => {
@@ -519,5 +534,16 @@ describe('the live parse keeps the recovery state — INSTRUCTION-582 review Q1'
     })
     expect(parsed.success).toBe(true)
     expect(parsed.data).toMatchObject({ status: { recovery_state: 'no_demand' } })
+  })
+
+  it('passes status.ttc_unreachable_rooms and the new states through cycleSnapshotSchema (INSTRUCTION-603B)', () => {
+    const parsed = cycleSnapshotSchema.safeParse({
+      type: 'cycle',
+      timestamp: 1,
+      cycle_number: 1,
+      status: { recovery_state: 'no_heat', ttc_unreachable_rooms: ['den'] },
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({ status: { recovery_state: 'no_heat', ttc_unreachable_rooms: ['den'] } })
   })
 })

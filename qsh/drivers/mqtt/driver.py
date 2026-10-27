@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ... import clock
 from ...forecast.compute import derive_daily_lows
-from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active
+from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active, normalise_battery_power_kw
 from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
 from ...utils import MISSING, resolve_control_enabled
@@ -247,6 +247,7 @@ _ROOM_FIELD_SQ_PREFIX: Dict[str, str] = {
     "room_temp": "room_temps",
     "valve_position": "valve_positions",
     "occupancy_sensor": "occupancy_sensors",
+    "window_sensor": "window_sensors",
 }
 
 
@@ -407,6 +408,7 @@ class MQTTDriver:
     def __init__(self, config: Dict[str, Any]):
         self._config = config
         self._mqtt: Optional[MQTTClient] = None
+        self._window_epoch_ts: Optional[float] = None  # INSTRUCTION-604A
         self._topic_map: Optional[TopicMap] = None
         self._cycle_interval = config.get("cycle_interval", 30)
         self._shadow: Dict[str, Any] = {}  # Shadow values (hp_heat_output, hp_mode_state)
@@ -525,6 +527,7 @@ class MQTTDriver:
         self._prefix = mqtt_cfg.get("topic_prefix", "")
         self._topic_map = build_topic_map(config)
         self._log_multi_source_advisory()
+        self._window_epoch_ts = clock.now()  # INSTRUCTION-604A — the age basis with no live message
         self._mqtt = MQTTClient(client_config)
         self._mqtt.connect()
 
@@ -971,6 +974,32 @@ class MQTTDriver:
         )
         self._previous_signal_quality[sq_key] = new_quality
 
+    def _window_age_basis(
+        self,
+        topic: str,
+        cache: Dict[str, Tuple[str, float]],
+        field_ts: Optional[float],
+    ) -> Optional[float]:
+        """INSTRUCTION-604A — the age basis of a window contact.
+
+        A broker replay of a retained message re-stamps the cache
+        (client.py _on_message), so a contact aged on that stamp never ages
+        (the INSTRUCTION-427 D3 class). A window contact ages on its last
+        live (retain False) message in this process or, with none, on the
+        time this driver connected. The basis is never later than the stamp
+        of the pin, so it only ages a contact. Other fields are not passed
+        here; 427 F1 owns their cutover.
+        """
+        entry = cache.get(topic)
+        if entry is None:
+            return field_ts
+        stamp = field_ts if field_ts is not None else entry[1]
+        genuine = self._mqtt.last_genuine_ts(topic) if self._mqtt else None
+        basis = genuine if isinstance(genuine, (int, float)) else self._window_epoch_ts
+        if not isinstance(basis, (int, float)):
+            return stamp
+        return min(stamp, float(basis))
+
     def _observe_retained_shadow(
         self, mapping, sq_key, live_grade, staleness_defaults, now,
     ) -> None:
@@ -1121,6 +1150,7 @@ class MQTTDriver:
         # in valve_positions is recomputed as mean after the message loop.
         valve_positions_per_emitter: Dict[str, Dict[str, float]] = {}
         occupancy_sensor_states: Dict[str, str] = {}
+        window_sensor_states: Dict[str, str] = {}  # INSTRUCTION-604A
         signal_quality: Dict[str, str] = {}
         # INSTRUCTION-427 D1/D6 — per-key freshness provenance carried onto the
         # InputBlock this cycle (live_grade/shadow_grade/age_basis_s/
@@ -1136,6 +1166,10 @@ class MQTTDriver:
         # Normalise boolean-ish MQTT payloads to "on"/"off"
         _ON_PAYLOADS = {"true", "1", "on"}
         _OFF_PAYLOADS = {"false", "0", "off"}
+        # INSTRUCTION-604A — window contact payloads: the boolean words plus
+        # "open" and "closed". mapping.invert swaps the two results.
+        _WINDOW_OPEN_PAYLOADS = _ON_PAYLOADS | {"open"}
+        _WINDOW_CLOSED_PAYLOADS = _OFF_PAYLOADS | {"closed"}
 
         # System-level fields with defaults from InputBlock
         system_values: Dict[str, float] = {}
@@ -1202,11 +1236,14 @@ class MQTTDriver:
             for mapping in tm.input_mappings:
                 sq_key = _sq_key_for(mapping)
 
+                _field_ts = self._field_last_present_ts.get(
+                    (mapping.topic, mapping.json_path)
+                )
+                if mapping.field == "window_sensor":
+                    _field_ts = self._window_age_basis(mapping.topic, cache, _field_ts)
                 quality, payload_str, ts = _resolve_signal_quality(
                     mapping, cache, staleness_defaults, now,
-                    field_last_present_ts=self._field_last_present_ts.get(
-                        (mapping.topic, mapping.json_path)
-                    ),
+                    field_last_present_ts=_field_ts,
                 )
 
                 # INSTRUCTION-427 D3 — retained-aware shadow grade + resurrection
@@ -1323,6 +1360,22 @@ class MQTTDriver:
                                 occupancy_sensor_states[mapping.room] = "off"
                             else:
                                 occupancy_sensor_states[mapping.room] = "unavailable"
+                    elif mapping.field == "window_sensor":
+                        # INSTRUCTION-604A — raw contact state, not debounced;
+                        # the contact stage debounces (window_detection.py).
+                        extracted = parse_payload_string(
+                            payload_str, mapping.payload_format, mapping.json_path
+                        )
+                        norm = extracted.strip().lower() if extracted is not None else None
+                        if norm in _WINDOW_OPEN_PAYLOADS:
+                            win_state = "on"
+                        elif norm in _WINDOW_CLOSED_PAYLOADS:
+                            win_state = "off"
+                        else:
+                            win_state = "unavailable"
+                        if mapping.invert and win_state != "unavailable":
+                            win_state = "off" if win_state == "on" else "on"
+                        window_sensor_states[mapping.room] = win_state
                 elif mapping.field.startswith("_shadow_"):
                     # Store in shadow dict, not InputBlock. JSON-extraction failure
                     # leaves the prior shadow value untouched (mirrors parse_payload's
@@ -2136,18 +2189,31 @@ class MQTTDriver:
             # briefly read flow-below-return and be classed cool, harmlessly
             # skipping a few learning cycles (conservative, §5). bool(None) is
             # False, so an unmapped topic → exactly 363.
+            # INSTRUCTION-602 — the hydraulic detector is masked while hot water
+            # is active; the mapped sensor is not.
             cooling_active=bool(cooling_active_value) or derive_cooling_active(
                 system_values.get("hp_power", 0.0),
                 system_values.get("hp_flow_temp", 35.0),
                 system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
                 False,
                 has_live_return,
+                hot_water_active=hot_water_active,
             ),
             delta_t=computed_delta_t,
             flow_rate=system_values.get("flow_rate", 0.0),
             solar_production=system_values.get("solar_production", 0.0),
             grid_power=system_values.get("grid_power", 0.0),
             battery_soc=system_values.get("battery_soc", config.get("default_battery_soc", 50.0)),
+            # INSTRUCTION-606A — battery power, kW as published, in the QSH sign
+            # convention; live only with a value and signal quality "good".
+            battery_power=normalise_battery_power_kw(
+                system_values.get("battery_power", 0.0),
+                (config.get("battery") or {}).get("power_invert") is True,
+            ),
+            has_live_battery_power=(
+                "battery_power" in system_values
+                and signal_quality.get("battery_power") == "good"
+            ),
             current_rate=current_rate,
             export_rate=export_rate,
             control_enabled=dfan_rv.value,
@@ -2172,6 +2238,7 @@ class MQTTDriver:
             per_zone_away=per_zone_away,
             per_room_comfort_overrides=per_room_comfort,
             occupancy_sensor_states=occupancy_sensor_states,
+            window_sensor_states=window_sensor_states,
             heat_sources=heat_sources_block,
             source_states=source_states_block,
             timestamp=now,

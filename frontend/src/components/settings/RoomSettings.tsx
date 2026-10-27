@@ -13,7 +13,8 @@ import { OccupancyFields } from '../OccupancyFields'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
 import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { HelpTip } from '../HelpTip'
-import { WINDOW, WINDOW_DELAY } from '../../lib/helpText'
+import { WINDOW, WINDOW_DELAY, WINDOW_MQTT } from '../../lib/helpText'
+import { windowInvert, windowJsonPath, windowTopic, writeWindowTopic } from '../../lib/mqttWindowTopic'
 import { parseWindowOpenDelay, WINDOW_OPEN_DELAY_MAX_S, WINDOW_OPEN_DELAY_MIN_S } from '../../lib/windowDelay'
 
 // INSTRUCTION-335 — the wizard property band (qsh/api/routes/wizard.py:51-52,
@@ -1286,6 +1287,105 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                   sensorConfigured={!!room.mqtt_topics?.occupancy_sensor}
                   idPrefix={`${name}-mqtt`}
                 />
+                {/* INSTRUCTION-604B — the MQTT window contact, its JSON key, the invert
+                    option and the contact delay (the 572D field, MQTT limb). */}
+                <div className="grid grid-cols-2 gap-3">
+                  <TopicField
+                    label="Window Sensor Topic"
+                    value={windowTopic(room.mqtt_topics?.window_sensor)}
+                    onChange={(v) =>
+                      updateRoom(name, {
+                        mqtt_topics: {
+                          ...room.mqtt_topics,
+                          window_sensor: writeWindowTopic(room.mqtt_topics?.window_sensor, {
+                            topic: v,
+                            jsonPath: windowJsonPath(room.mqtt_topics?.window_sensor),
+                            invert: windowInvert(room.mqtt_topics?.window_sensor),
+                          }),
+                        },
+                      })
+                    }
+                    placeholder={`rooms/${name}/window`}
+                    helpText={WINDOW.sensor}
+                  />
+                  {windowTopic(room.mqtt_topics?.window_sensor) && (
+                    <div>
+                      <label
+                        htmlFor={`${name}-window-json-key`}
+                        className="text-xs text-[var(--text-muted)] mb-1 block"
+                      >
+                        Window Sensor JSON Key
+                      </label>
+                      <input
+                        id={`${name}-window-json-key`}
+                        type="text"
+                        value={windowJsonPath(room.mqtt_topics?.window_sensor)}
+                        placeholder="contact"
+                        onChange={(e) =>
+                          updateRoom(name, {
+                            mqtt_topics: {
+                              ...room.mqtt_topics,
+                              window_sensor: writeWindowTopic(room.mqtt_topics?.window_sensor, {
+                                topic: windowTopic(room.mqtt_topics?.window_sensor),
+                                jsonPath: e.target.value,
+                                invert: windowInvert(room.mqtt_topics?.window_sensor),
+                              }),
+                            },
+                          })
+                        }
+                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                      />
+                    </div>
+                  )}
+                  {windowTopic(room.mqtt_topics?.window_sensor) && (
+                    <label className="flex items-center gap-2 text-xs text-[var(--text)]">
+                      <input
+                        type="checkbox"
+                        aria-label={`Window sensor reads true when closed, ${name}`}
+                        checked={windowInvert(room.mqtt_topics?.window_sensor)}
+                        onChange={(e) =>
+                          updateRoom(name, {
+                            mqtt_topics: {
+                              ...room.mqtt_topics,
+                              window_sensor: writeWindowTopic(room.mqtt_topics?.window_sensor, {
+                                topic: windowTopic(room.mqtt_topics?.window_sensor),
+                                jsonPath: windowJsonPath(room.mqtt_topics?.window_sensor),
+                                invert: e.target.checked,
+                              }),
+                            },
+                          })
+                        }
+                      />
+                      Sensor reads true when the window is closed
+                      <HelpTip text={WINDOW_MQTT.invert} size={12} />
+                    </label>
+                  )}
+                  {windowTopic(room.mqtt_topics?.window_sensor) && (
+                    <div>
+                      <label
+                        htmlFor={`${name}-window-open-delay`}
+                        className="text-xs text-[var(--text-muted)] mb-1 flex items-center gap-1"
+                      >
+                        Window Open Delay (s)
+                        <HelpTip text={WINDOW_DELAY.help} size={12} />
+                      </label>
+                      <input
+                        id={`${name}-window-open-delay`}
+                        type="number"
+                        min={WINDOW_OPEN_DELAY_MIN_S}
+                        max={WINDOW_OPEN_DELAY_MAX_S}
+                        step={1}
+                        value={room.window_open_delay_s ?? ''}
+                        placeholder="60"
+                        aria-label={`Window open delay in seconds, ${name}`}
+                        onChange={(e) =>
+                          updateRoom(name, { window_open_delay_s: parseWindowOpenDelay(e.target.value) })
+                        }
+                        className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                      />
+                    </div>
+                  )}
+                </div>
 
                 {/* Legacy HA config — render read-only muted if present */}
                 {hasLegacyHaFields(room) && (

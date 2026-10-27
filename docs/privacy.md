@@ -1,6 +1,6 @@
 # QSH Privacy Policy
 
-**Last updated:** 25 October 2026
+**Last updated:** 26 October 2026
 
 **Data controller:** Stuart Hunt (QSH Project)
 
@@ -48,7 +48,7 @@ the swarm functions that QSH homes share.
    turning on or off; a change of a zone's target temperature (the old and the new
    value); QSH control being turned on or off; alarms clearing; and controller health
    events. The swarm self-suspension function also sends health events. It is off unless
-   it is turned on in the QSH configuration, and its events can hold the names of rooms.
+   it is turned on in the QSH configuration. Its events name a room by its position.
 9. **Equipment present** — yes or no for each of: outdoor sensor, solar, flow control,
    COP sensor, delta-T sensor, return temperature sensor, flow rate sensor, and an Octopus
    Energy integration
@@ -65,8 +65,7 @@ schedule, or data from a presence sensor.
 
 - Names, email addresses, or any account information
 - Addresses, full postcodes, or GPS coordinates
-- Room names (replaced with positional indices: room_0, room_1, ...), except in the
-  events of the swarm self-suspension function (item 8)
+- Room names (replaced with positional indices: room_0, room_1, ...)
 - Occupancy schedules, occupancy states, or presence detection data
 - Energy tariff rates, bills, account numbers or credentials
 - Data from devices that QSH does not use to control the heating

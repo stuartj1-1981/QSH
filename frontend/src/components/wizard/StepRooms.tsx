@@ -4,7 +4,9 @@ import { EntityPicker } from './EntityPicker'
 import { TopicPicker } from './TopicPicker'
 import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { OccupancyFields } from '../OccupancyFields'
-import { WINDOW } from '../../lib/helpText'
+import { WINDOW, WINDOW_MQTT } from '../../lib/helpText'
+import { HelpTip } from '../HelpTip'
+import { windowInvert, windowJsonPath, windowTopic, writeWindowTopic } from '../../lib/mqttWindowTopic'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
 import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
@@ -749,6 +751,56 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                         sensorConfigured={!!room.mqtt_topics?.occupancy_sensor}
                         idPrefix={`${name}-wizard-mqtt`}
                       />
+                      {/* INSTRUCTION-604B — the MQTT window contact, with the R5 help text.
+                          No scanResults: the scan offers numeric keys only, and a contact key is a boolean. */}
+                      <div className="space-y-1.5">
+                        <TopicPicker
+                          label="Window Sensor Topic (optional)"
+                          placeholder={`rooms/${name}/window`}
+                          value={windowTopic(room.mqtt_topics?.window_sensor)}
+                          format={windowJsonPath(room.mqtt_topics?.window_sensor) ? 'json' : undefined}
+                          jsonPath={windowJsonPath(room.mqtt_topics?.window_sensor) || undefined}
+                          onChange={(v, fmt, jp) =>
+                            updateRoom(name, {
+                              mqtt_topics: {
+                                ...room.mqtt_topics,
+                                window_sensor: writeWindowTopic(room.mqtt_topics?.window_sensor, {
+                                  topic: v,
+                                  jsonPath: fmt === 'json' ? jp ?? '' : '',
+                                  invert: windowInvert(room.mqtt_topics?.window_sensor),
+                                }),
+                              },
+                            })
+                          }
+                        />
+                        <p className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+                          Use a contact sensor on a window or an external door.
+                          <HelpTip text={WINDOW.sensor} size={12} />
+                        </p>
+                        {windowTopic(room.mqtt_topics?.window_sensor) && (
+                          <label className="flex items-center gap-2 text-xs text-[var(--text)]">
+                            <input
+                              type="checkbox"
+                              aria-label={`Window sensor reads true when closed, ${name}`}
+                              checked={windowInvert(room.mqtt_topics?.window_sensor)}
+                              onChange={(e) =>
+                                updateRoom(name, {
+                                  mqtt_topics: {
+                                    ...room.mqtt_topics,
+                                    window_sensor: writeWindowTopic(room.mqtt_topics?.window_sensor, {
+                                      topic: windowTopic(room.mqtt_topics?.window_sensor),
+                                      jsonPath: windowJsonPath(room.mqtt_topics?.window_sensor),
+                                      invert: e.target.checked,
+                                    }),
+                                  },
+                                })
+                              }
+                            />
+                            Sensor reads true when the window is closed
+                            <HelpTip text={WINDOW_MQTT.invert} size={12} />
+                          </label>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <>

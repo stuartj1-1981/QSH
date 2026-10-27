@@ -30,6 +30,9 @@ export const HOT_WATER = {
 export const SOLAR = {
   solarEntity: 'The Home Assistant sensor that reports your solar panel generation in watts or kilowatts.',
   batteryEntity: 'The Home Assistant sensor that reports your home battery state of charge as a percentage.',
+  batteryPowerEntity: 'The sensor that reports your home battery power, in watts or kilowatts. QSH reads it as positive while the battery discharges. It stops battery energy being counted as solar surplus in the running cost and M&V.',
+  batteryPowerInvert: 'Set this when your sensor reads positive while the battery charges.',
+  batteryStoredEnergyRate: 'The price of energy that the battery supplies, in £/kWh. Leave it empty to use the import rate (no saving is claimed from the battery).',
   diversionThreshold: 'The minimum surplus solar power (in watts) before QSH diverts energy to heating instead of exporting.',
 } as const
 
@@ -129,6 +132,12 @@ export const WINDOW = {
   inferred:
     'This room loses heat faster than usual, and QSH treats a window as open. The room can fall up to 1.5°C below its target before it starts the heat source. A boost has priority.',
   fault: 'The window sensor is not available. QSH reads the window as closed.',
+} as const
+
+// INSTRUCTION-604B — the invert option of an MQTT window contact.
+export const WINDOW_MQTT = {
+  invert:
+    'Set this when the sensor sends true while the window is closed. A Zigbee2MQTT contact sensor does this: its contact value is true when the window is closed.',
 } as const
 
 // INSTRUCTION-572B — the open-window inference mode (569B), where the
