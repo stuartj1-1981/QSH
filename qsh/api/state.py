@@ -96,6 +96,10 @@ class CycleSnapshot:
     # cycle has run.
     recovery_state: str = "waiting"
     per_room_ttc: Dict[str, float] = field(default_factory=dict)
+    # INSTRUCTION-603A — the cause of each room's time, and the rooms that
+    # cannot reach target ("no_heat" or "cannot_reach"), sorted.
+    per_room_ttc_reason: Dict[str, str] = field(default_factory=dict)
+    ttc_unreachable_rooms: List[str] = field(default_factory=list)
     capacity_pct: float = 0.0
     hp_capacity_kw: float = 0.0
     min_load_pct: float = 0.0
@@ -924,6 +928,58 @@ class SharedState:
             if hp_thermal_kw <= 0 and ctx.sensor_data.hp_power > 0:
                 hp_thermal_kw = ctx.sensor_data.hp_power * ctx.sensor_data.hp_cop
 
+        # INSTRUCTION-603A (FI-92) — the inputs of the emitter share and of
+        # the closed-valve cause. The flow is admitted only when the driver
+        # (InputBlock) and the selected source (SensorData) both mark it live.
+        # A failure here keeps the demand share and no closed valve.
+        ttc_flow = None
+        ttc_emitter_kw: Dict[str, float] = {}
+        ttc_exponents: Dict[str, float] = {}
+        ttc_closed: set = set()
+        try:
+            import math as _math
+            from ..control import EMITTER_EXPONENT_RAD, EMITTER_EXPONENT_UFH
+            sd = ctx.sensor_data
+            _inputs = getattr(ctx, "inputs", None)
+            if (
+                sd is not None
+                and getattr(_inputs, "has_live_flow", False) is True
+                and getattr(sd, "has_live_flow", False) is True
+            ):
+                _f = getattr(sd, "hp_flow_temp", None)
+                if isinstance(_f, (int, float)) and not isinstance(_f, bool) and _math.isfinite(_f):
+                    ttc_flow = float(_f)
+            _sq = getattr(_inputs, "signal_quality", None)
+            if isinstance(_sq, dict):
+                for _room, _pct in valve_positions.items():
+                    if (
+                        _sq.get(f"valve_positions.{_room}") == "good"
+                        and isinstance(_pct, (int, float)) and not isinstance(_pct, bool)
+                        and _pct <= 0.0
+                    ):
+                        ttc_closed.add(_room)
+            _rooms = getattr(sysid, "rooms", None) if sysid is not None else None
+            _types = config.get("emitter_type") or {}
+            for _room, _kw in (config.get("emitter_kw") or {}).items():
+                if (
+                    not isinstance(_kw, (int, float)) or isinstance(_kw, bool)
+                    or not _math.isfinite(_kw) or _kw < 0.0
+                ):
+                    continue
+                _kw = float(_kw)
+                _params = _rooms.get(_room) if isinstance(_rooms, dict) else None
+                if _params is not None and _kw > 0.0:
+                    _eff = _params.effective_emitter_kw(_kw)
+                    if (
+                        isinstance(_eff, (int, float)) and not isinstance(_eff, bool)
+                        and _math.isfinite(_eff) and _eff > 0.0
+                    ):
+                        _kw = float(_eff)
+                ttc_emitter_kw[_room] = _kw
+                ttc_exponents[_room] = EMITTER_EXPONENT_UFH if _types.get(_room) == "ufh" else EMITTER_EXPONENT_RAD
+        except Exception:
+            ttc_flow, ttc_emitter_kw, ttc_exponents, ttc_closed = None, {}, {}, set()
+        ttc_reasons: Dict[str, str] = {}
         from .ttc import calculate_per_room_ttc, classify_recovery_state
 
         actual_loss = ctx.thermal_state.actual_loss if ctx.thermal_state else 0.0
@@ -947,10 +1003,15 @@ class SharedState:
             room_demands=room_demands,
             total_active_demand=total_active_demand,
             aggregate_heat_up=aggregate_heat_up,
+            flow_temp=ttc_flow, emitter_kw=ttc_emitter_kw, emitter_exponents=ttc_exponents, closed_valve_rooms=ttc_closed, reasons=ttc_reasons,
         )
 
         snap.recovery_time_hours = round(system_ttc, 2)
         snap.per_room_ttc = per_room_ttc
+        snap.per_room_ttc_reason = ttc_reasons
+        snap.ttc_unreachable_rooms = sorted(
+            r for r, c in ttc_reasons.items() if c in ("no_heat", "cannot_reach")
+        )
 
         total_demand = ctx.smoothed_total_demand if hasattr(ctx, 'smoothed_total_demand') else ctx.smoothed_demand
         capacity_pct = (total_demand / bar_capacity_kw * 100) if bar_capacity_kw > 0 else 0.0
@@ -962,11 +1023,18 @@ class SharedState:
 
         # INSTRUCTION-582 — read the three figures as the status and the bar
         # show them (rounded), so that the card and the bar agree.
+        # INSTRUCTION-603B — the causes of the rooms that cannot reach target,
+        # from 603A's per-room map.
+        _unreachable_causes = [snap.per_room_ttc_reason.get(r) for r in snap.ttc_unreachable_rooms]
+        ttc_no_heat = bool(_unreachable_causes) and all(c == "no_heat" for c in _unreachable_causes)
         snap.recovery_state = classify_recovery_state(
             system_ttc=snap.recovery_time_hours,
             hp_thermal_kw=hp_thermal_kw,
             capacity_pct=snap.capacity_pct,
             min_load_pct=snap.min_load_pct,
+            hot_water_active=getattr(ctx, "hot_water_active", False) is True,
+            no_heat=ttc_no_heat,
+            unreachable=bool(snap.ttc_unreachable_rooms),
         )
 
         # Away state from pipeline

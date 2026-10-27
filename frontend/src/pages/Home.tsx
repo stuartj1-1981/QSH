@@ -37,6 +37,9 @@ const DEMAND_LINES = [
   { key: 'total_demand', label: 'Demand', color: 'var(--amber)' },
 ]
 
+// INSTRUCTION-603B — one empty list, so the memoised card keeps its props.
+const NO_ROOMS: string[] = []
+
 interface HomeProps {
   engineering: boolean
   onNavigate?: (page: Page) => void
@@ -167,6 +170,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
 
   const recoveryTimeHours = status?.recovery_time_hours ?? initial?.recovery_time_hours ?? 0
   const recoveryState = status?.recovery_state ?? initial?.recovery_state ?? 'waiting'
+  const unreachableRooms = status?.ttc_unreachable_rooms ?? initial?.ttc_unreachable_rooms ?? NO_ROOMS
   const capacityPct = status?.capacity_pct ?? initial?.capacity_pct ?? 0
   const minLoadPct = status?.min_load_pct ?? initial?.min_load_pct ?? 0
   const comfortScheduleActive = status?.comfort_schedule_active ?? initial?.comfort_schedule_active ?? false
@@ -441,6 +445,7 @@ export function Home({ engineering, onNavigate }: HomeProps) {
         capacityPct={capacityPct}
         minLoadPct={minLoadPct}
         recoveryState={recoveryState}
+        unreachableRooms={unreachableRooms}
       />
 
       {/* Source selection panel (multi-source only) */}

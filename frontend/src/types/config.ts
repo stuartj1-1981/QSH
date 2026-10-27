@@ -27,6 +27,10 @@ export interface MqttConfig {
 
 export type RoomMqttTopicValue = string | MqttTopicInput
 
+/** INSTRUCTION-604B — the MQTT window contact (INSTRUCTION-604A): a topic,
+ *  or a mapping; `invert` is true for a sensor that reads true when closed. */
+export type RoomMqttWindowTopicValue = string | (MqttTopicInput & { invert?: boolean })
+
 export interface RoomMqttTopics {
   room_temp?: RoomMqttTopicValue
   // INSTRUCTION-224C/E — valve_position accepts a list of topic strings for
@@ -39,6 +43,7 @@ export interface RoomMqttTopics {
   valve_setpoint?: string | string[]
   trv_setpoint?: string | string[]
   occupancy_sensor?: string
+  window_sensor?: RoomMqttWindowTopicValue
 }
 
 /** Boundary referencing another room (INSTRUCTION-106A/B).
@@ -410,6 +415,10 @@ export interface BatteryYaml {
   efficiency?: number
   voltage?: number
   max_rate_kw?: number
+  // INSTRUCTION-606A/606B — battery power input and the price of its energy.
+  power_entity?: string
+  power_invert?: boolean
+  stored_energy_rate_gbp_per_kwh?: number
 }
 
 export interface GridYaml {

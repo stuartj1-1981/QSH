@@ -42,4 +42,18 @@ describe('SystemHealth', () => {
     )
     expect(screen.getByText('Demand below minimum')).toBeDefined()
   })
+
+  it('passes the unreachable rooms to the card', () => {
+    // INSTRUCTION-603B
+    render(
+      <SystemHealth
+        recoveryState="recovering"
+        recoveryTimeHours={1}
+        capacityPct={60}
+        minLoadPct={33}
+        unreachableRooms={['den', 'study']}
+      />
+    )
+    expect(screen.getByTestId('recovery-unreachable').textContent).toBe('2 rooms cannot reach target')
+  })
 })

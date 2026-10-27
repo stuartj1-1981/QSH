@@ -50,6 +50,11 @@ BUILTIN_STALENESS_DEFAULTS: Dict[str, Dict[str, int]] = {
     "temperature": {"fresh": 7200, "unavailable": 14400},
     "humidity":    {"fresh": 7200, "unavailable": 14400},
     "valve":       {"fresh": 3600, "unavailable": 7200},
+    # INSTRUCTION-604A — window and door contacts. A contact publisher often
+    # sends on change only, so a contact is valid until a later message, its
+    # availability topic or a day of silence contradicts it. No stale grade:
+    # a quiet healthy contact is not an alarm.
+    "contact":     {"fresh": 86400, "unavailable": 86400},
     "power":       {"fresh": 180,  "unavailable": 600},
     "energy":      {"fresh": 300,  "unavailable": 900},
     "outdoor":     {"fresh": 1800, "unavailable": 3600},
@@ -79,9 +84,12 @@ _FIELD_CATEGORY_INFERENCE: Dict[str, str] = {
     # Power / energy
     "hp_power": "power",
     "grid_power": "power",
+    "battery_power": "power",
     "hp_cop": "power",
     "solar_production": "energy",
     "battery_soc": "energy",
+    # Contacts (INSTRUCTION-604A)
+    "window_sensor": "contact",
 }
 
 
@@ -139,6 +147,9 @@ class TopicMapping:
     # INSTRUCTION-224C: emitter stem for per-emitter fields (valve_position).
     # None for non-per-emitter fields (room_temp, occupancy_sensor, system).
     emitter: Optional[str] = None
+    # INSTRUCTION-604A: True for a window contact whose payload reads true
+    # when the window is CLOSED (Zigbee2MQTT `contact`). False elsewhere.
+    invert: bool = False
 
 
 @dataclass
@@ -524,6 +535,7 @@ SYSTEM_INPUT_FIELDS = {
     "solar_production": "solar_production",
     "grid_power": "grid_power",
     "battery_soc": "battery_soc",
+    "battery_power": "battery_power",
     "flow_rate": "flow_rate",
     # INSTRUCTION-246 Task 7 — boiler fuel-input kW. Routed generically by
     # the driver (qsh/drivers/mqtt/driver.py:535) via SYSTEM_INPUT_FIELDS
@@ -927,6 +939,30 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                     availability=avail,
                     last_seen=ls,
                 ))
+
+        # window_sensor → window_sensor_states[room] (INSTRUCTION-604A).
+        # A topic string, or a mapping whose `topic` is a non-blank string.
+        # Any other shape gives no mapping; validate_yaml.py reports it.
+        if "window_sensor" in topics:
+            win_cfg = topics["window_sensor"]
+            win_ok = (
+                isinstance(win_cfg, str)
+                or (isinstance(win_cfg, dict) and isinstance(win_cfg.get("topic"), str))
+            )
+            if win_ok:
+                raw, fmt, jp, cat, avail, ls = _mapping_fields(win_cfg)
+                if raw.strip():
+                    tm.input_mappings.append(TopicMapping(
+                        topic=_prefixed(prefix, raw.strip()),
+                        field="window_sensor",
+                        room=room,
+                        payload_format=fmt,
+                        json_path=jp,
+                        category=cat or infer_category("window_sensor", "window_sensor"),
+                        availability=avail,
+                        last_seen=ls,
+                        invert=isinstance(win_cfg, dict) and win_cfg.get("invert") is True,
+                    ))
 
         # valve_position → valve_positions[room] AND valve_positions_per_emitter
         # INSTRUCTION-224C: accept str OR list of str (mirrors 222B output-side

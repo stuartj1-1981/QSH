@@ -75,7 +75,7 @@ describe('RoomSettings window open delay (INSTRUCTION-572D)', () => {
     expect(delayField().value).toBe(String(stored))
   })
 
-  it('(D4) the mqtt driver has no delay field', () => {
+  it('(D4) on the mqtt driver, a room-level HA window sensor gives no delay field', () => {
     renderForm({ window_sensor: WINDOW_ENTITY, window_open_delay_s: 120 }, 'mqtt')
     expect(screen.queryByLabelText(DELAY_LABEL)).toBeNull()
   })

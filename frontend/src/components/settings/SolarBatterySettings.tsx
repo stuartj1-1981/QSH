@@ -74,6 +74,10 @@ export function SolarBatterySettings({
   // mqtt.inputs.* map (OutdoorWeatherSettings.tsx:25-26/:53-60 pattern).
   const [mqttSolarTopic, setMqttSolarTopic] = useState(topicOf(mqtt?.inputs?.solar_production))
   const [mqttBatteryTopic, setMqttBatteryTopic] = useState(topicOf(mqtt?.inputs?.battery_soc))
+  const [mqttBatteryPowerTopic, setMqttBatteryPowerTopic] = useState(topicOf(mqtt?.inputs?.battery_power))
+  // INSTRUCTION-606C — the battery energy price as typed; the battery key is
+  // written only for a finite number in [0, 2.0] (BATTERY_RATE_MAX_GBP_PER_KWH).
+  const [rateText, setRateText] = useState(initialBattery?.stored_energy_rate_gbp_per_kwh?.toString() ?? '')
   const [mqttGridTopic, setMqttGridTopic] = useState(topicOf(mqtt?.inputs?.grid_power))
 
   useEffect(() => {
@@ -81,6 +85,7 @@ export function SolarBatterySettings({
   }, [initialSolar])
   useEffect(() => {
     setBattery(initialBattery || {})
+    setRateText(initialBattery?.stored_energy_rate_gbp_per_kwh?.toString() ?? '')
   }, [initialBattery])
   useEffect(() => {
     setGrid(initialGrid || {})
@@ -91,6 +96,7 @@ export function SolarBatterySettings({
   useEffect(() => {
     setMqttSolarTopic(topicOf(mqtt?.inputs?.solar_production))
     setMqttBatteryTopic(topicOf(mqtt?.inputs?.battery_soc))
+    setMqttBatteryPowerTopic(topicOf(mqtt?.inputs?.battery_power))
     setMqttGridTopic(topicOf(mqtt?.inputs?.grid_power))
   }, [mqtt])
 
@@ -101,10 +107,10 @@ export function SolarBatterySettings({
     () =>
       driver === 'mqtt'
         ? []
-        : [solar.production_entity, battery.soc_entity, grid.power_entity].filter(
+        : [solar.production_entity, battery.soc_entity, battery.power_entity, grid.power_entity].filter(
             Boolean
           ) as string[],
-    [solar.production_entity, battery.soc_entity, grid.power_entity, driver]
+    [solar.production_entity, battery.soc_entity, battery.power_entity, grid.power_entity, driver]
   )
   const { resolved } = useEntityResolve(entityIds)
 
@@ -154,6 +160,7 @@ export function SolarBatterySettings({
         }
         apply('solar_production', buildEntry(mqtt?.inputs?.solar_production, mqttSolarTopic, hasSolar))
         apply('battery_soc', buildEntry(mqtt?.inputs?.battery_soc, mqttBatteryTopic, hasBattery))
+        apply('battery_power', buildEntry(mqtt?.inputs?.battery_power, mqttBatteryPowerTopic, hasBattery))
         apply('grid_power', buildEntry(mqtt?.inputs?.grid_power, mqttGridTopic, hasGrid))
         const updatedMqtt = { ...mqtt, inputs: newInputs }
         const resp = await fetch(apiUrl('api/config/mqtt'), {
@@ -304,25 +311,94 @@ export function SolarBatterySettings({
         {hasBattery && (
           <div className="space-y-4 pl-4 border-l-2 border-[var(--border)]">
             {driver === 'ha' ? (
-              <EntityField
-                label="Battery SoC Entity"
-                value={battery.soc_entity || ''}
-                friendlyName={resolved[battery.soc_entity || '']?.friendly_name}
-                state={resolved[battery.soc_entity || '']?.state}
-                unit={resolved[battery.soc_entity || '']?.unit}
-                onChange={(v) => setBattery(prev => ({ ...prev, soc_entity: v || undefined }))}
-                placeholder="sensor.battery_soc"
-                helpText={SOLAR.batteryEntity}
-              />
+              <>
+                <EntityField
+                  label="Battery SoC Entity"
+                  value={battery.soc_entity || ''}
+                  friendlyName={resolved[battery.soc_entity || '']?.friendly_name}
+                  state={resolved[battery.soc_entity || '']?.state}
+                  unit={resolved[battery.soc_entity || '']?.unit}
+                  onChange={(v) => setBattery(prev => ({ ...prev, soc_entity: v || undefined }))}
+                  placeholder="sensor.battery_soc"
+                  helpText={SOLAR.batteryEntity}
+                />
+                <EntityField
+                  label="Battery Power Entity"
+                  value={battery.power_entity || ''}
+                  friendlyName={resolved[battery.power_entity || '']?.friendly_name}
+                  state={resolved[battery.power_entity || '']?.state}
+                  unit={resolved[battery.power_entity || '']?.unit}
+                  onChange={(v) => setBattery(prev => ({ ...prev, power_entity: v || undefined }))}
+                  placeholder="sensor.battery_power"
+                  helpText={SOLAR.batteryPowerEntity}
+                />
+              </>
             ) : (
-              <TopicField
-                label="Battery SoC Topic"
-                value={mqttBatteryTopic}
-                onChange={setMqttBatteryTopic}
-                placeholder="battery/soc_pct"
-                helpText={SOLAR.batteryEntity}
-              />
+              <>
+                <TopicField
+                  label="Battery SoC Topic"
+                  value={mqttBatteryTopic}
+                  onChange={setMqttBatteryTopic}
+                  placeholder="battery/soc_pct"
+                  helpText={SOLAR.batteryEntity}
+                />
+                <TopicField
+                  label="Battery Power Topic"
+                  value={mqttBatteryPowerTopic}
+                  onChange={setMqttBatteryPowerTopic}
+                  placeholder="battery/power_kw"
+                  helpText={SOLAR.batteryPowerEntity}
+                />
+              </>
             )}
+            {/* INSTRUCTION-606C — the sign of the power input and the price of
+                battery energy (606B), on both drivers. */}
+            <label className="flex items-center gap-2 text-sm text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={battery.power_invert === true}
+                onChange={(e) =>
+                  setBattery(prev => ({ ...prev, power_invert: e.target.checked ? true : undefined }))
+                }
+                className="accent-[var(--accent)]"
+              />
+              Sensor reads positive while charging
+              <HelpTip text={SOLAR.batteryPowerInvert} size={12} />
+            </label>
+            <div>
+              <label
+                htmlFor="battery-stored-energy-rate"
+                className="text-xs font-medium text-[var(--text)] mb-1 flex items-center gap-1"
+              >
+                Battery energy price (£/kWh)
+                <HelpTip text={SOLAR.batteryStoredEnergyRate} size={12} />
+              </label>
+              <input
+                id="battery-stored-energy-rate"
+                type="number"
+                step="0.01"
+                min="0"
+                value={rateText}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  setRateText(raw)
+                  // 606C-L1 — the key is written from the raw input value, not
+                  // from rateText, which the running handler does not see yet.
+                  const n = raw.trim() === '' ? NaN : Number(raw)
+                  setBattery(prev => ({
+                    ...prev,
+                    stored_energy_rate_gbp_per_kwh:
+                      Number.isFinite(n) && n >= 0 && n <= 2.0 ? n : undefined,
+                  }))
+                }}
+                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              />
+              {parseFloat(rateText) > 2.0 && (
+                <p className="mt-1 text-xs text-[var(--amber)]">
+                  Above £2.00/kWh — check the unit (pounds, not pence)
+                </p>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-[var(--text)] mb-1">

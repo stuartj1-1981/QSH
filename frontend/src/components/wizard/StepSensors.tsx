@@ -489,6 +489,15 @@ function HaSensors({ config, onUpdate }: StepSensorsProps) {
                 }
                 candidates={candidates.battery_soc || []}
               />
+              <EntityPicker
+                slot="battery_power"
+                label="Battery Power"
+                value={(config.battery as BatteryYaml | undefined)?.power_entity || ''}
+                onChange={(v) =>
+                  onUpdate('battery', { ...(config.battery as object || {}), power_entity: v || undefined })
+                }
+                candidates={candidates.battery_power || []}
+              />
             </div>
           )}
         </div>
@@ -585,6 +594,15 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
     } else {
       delete newInputs[key]
     }
+    onUpdate('mqtt', { ...mqtt, inputs: newInputs })
+  }
+
+  // INSTRUCTION-606C — clear several input keys in one write. Two updateInput
+  // calls in one handler each build from the render-time inputs, so the second
+  // would write the first key back.
+  const clearInputs = (keys: string[]) => {
+    const newInputs = { ...inputs }
+    for (const k of keys) delete newInputs[k]
     onUpdate('mqtt', { ...mqtt, inputs: newInputs })
   }
 
@@ -862,7 +880,7 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 Yes
               </button>
               <button
-                onClick={() => { setHasBattery(false); updateInput('battery_soc', ''); clearLegacySectionTopic('battery', 'soc_topic') }}
+                onClick={() => { setHasBattery(false); clearInputs(['battery_soc', 'battery_power']); clearLegacySectionTopic('battery', 'soc_topic') }}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                   !hasBattery
                     ? 'bg-[var(--accent)] text-white'
@@ -881,6 +899,14 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 format={inputs.battery_soc?.format}
                 jsonPath={inputs.battery_soc?.json_path}
                 onChange={(topic, fmt, jp) => updateInput('battery_soc', topic, fmt, jp)}
+                scanResults={scanResults}
+              />
+              <TopicPicker
+                label="Battery Power"
+                value={getInputTopic('battery_power')}
+                format={inputs.battery_power?.format}
+                jsonPath={inputs.battery_power?.json_path}
+                onChange={(topic, fmt, jp) => updateInput('battery_power', topic, fmt, jp)}
                 scanResults={scanResults}
               />
             </div>

@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [1.6.22] — 2026-10-27
+
+### Added
+- MQTT installs can use a window contact per room (topic, JSON key, an option
+  for sensors that read true when closed, and the open delay), in the setup
+  wizard and Settings.
+- Home battery power input (Home Assistant or MQTT), with a sign option and a
+  price for battery energy, in Settings › Solar & Battery and the setup
+  wizard.
+
+### Changed
+- The privacy policy has changed: room names are now never sent, including in
+  the health messages of the swarm self-suspension function.
+- Running cost is priced with the solar-aware electricity price, and battery
+  discharge is no longer read as solar surplus. On a hybrid install with no
+  battery price set, a heat pump fed by the battery can now lose to the
+  boiler. Set a battery price below the import rate to change this.
+
+### Fixed
+- Time to comfort now shares heat between cold rooms by emitter size, ignores
+  rooms whose valve is closed, names the rooms that cannot reach their target,
+  and shows "Heating hot water" or "Heating off" instead of "Insufficient
+  capacity" when that is the cause.
+- The Home cooling banner no longer shows during a hot-water cycle, and these
+  cycles are no longer learned as cooling.
+- With data sharing off, unsent daily data files are deleted at start.
+- The daily swarm figures now cover the completed day, and swarm
+  self-suspension messages now match the server's format.
+
 ## [1.6.21] — 2026-10-25
 
 ### Added

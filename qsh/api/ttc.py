@@ -10,7 +10,7 @@ Each deficit room is solved independently.  System TTC = max across rooms.
 
 import logging
 import math
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,18 @@ def calculate_per_room_ttc(
     room_demands: Optional[Dict[str, float]] = None,
     total_active_demand: float = 0.0,
     aggregate_heat_up: float = 0.0,
+    # INSTRUCTION-603A (FI-92) — emitter share, closed valves, per-room cause.
+    flow_temp: Optional[float] = None,
+    emitter_kw: Optional[Dict[str, float]] = None,
+    emitter_exponents: Optional[Dict[str, float]] = None,
+    closed_valve_rooms: Optional[Set[str]] = None,
+    reasons: Optional[Dict[str, str]] = None,
 ) -> Tuple[float, Dict[str, float]]:
     """Calculate per-room time-to-comfort using Newton's law of heating.
 
     Returns:
         (system_ttc, per_room_dict) where:
-        - system_ttc: max across deficit rooms; -1.0 if any room cannot recover
+        - system_ttc: the longest time over the rooms that recover; 0.0 with no room in deficit; -1.0 when rooms are in deficit and none recovers. reasons, when given, is filled with one of "at_comfort", "recovering", "no_heat", "cannot_reach" per room.
         - per_room_dict: {room: ttc} with 0.0 (at comfort), positive (hours),
           or -1.0 (cannot recover)
     """
@@ -86,13 +92,55 @@ def calculate_per_room_ttc(
     design_internal = config.get("overtemp_protection", 23.0)
     design_delta = design_internal - peak_ext
 
-    facings = config.get("facings", {})
+    # INSTRUCTION-603A (FI-92(b)) — the prior U is shared by area only.
+    sum_area = sum(room_areas.get(r, 0) for r in room_areas)
 
-    # Pre-compute sum_af for U fallback
-    sum_af = sum(
-        room_areas.get(r, 0) * facings.get(r, 0.2)
-        for r in room_areas
-    )
+    # INSTRUCTION-603A (FI-92) — the emitter share of the recovery regime.
+    # It is admitted when the regime is recovery, flow_temp is a finite
+    # number and every room in deficit has a declared emitter output (0.0 is a
+    # declaration: the room has no emitter). A room in closed_valve_rooms, or
+    # with a declared output of 0.0, takes no share. Return temperature: flow
+    # minus 5 C, as INSTRUCTION-593. When the share is not admitted, every
+    # room keeps the demand share. A failure here keeps the demand share.
+    closed = closed_valve_rooms or set()
+    emitter_out: Dict[str, float] = {}
+    emitter_share = False
+    if (
+        not equilibrium_regime
+        and flow_temp is not None
+        and math.isfinite(flow_temp)
+        and emitter_kw
+    ):
+        try:
+            from ..projection.emitter_model import DEFAULT_EXPONENT_RAD, emitter_output
+            exps = emitter_exponents or {}
+            emitter_share = True
+            for room in room_areas:
+                temp = room_temps.get(room)
+                target = room_targets.get(room)
+                if temp is None or target is None or temp >= target - deadband:
+                    continue
+                kw = emitter_kw.get(room)
+                if kw is None or not math.isfinite(kw) or kw < 0.0:
+                    emitter_share = False
+                    break
+                if room in closed or kw == 0.0:
+                    emitter_out[room] = 0.0
+                    continue
+                emitter_out[room] = emitter_output(
+                    rated_kw=kw, flow_temp=flow_temp, return_temp=flow_temp - 5.0,
+                    room_temp=temp, exponent=exps.get(room, DEFAULT_EXPONENT_RAD),
+                )
+        except Exception as exc:  # noqa: BLE001 — the share is display only
+            logger.debug("TTC: emitter share not used (%s)", exc)
+            emitter_share = False
+        if not emitter_share:
+            emitter_out = {}
+    total_emitter_out = sum(emitter_out.values())
+    n_deficit = 0
+    n_recovering = 0
+    if reasons is None:
+        reasons = {}
 
     per_room: Dict[str, float] = {}
     system_ttc = 0.0
@@ -109,9 +157,11 @@ def calculate_per_room_ttc(
         # Room already at comfort
         if temp >= effective_target:
             per_room[room] = 0.0
+            reasons[room] = "at_comfort"
             continue
 
         deficit = effective_target - temp  # Always positive here
+        n_deficit += 1
 
         # Assign room_demand once — used by both regime branches
         room_demand = room_demands.get(room, 0.0) if room_demands else 0.0
@@ -132,7 +182,7 @@ def calculate_per_room_ttc(
                     t_hours = (c_val * deficit) / room_share
                 else:
                     per_room[room] = -1.0
-                    system_ttc = -1.0
+                    reasons[room] = "no_heat"
                     continue
 
             t_hours = min(t_hours, 48.0)
@@ -143,8 +193,9 @@ def calculate_per_room_ttc(
                 room, t_hours, deficit, c_val,
             )
 
-            if system_ttc != -1.0:
-                system_ttc = max(system_ttc, t_hours)
+            system_ttc = max(system_ttc, t_hours)
+            n_recovering += 1
+            reasons[room] = "recovering"
             continue
 
         # --- Recovery regime (or equilibrium outlier with deficit > 1.0) ---
@@ -155,10 +206,9 @@ def calculate_per_room_ttc(
         # --- U: heat loss coefficient (kW/degC) ---
         u_val = learned_u.get(room)
         if u_val is None:
-            if design_delta > 0 and sum_af > 0:
+            if design_delta > 0 and sum_area > 0:
                 whole_building_u = peak_loss / design_delta
-                room_af = area * facings.get(room, 0.2)
-                u_val = whole_building_u * (room_af / sum_af)
+                u_val = whole_building_u * (area / sum_area)
             else:
                 # Last-resort fallback with 5 degC floor
                 u_val = room_losses.get(room, 0.05) / max(temp - outdoor_temp, 5.0)
@@ -166,7 +216,14 @@ def calculate_per_room_ttc(
             u_val = max(u_val, 0.001)
 
         # --- Q_in: demand-weighted with valve-share fallback ---
-        if room_demands and total_active_demand > 0.01:
+        if room in closed:
+            q_in = 0.0
+        elif emitter_share:
+            q_in = (
+                hp_thermal_kw * emitter_out.get(room, 0.0) / total_emitter_out
+                if total_emitter_out > 0.0 else 0.0
+            )
+        elif room_demands and total_active_demand > 0.01:
             q_in = hp_thermal_kw * (room_demand / total_active_demand) if room_demand > 0.01 else 0.0
         else:
             # Fallback to valve-share if room_demands unavailable
@@ -182,7 +239,7 @@ def calculate_per_room_ttc(
                 "TTC: %s=-1.0 (no heat delivery: q_in=%.2f hp=%.2fkW)",
                 room, q_in, hp_thermal_kw,
             )
-            system_ttc = -1.0
+            reasons[room] = "no_heat"
             continue
 
         # --- Equilibrium temperature ---
@@ -195,7 +252,7 @@ def calculate_per_room_ttc(
                 "TTC: %s=-1.0 (Teq=%.1f <= target=%.1f, C=%.3f U=%.3f Q=%.2f)",
                 room, t_eq, effective_target, c_val, u_val, q_in,
             )
-            system_ttc = -1.0
+            reasons[room] = "cannot_reach"
             continue
 
         # --- Analytical solution ---
@@ -213,9 +270,13 @@ def calculate_per_room_ttc(
             room, t_hours, c_val, u_val, q_in, t_eq,
         )
 
-        if system_ttc != -1.0:
-            system_ttc = max(system_ttc, t_hours)
+        system_ttc = max(system_ttc, t_hours)
+        n_recovering += 1
+        reasons[room] = "recovering"
 
+    # INSTRUCTION-603A (FI-92) — -1.0 only when no room in deficit recovers.
+    if n_deficit > 0 and n_recovering == 0:
+        system_ttc = -1.0
     return (system_ttc, per_room)
 
 
@@ -224,6 +285,9 @@ def classify_recovery_state(
     hp_thermal_kw: float,
     capacity_pct: float,
     min_load_pct: float,
+    hot_water_active: bool = False,
+    no_heat: bool = False,
+    unreachable: bool = False,
 ) -> str:
     """Say what the time-to-comfort figure means.
 
@@ -236,6 +300,9 @@ def classify_recovery_state(
         "insufficient_capacity" - heat pump runs, a room cannot reach target
         "at_comfort"            - heat pump runs, every room is at target
         "recovering"            - heat pump runs, system_ttc is the hours to go
+        "hot_water"             - heat pump runs and heats the hot-water cylinder
+        "no_heat"               - heat pump runs, every room that cannot reach
+                                  target gets no heat
         "no_demand"             - heat pump off, demand below NO_DEMAND_PCT
         "below_minimum"         - heat pump off, demand below the minimum load
         "waiting"               - any other case: heat pump off with enough
@@ -243,12 +310,17 @@ def classify_recovery_state(
                                   finite
 
     capacity_pct and min_load_pct are the two figures of the capacity bar.
+    "at_comfort" is returned only when unreachable is False.
     """
     if hp_thermal_kw > HP_RUNNING_KW:
+        # INSTRUCTION-603B — the heat goes to the cylinder, not to the rooms.
+        if hot_water_active is True:
+            return "hot_water"
         if not math.isfinite(system_ttc):
             return "waiting"
-        if system_ttc < 0:
-            return "insufficient_capacity"
+        # A room that cannot reach target is never shown as at comfort.
+        if system_ttc < 0 or (system_ttc <= AT_COMFORT_HOURS and unreachable is True):
+            return "no_heat" if no_heat is True else "insufficient_capacity"
         if system_ttc <= AT_COMFORT_HOURS:
             return "at_comfort"
         return "recovering"

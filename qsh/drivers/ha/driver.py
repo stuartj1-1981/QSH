@@ -516,6 +516,14 @@ class HADriver:
         for room, quality in getattr(sensor_data, "valve_signal_quality", {}).items():
             signal_quality[f"valve_positions.{room}"] = quality
 
+        # INSTRUCTION-606B — the grid reading's quality, as the MQTT driver
+        # publishes it, so that a stale or unavailable grid entity is not read
+        # as a live 0.0 by the effective price (_grid_power_or_none).
+        if (config.get("entities") or {}).get("grid_power"):
+            signal_quality["grid_power"] = (
+                "good" if getattr(sensor_data, "has_live_grid_power", False) is True else "stale"
+            )
+
         # INSTRUCTION-427 D5(a) — absent-room observable (observe-only). A
         # configured room absent from room_temps post-fetch produced no value
         # (dead sensor); the loop above never grades it, so it defaults 'good'
@@ -639,12 +647,15 @@ class HADriver:
             # sibling heat-source fields (same defrost predicate as
             # defrost_active, same has_live_return_temp as below). bool(None) is
             # False, so an unmapped sensor → exactly 363.
+            # INSTRUCTION-602 — the hydraulic detector is masked while hot water
+            # is active; the mapped sensor is not.
             cooling_active=bool(_cooling_sensor) or derive_cooling_active(
                 sensor_data.hp_power,
                 sensor_data.hp_flow_temp,
                 sensor_data.hp_return_temp,
                 (_defrost_valve or 0) > 0,
                 sensor_data.has_live_return_temp,
+                hot_water_active=sensor_data.hot_water_active,
             ),
             # Valve positions
             valve_positions=dict(sensor_data.heating_percs),
@@ -657,6 +668,8 @@ class HADriver:
             solar_production=sensor_data.solar_production,
             grid_power=sensor_data.grid_power,
             battery_soc=sensor_data.battery_soc,
+            battery_power=getattr(sensor_data, "battery_power", 0.0),
+            has_live_battery_power=getattr(sensor_data, "has_live_battery_power", False),
             # INSTRUCTION-371A — per-device battery SoC + room attribution.
             device_battery_soc=dict(getattr(sensor_data, "device_battery_soc", {})),
             device_room=dict(getattr(sensor_data, "device_room", {})),

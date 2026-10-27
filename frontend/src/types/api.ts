@@ -276,6 +276,8 @@ export type RecoveryState =
   | 'recovering'
   | 'at_comfort'
   | 'waiting'
+  | 'hot_water'
+  | 'no_heat'
 
 export interface StatusResponse {
   timestamp: number
@@ -307,6 +309,7 @@ export interface StatusResponse {
   outdoor_temp: number
   recovery_time_hours: number
   recovery_state?: RecoveryState
+  ttc_unreachable_rooms?: string[]
   capacity_pct: number
   hp_capacity_kw: number
   min_load_pct: number
@@ -393,6 +396,7 @@ export interface CycleMessage {
     outdoor_temp: number
     recovery_time_hours: number
     recovery_state?: RecoveryState
+    ttc_unreachable_rooms?: string[]
     per_room_ttc?: Record<string, number>
     capacity_pct: number
     hp_capacity_kw: number

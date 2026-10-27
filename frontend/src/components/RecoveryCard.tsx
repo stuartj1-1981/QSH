@@ -6,6 +6,7 @@ interface RecoveryCardProps {
   recoveryState: RecoveryState
   recoveryTimeHours: number
   capacityPct: number
+  unreachableRooms?: string[]
 }
 
 // The text for every state except `recovering`, which shows the time.
@@ -15,7 +16,16 @@ const STATE_TEXT: Record<Exclude<RecoveryState, 'recovering'>, string> = {
   insufficient_capacity: 'Insufficient capacity',
   at_comfort: 'At comfort',
   waiting: '\u2014',
+  hot_water: 'Heating hot water',
+  no_heat: 'Heating off',
 }
+
+// INSTRUCTION-603B — the states below which the count of unreachable rooms shows.
+const UNREACHABLE_LINE_STATES: ReadonlySet<RecoveryState> = new Set<RecoveryState>([
+  'recovering',
+  'insufficient_capacity',
+  'no_heat',
+])
 
 function formatRecoveryTime(hours: number): string {
   if (hours >= 24) return '24h+'
@@ -31,7 +41,7 @@ function capacityColor(pct: number): string {
   return 'var(--green)'
 }
 
-export const RecoveryCard = memo(function RecoveryCard({ recoveryState, recoveryTimeHours, capacityPct }: RecoveryCardProps) {
+export const RecoveryCard = memo(function RecoveryCard({ recoveryState, recoveryTimeHours, capacityPct, unreachableRooms }: RecoveryCardProps) {
   const atComfort = recoveryState === 'at_comfort'
   const color = capacityColor(capacityPct)
   // A state that the table lacks (a newer backend) shows the dash.
@@ -48,6 +58,17 @@ export const RecoveryCard = memo(function RecoveryCard({ recoveryState, recovery
         <span className="text-xs text-[var(--text-muted)]">Time to comfort</span>
       </div>
       <div className="text-lg font-semibold">{display}</div>
+      {unreachableRooms && unreachableRooms.length > 0 && UNREACHABLE_LINE_STATES.has(recoveryState) && (
+        <div
+          data-testid="recovery-unreachable"
+          className="text-xs text-[var(--text-muted)]"
+          title={unreachableRooms.join(', ')}
+        >
+          {unreachableRooms.length === 1
+            ? '1 room cannot reach target'
+            : `${unreachableRooms.length} rooms cannot reach target`}
+        </div>
+      )}
     </div>
   )
 })

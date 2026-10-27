@@ -81,11 +81,51 @@ describe('RecoveryCard', () => {
       recovering: true,
       at_comfort: true,
       waiting: true,
+      hot_water: true,
+      no_heat: true,
     }
     for (const state of Object.keys(every) as RecoveryState[]) {
       const { unmount } = render(<RecoveryCard recoveryState={state} recoveryTimeHours={1} capacityPct={50} />)
       expect(screen.getByTestId('recovery-card').textContent).not.toBe('Time to comfort')
       unmount()
     }
+  })
+
+  // INSTRUCTION-603B — hot water, no heat, and the rooms that cannot reach target.
+  it('shows "Heating hot water" when the state is hot_water', () => {
+    render(<RecoveryCard recoveryState="hot_water" recoveryTimeHours={2} capacityPct={50} />)
+    expect(screen.getByText('Heating hot water')).toBeDefined()
+  })
+
+  it('shows "Heating off" when the state is no_heat', () => {
+    render(<RecoveryCard recoveryState="no_heat" recoveryTimeHours={-1} capacityPct={50} />)
+    expect(screen.getByText('Heating off')).toBeDefined()
+  })
+
+  it('names one room that cannot reach target below the time', () => {
+    render(<RecoveryCard recoveryState="recovering" recoveryTimeHours={2.5} capacityPct={50} unreachableRooms={['den']} />)
+    expect(screen.getByText('2h 30m')).toBeDefined()
+    const line = screen.getByTestId('recovery-unreachable')
+    expect(line.textContent).toBe('1 room cannot reach target')
+    expect(line.getAttribute('title')).toBe('den')
+  })
+
+  it('counts three rooms that cannot reach target', () => {
+    render(<RecoveryCard recoveryState="recovering" recoveryTimeHours={1} capacityPct={50} unreachableRooms={['a', 'b', 'c']} />)
+    expect(screen.getByTestId('recovery-unreachable').textContent).toBe('3 rooms cannot reach target')
+  })
+
+  it('names the rooms below "Insufficient capacity"', () => {
+    render(<RecoveryCard recoveryState="insufficient_capacity" recoveryTimeHours={-1} capacityPct={95} unreachableRooms={['a', 'b']} />)
+    expect(screen.getByText('Insufficient capacity')).toBeDefined()
+    expect(screen.getByTestId('recovery-unreachable').textContent).toBe('2 rooms cannot reach target')
+  })
+
+  it('shows no second line at comfort or with an empty list', () => {
+    const { unmount } = render(<RecoveryCard recoveryState="at_comfort" recoveryTimeHours={0} capacityPct={20} unreachableRooms={['den']} />)
+    expect(screen.queryByTestId('recovery-unreachable')).toBeNull()
+    unmount()
+    render(<RecoveryCard recoveryState="recovering" recoveryTimeHours={1} capacityPct={50} unreachableRooms={[]} />)
+    expect(screen.queryByTestId('recovery-unreachable')).toBeNull()
   })
 })

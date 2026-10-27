@@ -709,6 +709,16 @@ def _score_entity(entity: Dict, slot: str, room: str = "") -> int:
         if "grid_power" in eid_lower or "import" in eid_lower:
             score += 10
 
+    elif slot == "battery_power":
+        if not eid.startswith("sensor."):
+            return 0
+        if device_class == "power":
+            score += 10
+        if "battery" in eid_lower:
+            score += 20
+        if "power" in eid_lower or "discharge" in eid_lower:
+            score += 10
+
     elif slot == "water_heater":
         if not eid.startswith("water_heater."):
             return 0
@@ -860,6 +870,7 @@ def scan_entities(req: EntityScanRequest = EntityScanRequest()):
         "solar_production": _scan_for_slot(all_entities, "solar_production"),
         "battery_soc": _scan_for_slot(all_entities, "battery_soc"),
         "grid_power": _scan_for_slot(all_entities, "grid_power"),
+        "battery_power": _scan_for_slot(all_entities, "battery_power"),
         "water_heater": _scan_for_slot(all_entities, "water_heater"),
         "hot_water_boolean": _scan_for_slot(all_entities, "hot_water_boolean"),
         "hw_tank_top": _scan_for_slot(all_entities, "hw_tank_top"),
@@ -1535,6 +1546,27 @@ def validate_config(req: WizardValidateRequest):
         grid = cfg.get("grid", {})
         if battery.get("soc_entity") and not grid.get("power_entity"):
             warnings.append("Battery configured without grid power entity — grid-aware charging disabled")
+        # INSTRUCTION-606A — the battery power input (HA keys or MQTT topics)
+        # and the price of battery energy (key of INSTRUCTION-606B).
+        _mi = (cfg.get("mqtt") or {}).get("inputs") or {}
+        _has_soc = bool(battery.get("soc_entity") or _mi.get("battery_soc"))
+        _has_grid = bool(grid.get("power_entity") or _mi.get("grid_power"))
+        _has_power = bool(battery.get("power_entity") or _mi.get("battery_power"))
+        if _has_soc and _has_grid and not _has_power:
+            warnings.append(
+                "Battery configured without a battery power input — the effective "
+                "electricity price reads battery discharge as solar surplus"
+            )
+        _rate = battery.get("stored_energy_rate_gbp_per_kwh")
+        if (
+            isinstance(_rate, (int, float)) and not isinstance(_rate, bool)
+            and _rate > TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH
+        ):
+            warnings.append(
+                f"Battery energy price {_rate} £/kWh is above "
+                f"£{TARIFF_RATE_PLAUSIBLE_MAX_GBP_PER_KWH:.2f}/kWh — QSH prices battery "
+                "energy at the import rate instead; check the unit (pounds, not pence)"
+            )
 
         # ── INSTRUCTION-324: template-inheritance + plausibility detectors ──
         # The Vaillant P3 case: a solar block with 27.78 kW capacity and no
