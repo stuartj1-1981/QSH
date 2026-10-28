@@ -517,6 +517,44 @@ def off_hold_applies(optimal_mode, prev_mode, last_sent_mode) -> bool:
     return not (last_sent_mode == "heat" and prev_mode == "heat")
 
 
+def trv_setpoint_route(room, config):
+    """INSTRUCTION-608C — what apply_hardware_control sends as the TRV
+    setpoint of ``room``. The one test of the TRV-setpoint branch:
+    apply_hardware_control and valve_dispatch.ha_bypass_path both call it.
+
+    "type2": a direct Type 2 room whose valve check passes gets
+    TYPE2_TRV_SETPOINT_C, raw, so the TRV follows the degrees QSH writes
+    (INSTRUCTION-599). "target": an indirect room, or a direct room whose
+    generic valve entity reads None, gets its target, offset-compensated.
+    None: a persistent zone (the user sets its TRV), a room with no
+    "<room>_temp_set_hum" entity, a room of mode "none", or a direct room
+    that QSH writes through its valve entity.
+
+    The config reads, their order and the two HA reads are those of the
+    branch before INSTRUCTION-608C, so each patch point stays where it was.
+    """
+    from . import valve_dispatch as _vd
+    from qsh.valve_control import VALVE_HARDWARE_DIRECT_TYPE2
+
+    if room in set(config.get("persistent_zones", [])):
+        return None  # Don't override user-set TRV setpoints
+    config_mode = config["room_control_mode"].get(room, "indirect")
+    if room + "_temp_set_hum" not in config["entities"]:
+        return None
+    if (
+        config_mode == "direct"
+        and config.get("room_valve_hardware", {}).get(room) == VALVE_HARDWARE_DIRECT_TYPE2
+        and _vd.check_direct_valve_available(room, config)[0]
+    ):
+        return "type2"
+    if config_mode == "indirect" or (
+        config_mode == "direct"
+        and fetch_ha_entity(f"number.qsh_{room}_valve_target", default=None, suppress_log=True) is None
+    ):
+        return "target"
+    return None
+
+
 def apply_hardware_control(
     config,
     optimal_mode,
@@ -619,39 +657,23 @@ def apply_hardware_control(
     # TRV SETPOINTS (universal -- works with any heat source)
     # ====================================================================
     if should_update_trvs:
-        persistent_zones = set(config.get("persistent_zones", []))
         rooms_set = []
-        from . import valve_dispatch as _vd
-        from qsh.valve_control import TYPE2_TRV_SETPOINT_C, VALVE_HARDWARE_DIRECT_TYPE2
+        from qsh.valve_control import TYPE2_TRV_SETPOINT_C
         for room in config["rooms"]:
-            if room in persistent_zones:
-                continue  # Don't override user-set TRV setpoints
-
-            entity_key = room + "_temp_set_hum"
-            valve_entity = f"number.qsh_{room}_valve_target"
-            config_mode = config["room_control_mode"].get(room, "indirect")
-
-            if entity_key not in config["entities"]:
+            # INSTRUCTION-608C — the branch test is trv_setpoint_route, which
+            # ha_bypass_path also calls, so the bypass and the TRV setpoints
+            # read the same decision.
+            route = trv_setpoint_route(room, config)
+            if route is None:
                 continue
 
-            # INSTRUCTION-599 — a direct Type 2 room whose closing-degree
-            # entities resolve (check_direct_valve_available) gets
-            # TYPE2_TRV_SETPOINT_C, raw (no offset compensation), so the TRV
-            # follows the degrees QSH writes. A Type 2 room for which the check
-            # returns False falls back to the setpoint fan-out below, as at the
-            # pin (§8 OI-3).
-            type2_degrees = (
-                config_mode == "direct"
-                and config.get("room_valve_hardware", {}).get(room) == VALVE_HARDWARE_DIRECT_TYPE2
-                and _vd.check_direct_valve_available(room, config)[0]
-            )
+            entity_key = room + "_temp_set_hum"
+            type2_degrees = route == "type2"
 
             if type2_degrees:
                 temperature = TYPE2_TRV_SETPOINT_C
                 offset = 0.0
-            elif config_mode == "indirect" or (
-                config_mode == "direct" and fetch_ha_entity(valve_entity, default=None, suppress_log=True) is None
-            ):
+            else:
                 # Apply TRV sensor offset compensation
                 # room_targets[room] is the REAL desired temperature
                 # Compensated setpoint accounts for TRV reading hot
@@ -661,8 +683,6 @@ def apply_hardware_control(
                 else:
                     temperature = real_target
                 offset = trv_offset_tracker.get_offset(room) if trv_offset_tracker else 0.0
-            else:
-                continue
 
             data = {"entity_id": config["entities"][entity_key], "temperature": temperature}
             outcome = set_ha_service("climate", "set_temperature", data)
