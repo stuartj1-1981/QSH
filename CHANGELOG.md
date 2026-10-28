@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.6.23] — 2026-10-28
+
+### Fixed
+- A directly controlled room (Home Assistant or MQTT valve) chosen by the
+  hydraulic bypass is now opened by its valve, and its target no longer shows
+  the bypass setpoint.
+- The hydraulic bypass no longer chooses a room that QSH cannot open: one with
+  no controllable valve, no auxiliary output and no TRV setpoint that QSH
+  writes, or one in manual or degraded. When no room can be used, a single
+  warning is logged and the flow limit for nearly closed valves stays in force.
+
 ## [1.6.22] — 2026-10-27
 
 ### Added

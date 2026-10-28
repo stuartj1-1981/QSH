@@ -40,6 +40,8 @@ from ...valve_control import (
     direct_slew_limit,
     DIRECT_LAW_MIN_MOVE_INTERVAL_S,
     DIRECT_LAW_LIMITED_HARDWARE,
+    aux_output_enabled,
+    BYPASS_VALVE_POSITION_PCT,
 )
 
 
@@ -141,6 +143,41 @@ def check_direct_valve_available(room: str, config: Dict) -> Tuple[bool, str]:
     else:
         logging.warning(f"Unknown valve hardware type '{hardware_type}' for {room}")
         return False, hardware_type
+
+
+def ha_bypass_path(room: str, config: Dict) -> Optional[str]:
+    """INSTRUCTION-608A — the path by which QSH can open ``room`` for a
+    hydraulic bypass on Home Assistant.
+
+    "valve": a direct room with Type 1 or Type 2 hardware whose valve
+    entities resolve, so apply_hybrid_room_control takes the direct branch.
+    "setpoint": the room has an enabled auxiliary output, or
+    apply_hardware_control sends its target as the TRV setpoint (a
+    "<room>_temp_set_hum" entity, not a persistent zone, and an indirect
+    room or a direct room with no generic valve entity). None: no QSH write
+    reaches the room for a bypass. The TRV-setpoint test is
+    hardware_dispatch.trv_setpoint_route (INSTRUCTION-608C).
+    """
+    mode = config.get("room_control_mode", {}).get(room, "indirect")
+    if mode == "none":
+        return None
+    hw_map = config.get("room_valve_hardware", {})
+    if not isinstance(hw_map, dict):
+        hw_map = {}
+    hardware = hw_map.get(room)
+    if (
+        mode == "direct"
+        and hardware in DIRECT_LAW_LIMITED_HARDWARE
+        and check_direct_valve_available(room, config)[0]
+    ):
+        return "valve"
+    if aux_output_enabled(room, config):
+        return "setpoint"
+    # INSTRUCTION-608C — the TRV-setpoint test is the one that
+    # apply_hardware_control uses (hardware_dispatch.trv_setpoint_route).
+    from . import hardware_dispatch as _hwd
+
+    return "setpoint" if _hwd.trv_setpoint_route(room, config) == "target" else None
 
 
 def get_room_valve_fraction(
@@ -576,6 +613,19 @@ def apply_direct_valve_control(
         if not direct_is_hold(deficit, heat_up_rate, last_in0):
             control_state.direct_law_target[room] = law_target
 
+    # INSTRUCTION-608A — the hydraulic bypass, the first input of the
+    # selector. For a room in control_state.hydraulic_bypass_rooms (Type 1
+    # and Type 2 hardware only, by ha_bypass_path) the selector outputs
+    # BYPASS_VALVE_POSITION_PCT in place of the dissipation setpoint and the
+    # law target: no dead-band hold and no 600 s hold of the law. The writer
+    # applies MANUAL, shadow mode, its debounce, the 60 s interval and the
+    # 10 % slew, as for any target. IN0 above is computed on this cycle too.
+    if control_state is not None and room in getattr(control_state, "hydraulic_bypass_rooms", ()):
+        logging.debug(f"{room} direct: hydraulic bypass {BYPASS_VALVE_POSITION_PCT}% selected")
+        return apply_valve_position(
+            room, BYPASS_VALVE_POSITION_PCT, hardware_type, config, dfan_control, control_state
+        )
+
     # INSTRUCTION-596 — the selector (SEL_R). The valve has one writer, and
     # the signal is marshalled before the write. While the dissipation
     # episode holds a setpoint for this room, the selector outputs that
@@ -651,8 +701,9 @@ def apply_valve_position(
 ) -> bool:
     """
     Unified position dispatch for a pre-calculated target: the dissipation
-    setpoint that the selector of apply_direct_valve_control outputs
-    (INSTRUCTION-596), and the degraded-zone park.
+    setpoint and the hydraulic bypass position that the selector of
+    apply_direct_valve_control outputs (INSTRUCTION-596, INSTRUCTION-608A),
+    and the degraded-zone park.
 
     Unlike apply_direct_valve_control (which takes deficit), this takes
     a pre-calculated target position and dispatches by hardware type.

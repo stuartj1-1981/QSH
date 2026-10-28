@@ -243,6 +243,12 @@ def _resolve_ha_defaults(kwargs):
 
         resolved["apply_hybrid_fn"] = _bound_hybrid
 
+    # INSTRUCTION-608A — the write path of a hydraulic bypass room.
+    if resolved.get("bypass_path_fn") is None:
+        from ..drivers.ha.valve_dispatch import ha_bypass_path
+
+        resolved["bypass_path_fn"] = ha_bypass_path
+
     return resolved
 
 
@@ -434,6 +440,12 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
         from ..valve_control import compute_direct_targets
 
         resolved["compute_direct_targets_fn"] = compute_direct_targets
+        # INSTRUCTION-608A — the write path of a hydraulic bypass room. Not
+        # set for mock: the bypass then uses pin_bypass_path.
+        if resolved.get("bypass_path_fn") is None:
+            from ..valve_control import mqtt_bypass_path
+
+            resolved["bypass_path_fn"] = mqtt_bypass_path
 
     logger.info("Pipeline DI: using no-op stubs for %s driver", driver_type)
     return resolved
@@ -610,8 +622,13 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             balancing_detector=kw.get("balancing_detector"),
             get_reliable_cop_fn=kw.get("get_reliable_cop_fn"),
         ),
+        # INSTRUCTION-608A — HydraulicController runs before ValveController,
+        # so the direct law opens a bypass room on the cycle the bypass is
+        # asked for. It writes no room target; ValveController writes the
+        # bypass setpoint into the target of a setpoint-route room after the
+        # room law.
+        HydraulicController(bypass_path_fn=kw.get("bypass_path_fn")),
         valve,
-        HydraulicController(),
         AntifrostOverrideController(),
         shoulder,
         summer,
