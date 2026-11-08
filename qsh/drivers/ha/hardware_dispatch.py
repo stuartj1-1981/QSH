@@ -282,6 +282,64 @@ def _apply_flow_octopus_api(optimal_flow, flow_min, flow_max) -> bool:
 
 
 # INSTRUCTION-595 — a flow write that the heat source did not confirm.
+# INSTRUCTION-613 — the setpoint limits that a TRV climate entity
+# advertises (min_temp, max_temp). Home Assistant refuses a
+# climate.set_temperature outside them (HTTP 400), so the setpoint is held
+# inside them before the write. A read that gives both as finite numbers with
+# min_temp <= max_temp is cached for the entity; any other read is not
+# cached, and the next write reads again (the INSTRUCTION-152 rule).
+_TRV_LIMIT_CACHE: dict = {}
+
+TRV_SETPOINT_CLAMPED_EVENT = "TRV.setpoint_clamped"
+
+
+def _register_trv_clamp_event() -> None:
+    from ...events import EventKind, EventSpec, get_annunciator
+    get_annunciator().register(EventSpec(
+        name=TRV_SETPOINT_CLAMPED_EVENT,
+        kind=EventKind.LATCHED,
+        payload_fields=("room", "requested_c", "sent_c", "min_c", "max_c"),
+        latch_key=("room",),
+        default_level=logging.WARNING,
+    ))
+
+
+def _trv_entity_limits(entity_id):
+    """(min_temp, max_temp) that one climate entity advertises, or None."""
+    cached = _TRV_LIMIT_CACHE.get(entity_id)
+    if cached is not None:
+        return cached
+    full = fetch_ha_entity_full(entity_id, suppress_log=True)
+    if full is None:
+        return None
+    attrs = full.get("attributes", {}) or {}
+    lo, hi = attrs.get("min_temp"), attrs.get("max_temp")
+    if not (_is_finite_number(lo) and _is_finite_number(hi)) or lo > hi:
+        return None
+    _TRV_LIMIT_CACHE[entity_id] = (float(lo), float(hi))
+    return _TRV_LIMIT_CACHE[entity_id]
+
+
+def clamp_trv_setpoint(entity, temperature):
+    """The setpoint held inside the limits of the climate entity, and the
+    limits: (setpoint, (min_c, max_c)). ``entity`` is an entity id or a list
+    of them; with a list the limits are the narrowest that every entity with
+    limits accepts. (temperature, None) when the setpoint is not a finite
+    number (no limit is then read), when no entity gives limits, or when the
+    limits of the entities do not overlap."""
+    if not _is_finite_number(temperature):
+        return temperature, None
+    ids = entity if isinstance(entity, (list, tuple)) else [entity]
+    bounds = [b for b in (_trv_entity_limits(e) for e in ids if isinstance(e, str)) if b is not None]
+    if not bounds:
+        return temperature, None
+    lo = max(b[0] for b in bounds)
+    hi = min(b[1] for b in bounds)
+    if lo > hi:
+        return temperature, None
+    return min(hi, max(lo, temperature)), (lo, hi)
+
+
 FLOW_WRITE_UNCONFIRMED_EVENT = "HA.flow_write_unconfirmed"
 
 
@@ -683,6 +741,18 @@ def apply_hardware_control(
                 else:
                     temperature = real_target
                 offset = trv_offset_tracker.get_offset(room) if trv_offset_tracker else 0.0
+                # INSTRUCTION-613 — inside the limits the TRV advertises.
+                requested = temperature
+                temperature, limits = clamp_trv_setpoint(config["entities"][entity_key], temperature)
+                from ...events import get_annunciator
+                _register_trv_clamp_event()
+                if limits is not None and temperature != requested:
+                    get_annunciator().entered(
+                        TRV_SETPOINT_CLAMPED_EVENT, room=room, requested_c=round(requested, 1),
+                        sent_c=round(temperature, 1), min_c=limits[0], max_c=limits[1],
+                    )
+                else:
+                    get_annunciator().exited(TRV_SETPOINT_CLAMPED_EVENT, room=room, level=logging.INFO)
 
             data = {"entity_id": config["entities"][entity_key], "temperature": temperature}
             outcome = set_ha_service("climate", "set_temperature", data)

@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [1.6.24] — 2026-11-08
+
+### Added
+- Engineering page: a House Heat Loss card. It shows the heat loss
+  coefficient of the house that QSH has learned against the one from your
+  configured design heat loss, their ratio, and the heat loss at the design
+  outdoor temperature with each. A table compares each room's learned value
+  with its design value, highest ratio first. Readings may look inflated;
+  further improvements to system identification are in development.
+
+### Changed
+- The design heat loss is now split over the rooms by area and by the
+  external walls, roof and ground floor each room declares, not by area and
+  facing. A north room with three external walls now carries more of the
+  loss than a south room with one. A room's prior moves after a reset of
+  the room.
+- The design indoor temperature is now the comfort setpoint, not the
+  overtemp protection temperature. On an install with overtemp protection
+  23 and comfort 19, every room heat-loss prior rises by about 18 %.
+- Hydraulic balancing no longer writes its summary lines to the log every
+  20 minutes; a completed window, and the start and end of a room's
+  imbalance, are each logged once.
+- The two hot-water quantities the log called "droop" are now named
+  peak_deficit (the hot-water learner) and fall (the recovery). No value
+  or decision changes.
+
+### Fixed
+- In winter mode, a house that sat a fraction of a degree under target all
+  day now reaches its targets: the flow ceiling slowly lifts while the
+  rooms stay under target and the heat pump is running.
+- At the end of a hot-water cycle the heat pump now follows the heating
+  demand, instead of being turned off by a test that read the hot-water
+  coil return.
+- The hydraulic guards no longer let one room's valve stand for the whole
+  circuit: valve openings are used only when the rooms reporting one carry
+  at least half of the house's declared emitter output.
+- On Home Assistant, a setpoint written to a TRV is now held inside the
+  minimum and maximum the TRV reports, so the hydraulic bypass can open a
+  TRV whose maximum is 25 °C.
+- In shoulder mode the heat source now also restarts when the rooms' total
+  shortfall beyond the deadband is more than 1.5 °C.
+- System identification now shares the heat source's output between rooms
+  by valve opening and each room's declared emitter output, so the
+  emitter_kw of each room now matters to the learned values.
+- A flow or return reading outside 0 to 90 °C (such as the 999.9
+  placeholder some heat pumps send in hot-water mode) is no longer read as
+  a temperature, so it can no longer trip the hydraulic protection.
+
 ## [1.6.23] — 2026-10-28
 
 ### Fixed

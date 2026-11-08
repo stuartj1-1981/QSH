@@ -12,6 +12,8 @@ import logging
 import math
 from typing import Dict, Optional, Set, Tuple
 
+from qsh.thermal import room_loss_weight
+
 logger = logging.getLogger(__name__)
 
 # Thresholds of classify_recovery_state (INSTRUCTION-582).
@@ -89,11 +91,12 @@ def calculate_per_room_ttc(
     # Design-condition U fallback parameters
     peak_loss = config.get("peak_loss", 5.0)
     peak_ext = config.get("peak_ext", -3.0)
-    design_internal = config.get("overtemp_protection", 23.0)
+    design_internal = config.get("comfort_temp", 20.0)
     design_delta = design_internal - peak_ext
 
-    # INSTRUCTION-603A (FI-92(b)) — the prior U is shared by area only.
-    sum_area = sum(room_areas.get(r, 0) for r in room_areas)
+    # INSTRUCTION-603A (FI-92(b)) shared the prior U by area; INSTRUCTION-622B
+    # shares it by area × exposure, the house's one split.
+    sum_weight = sum(room_loss_weight(config, r, room_areas.get(r, 0)) for r in room_areas)
 
     # INSTRUCTION-603A (FI-92) — the emitter share of the recovery regime.
     # It is admitted when the regime is recovery, flow_temp is a finite
@@ -206,9 +209,9 @@ def calculate_per_room_ttc(
         # --- U: heat loss coefficient (kW/degC) ---
         u_val = learned_u.get(room)
         if u_val is None:
-            if design_delta > 0 and sum_area > 0:
+            if design_delta > 0 and sum_weight > 0:
                 whole_building_u = peak_loss / design_delta
-                u_val = whole_building_u * (area / sum_area)
+                u_val = whole_building_u * (room_loss_weight(config, room, area) / sum_weight)
             else:
                 # Last-resort fallback with 5 degC floor
                 u_val = room_losses.get(room, 0.05) / max(temp - outdoor_temp, 5.0)

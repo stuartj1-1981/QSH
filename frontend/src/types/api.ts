@@ -513,6 +513,29 @@ export interface SysidRoom {
   fixed_setpoint?: number | null
   /** INSTRUCTION-420 — optional because backends pre-dating 420 omit it. */
   sensor_cadence?: SensorCadence | null
+  /** INSTRUCTION-614 — the design U of the room (its prior, kW/°C) and the
+   *  ratio of the effective U to it. Null when sysid holds no valid prior;
+   *  optional because backends pre-dating 614 omit them. */
+  u_prior_kw_per_c?: number | null
+  u_vs_design?: number | null
+}
+
+/** INSTRUCTION-614 — the whole-house heat loss coefficient from
+ *  `/api/sysid`. The learned value is the sum of the effective U of the
+ *  rooms; the design value is peak_loss ÷ (overtemp_protection − peak_ext)
+ *  from the config now. The ratio and the loss at design are null unless
+ *  every room has a learned U. */
+export interface InstallationHeatLoss {
+  u_learned_kw_per_c: number | null
+  u_design_kw_per_c: number | null
+  ratio: number | null
+  design_loss_kw: number | null
+  design_delta_c: number | null
+  learned_loss_at_design_kw: number | null
+  rooms_total: number
+  rooms_learned: number
+  rooms_above_cap: number
+  cap_mult: number
 }
 
 /** INSTRUCTION-415 — detailed per-room SysID state from `/api/sysid/{room}`.
@@ -569,6 +592,8 @@ export interface SysidResponse {
   rooms: Record<string, SysidRoom>
   // Optional because backends pre-dating 227B do not emit the key.
   installation_solar_capacity_kw?: InstallationSolarCapacity | null
+  // INSTRUCTION-614 — optional because backends pre-dating 614 omit it.
+  installation_heat_loss?: InstallationHeatLoss | null
 }
 
 // Trend persistence types
