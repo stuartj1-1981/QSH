@@ -18,6 +18,8 @@ from ...forecast.compute import derive_daily_lows
 from ...signal_bus import InputBlock, OutputBlock, derive_cooling_active, normalise_battery_power_kw
 from ...api.state import shared_state
 from ...events import EventKind, EventSpec, get_annunciator
+from ...heat_source_limits import water_temp_in_band
+from ...valve_control import hydraulic_open_fraction
 from ...utils import MISSING, resolve_control_enabled
 from ...occupancy.comfort_schedule import get_comfort_schedule_store
 from .client import MQTTClient, MQTTClientConfig
@@ -71,11 +73,41 @@ _OCCUPANCY_SHADOW_FRESH_S = 3600
 _OCCUPANCY_SHADOW_UNAVAILABLE_S = 86400
 
 
+def _is_water_temp_field(field: str) -> bool:
+    """INSTRUCTION-611 — the legacy flow and return fields and the per-source
+    flow_temp and return_temp slots (heat_source__<name>__<slot>)."""
+    if field in ("hp_flow_temp", "hp_return_temp"):
+        return True
+    return field.startswith("heat_source__") and field.endswith(("__flow_temp", "__return_temp"))
+
+
+def _admit_mqtt_water_temp(field: str, topic: str, value: float) -> Optional[float]:
+    """INSTRUCTION-611 — value when inside HP_WATER_TEMP_BAND_C, else None;
+    out of band enters MQTT.hp_water_temp_out_of_band, in band exits it."""
+    _register_mqtt_events()
+    ann = get_annunciator()
+    if water_temp_in_band(value):
+        ann.exited("MQTT.hp_water_temp_out_of_band", field=field, topic=topic)
+        return value
+    ann.entered("MQTT.hp_water_temp_out_of_band", field=field, topic=topic, value=value)
+    return None
+
+
 # INSTRUCTION-221C — register MQTT events. Idempotent for identical specs;
 # singleton lookup at use site so test fixtures resetting the annunciator
 # do not strand the references.
 def _register_mqtt_events() -> None:
     ann = get_annunciator()
+    # INSTRUCTION-611 — parity with HA.hp_water_temp_out_of_band: a heat-source
+    # flow or return payload outside HP_WATER_TEMP_BAND_C is no reading.
+    # Latched per (field, topic); value is diagnostic payload only.
+    ann.register(EventSpec(
+        name="MQTT.hp_water_temp_out_of_band",
+        kind=EventKind.LATCHED,
+        payload_fields=("field", "topic", "value"),
+        latch_key=("field", "topic"),
+        default_level=logging.WARNING,
+    ))
     # INSTRUCTION-407 — split the former single control-fault annunciation into
     # two conformance annunciations. A control key that does not resolve to a
     # usable value (omitted from the payload, or present but null) is a cyclic-
@@ -1299,6 +1331,11 @@ class MQTTDriver:
                 # Parse value
                 value = parse_payload(payload_str, mapping.payload_format, mapping.json_path)
 
+                # INSTRUCTION-611 — a flow or return reading outside the band is
+                # no reading: no candidate, no capability flag, no delta-T.
+                if value is not None and _is_water_temp_field(mapping.field):
+                    value = _admit_mqtt_water_temp(mapping.field, mapping.topic, value)
+
                 # INSTRUCTION-359 — latest-payload property (NOT a clock):
                 # outdoor key present but non-numeric => genuine parse failure
                 # (stays loud). Absent key is handled by Task 5's c-banding.
@@ -1687,14 +1724,14 @@ class MQTTDriver:
 
         # Derive avg_open_frac from valve_positions if any zones are configured.
         # Valve positions are stored 0–100 by convention (matches heating_percs);
-        # avg_open_frac is the mean divided by 100.0. Falls back to the InputBlock
-        # dataclass default (0.75) when no valves are reporting — matches pre-fix
-        # behaviour for installs without per-zone valves.
-        if valve_positions:
-            avg_open_frac = sum(valve_positions.values()) / (len(valve_positions) * 100.0)
-            avg_open_frac = max(0.0, min(1.0, avg_open_frac))  # clamp defensively
-        else:
-            avg_open_frac = 0.75
+        # avg_open_frac is the mean divided by 100.0, clamped to 0 to 1. With
+        # no valve reporting it is AVG_OPEN_FRAC_NO_SIGNAL (0.75), and so it is
+        # when the rooms reporting carry less than VALVE_SIGNAL_MIN_SHARE of
+        # the declared emitter output (INSTRUCTION-616; the HA driver reads
+        # the same function).
+        avg_open_frac, _valve_share = hydraulic_open_fraction(
+            {_room: max(0.0, min(1.0, _pos / 100.0)) for _room, _pos in valve_positions.items()}, config
+        )
 
         # Derive delta_t from flow − return when both are live.
         # Fall back to the signal_bus default (3.0) only when we genuinely

@@ -21,6 +21,8 @@ from ..hot_water_payloads import (
 )
 from ...hw_enable import resolve_hw_entity_ids
 from ...events import EventKind, EventSpec, get_annunciator
+from ...heat_source_limits import water_temp_in_band
+from ...valve_control import AVG_OPEN_FRAC_NO_SIGNAL, hydraulic_open_fraction
 from ... import clock
 
 
@@ -100,6 +102,16 @@ def _register_events() -> None:
         payload_fields=("value", "entity"),
         default_level=logging.WARNING,
     ))
+    # INSTRUCTION-611 — a heat-source flow or return reading outside
+    # HP_WATER_TEMP_BAND_C is no reading. Latched per (slot, entity); value is
+    # diagnostic payload only, so a placeholder that changes cannot re-fire it.
+    ann.register(EventSpec(
+        name="HA.hp_water_temp_out_of_band",
+        kind=EventKind.LATCHED,
+        payload_fields=("slot", "entity", "value"),
+        latch_key=("slot", "entity"),
+        default_level=logging.WARNING,
+    ))
     # INSTRUCTION-301 — hot_water_active last-valid hold across HW-source comms
     # loss. LATCHED on held_value; age_s is diagnostic context only (latch_key
     # excludes it, so it cannot force per-cycle re-emission).
@@ -155,11 +167,12 @@ _warned_no_heating_entity: Set[str] = set()
 _warned_valve_stale_no_history: Set[Tuple[str, str]] = set()
 
 # =========================================================================
-# AVG_OPEN_FRAC NO-SIGNAL VALUE (INSTRUCTION-575D)
+# AVG_OPEN_FRAC NO-SIGNAL VALUE (INSTRUCTION-575D, INSTRUCTION-616)
 # =========================================================================
-# avg_open_frac when no room has a fresh valve read this cycle. Same value as
-# the MQTT driver's no-valve-positions fallback and the InputBlock default.
-AVG_OPEN_FRAC_NO_SIGNAL = 0.75
+# avg_open_frac when no room has a fresh valve read this cycle, and when the
+# rooms with one carry less than VALVE_SIGNAL_MIN_SHARE of the declared
+# emitter output. AVG_OPEN_FRAC_NO_SIGNAL is imported from qsh.valve_control
+# above: one value for both drivers and the InputBlock default.
 
 # =========================================================================
 # POWER UNIT AUTO-DETECTION
@@ -331,7 +344,8 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
         return sensors
 
     logging.debug(f"Fetching {len(sensor_keys)} independent sensors")
-    fallback_temp = config.get("overtemp_protection", 23.0)
+    # INSTRUCTION-622A — the substituted reading is the comfort setpoint (parent §2.1 D-1).
+    fallback_temp = config.get("comfort_temp", 20.0)
 
     for sensor_key in sorted(sensor_keys):
         entity_id = config["entities"].get(sensor_key)
@@ -371,7 +385,7 @@ def fetch_independent_sensors(config: Dict) -> Dict[str, float]:
                     )
         else:
             ann.entered("HA.sensor_no_entity_configured", sensor_key=sensor_key)
-            sensors[sensor_key] = _last_valid_independent.get(sensor_key, config.get("overtemp_protection", 23.0))
+            sensors[sensor_key] = _last_valid_independent.get(sensor_key, config.get("comfort_temp", 20.0))
 
     return sensors
 
@@ -499,7 +513,7 @@ def get_room_temperature(
         _unavailable_state.pop(room, None)
         return None
 
-    target_temp = config.get("overtemp_protection", 23.0)
+    target_temp = config.get("comfort_temp", 20.0)
 
     sensor_key = config["zone_sensor_map"].get(room)
     if sensor_key:
@@ -580,7 +594,7 @@ def fetch_room_temperatures(config: Dict, sensor_temps: Dict[str, float]) -> Dic
         if temp is not None:
             room_temps[room] = temp
 
-    target = config.get("overtemp_protection", 23.0)
+    target = config.get("comfort_temp", 20.0)
     cold_rooms = []
     for room, temp in room_temps.items():
         delta = target - temp
@@ -870,8 +884,11 @@ def fetch_heating_percentages_ex(
         - heating_percs_per_emitter: room → entity_or_stem → value.
         - avg_open_frac: mean of room aggregates / 100 across the rooms
           with a fresh valve read this cycle (INSTRUCTION-575D);
-          ``AVG_OPEN_FRAC_NO_SIGNAL`` when no room has one; 0.0 when
-          no rooms are configured.
+          ``AVG_OPEN_FRAC_NO_SIGNAL`` when no room has one, and when the
+          rooms with one carry less than ``VALVE_SIGNAL_MIN_SHARE`` of the
+          declared emitter output (INSTRUCTION-616,
+          ``valve_control.hydraulic_open_fraction``); 0.0 when no rooms
+          are configured.
         - valve_signal: room → ``"good"`` when the room had a fresh valve
           read this cycle, ``"stale"`` when it did not. A room has no key
           when its declared ``heating_entity`` is empty, or when it has no
@@ -879,8 +896,7 @@ def fetch_heating_percentages_ex(
     """
     heating_percs: Dict[str, float] = {}
     heating_percs_per_emitter: Dict[str, Dict[str, float]] = {}
-    total_frac = 0.0
-    num_fresh_rooms = 0
+    fresh_fractions: Dict[str, float] = {}
     valve_signal: Dict[str, str] = {}
     num_rooms = len(config["rooms"])
 
@@ -956,18 +972,15 @@ def fetch_heating_percentages_ex(
                     heating_percs_per_emitter[room] = per_emitter_legacy
 
         # INSTRUCTION-575D: only a room with a fresh valve read this cycle
-        # enters the sum and the divisor. heating_percs[room] is unchanged.
+        # enters the mean. heating_percs[room] is unchanged.
         if room_fresh:
-            total_frac += heating_percs[room] / 100.0
-            num_fresh_rooms += 1
+            fresh_fractions[room] = heating_percs[room] / 100.0
         if has_valve_source:
             valve_signal[room] = "good" if room_fresh else "stale"
 
-    avg_open_frac = (
-        total_frac / num_fresh_rooms
-        if num_fresh_rooms > 0
-        else AVG_OPEN_FRAC_NO_SIGNAL
-    )
+    # INSTRUCTION-616: the mean is the hydraulic signal only when the fresh
+    # rooms carry VALVE_SIGNAL_MIN_SHARE of the declared emitter output.
+    avg_open_frac, _valve_share = hydraulic_open_fraction(fresh_fractions, config)
 
     return heating_percs, heating_percs_per_emitter, avg_open_frac, valve_signal
 
@@ -986,6 +999,23 @@ _PER_SOURCE_SENSOR_KEYS = (
     "total_energy",
     "pump_power",
 )
+
+
+def _admit_water_temp(slot: str, entity_id: str, value: Optional[float]) -> Optional[float]:
+    """INSTRUCTION-611 — value when it is inside HP_WATER_TEMP_BAND_C, else None.
+
+    None in gives None out with no annunciation. Out of band enters
+    HA.hp_water_temp_out_of_band for (slot, entity); in band exits it.
+    """
+    if value is None:
+        return None
+    _register_events()
+    ann = get_annunciator()
+    if water_temp_in_band(value):
+        ann.exited("HA.hp_water_temp_out_of_band", slot=slot, entity=entity_id)
+        return value
+    ann.entered("HA.hp_water_temp_out_of_band", slot=slot, entity=entity_id, value=value)
+    return None
 
 
 def _fetch_heat_source_status_for(
@@ -1024,12 +1054,19 @@ def _fetch_heat_source_status_for(
         "has_live_flow": False,
     }
 
+    flow_out_of_band = False  # INSTRUCTION-611
     flow_entity = sensors_block.get("flow_temp")
     if flow_entity:
         val_raw, is_fresh = _fetch_with_staleness(flow_entity, "heat_source", default=default_flow_temp)
         result["flow_temp"] = safe_float(val_raw, default_flow_temp)
         # INSTRUCTION-430 D8 — a present flow entity reading fresh is live flow.
         result["has_live_flow"] = bool(is_fresh)
+        # INSTRUCTION-611 — a fresh flow number outside the band is no reading.
+        flow_parsed = safe_float(val_raw, None) if is_fresh else None
+        if flow_parsed is not None and _admit_water_temp("flow_temp", flow_entity, flow_parsed) is None:
+            result["flow_temp"] = default_flow_temp
+            result["has_live_flow"] = False
+            flow_out_of_band = True
         if not is_fresh:
             logging.debug(f"Flow temp sensor stale  -  using last known {result['flow_temp']:.1f}C")
 
@@ -1077,10 +1114,12 @@ def _fetch_heat_source_status_for(
     if return_entity:
         rt_raw, is_fresh = _fetch_with_staleness(return_entity, "heat_source", default=None)
         rt_val = safe_float(rt_raw, None)
+        # INSTRUCTION-611 — a return reading outside the band is no reading.
+        rt_val = _admit_water_temp("return_temp", return_entity, rt_val)
         if rt_val is not None and is_fresh:
             result["return_temp"] = rt_val
             result["has_live_return_temp"] = True
-            if not result["has_live_delta_t"] and result["flow_temp"] > 0:
+            if not result["has_live_delta_t"] and result["flow_temp"] > 0 and not flow_out_of_band:
                 calculated_dt = result["flow_temp"] - rt_val
                 result["delta_t"] = calculated_dt
                 result["has_live_delta_t"] = True
@@ -1148,12 +1187,19 @@ def fetch_heat_source_status(config: Dict) -> Dict:
         "has_live_flow": False,
     }
 
+    flow_out_of_band = False  # INSTRUCTION-611
     flow_entity = entities.get("hp_flow_temp")
     if flow_entity:
         val_raw, is_fresh = _fetch_with_staleness(flow_entity, "heat_source", default=35.0)
         result["flow_temp"] = safe_float(val_raw, 35.0)
         # INSTRUCTION-430 D8 — a present flow entity reading fresh is live flow.
         result["has_live_flow"] = bool(is_fresh)
+        # INSTRUCTION-611 — a fresh flow number outside the band is no reading.
+        flow_parsed = safe_float(val_raw, None) if is_fresh else None
+        if flow_parsed is not None and _admit_water_temp("flow_temp", flow_entity, flow_parsed) is None:
+            result["flow_temp"] = 35.0
+            result["has_live_flow"] = False
+            flow_out_of_band = True
         if not is_fresh:
             logging.debug(f"Flow temp sensor stale  -  using last known {result['flow_temp']:.1f}C")
 
@@ -1202,10 +1248,12 @@ def fetch_heat_source_status(config: Dict) -> Dict:
     if return_entity:
         rt_raw, is_fresh = _fetch_with_staleness(return_entity, "heat_source", default=None)
         rt_val = safe_float(rt_raw, None)
+        # INSTRUCTION-611 — a return reading outside the band is no reading.
+        rt_val = _admit_water_temp("return_temp", return_entity, rt_val)
         if rt_val is not None and is_fresh:
             result["return_temp"] = rt_val
             result["has_live_return_temp"] = True
-            if not result["has_live_delta_t"] and result["flow_temp"] > 0:
+            if not result["has_live_delta_t"] and result["flow_temp"] > 0 and not flow_out_of_band:
                 calculated_dt = result["flow_temp"] - rt_val
                 result["delta_t"] = calculated_dt
                 result["has_live_delta_t"] = True

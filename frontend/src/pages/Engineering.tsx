@@ -7,6 +7,7 @@ import { TrendChart } from '../components/TrendChart'
 import { tempDomain } from '../lib/chartDomain'
 import { HardwareTelemetry } from '../components/HardwareTelemetry'
 import { HelpTip } from '../components/HelpTip'
+import { HeatLossSummary } from '../components/HeatLossSummary'
 import { cn } from '../lib/utils'
 import {
   MIN_OBS_FOR_USE,
@@ -77,6 +78,11 @@ export function Engineering() {
         outdoorTemp={status?.outdoor_temp}
         configured={configuredSensors}
       />
+
+      {/* INSTRUCTION-614 — the whole-house heat loss coefficient. */}
+      {sysidData?.rooms && sysidData.installation_heat_loss && (
+        <HeatLossSummary summary={sysidData.installation_heat_loss} rooms={sysidData.rooms} />
+      )}
 
       {/* SysID Overview */}
       {sysidData?.rooms && <SysidTable rooms={sysidData.rooms} />}

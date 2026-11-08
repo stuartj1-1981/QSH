@@ -1,5 +1,8 @@
 """System identification learned parameters endpoint."""
 
+import math
+from typing import Iterable, Optional
+
 from fastapi import APIRouter, HTTPException
 
 from ..state import shared_state
@@ -7,9 +10,105 @@ from ..state import shared_state
 # and qsh.sysid (V2 LOW-3).
 # INSTRUCTION-416 — the badge bands import their constants from the source
 # (no literals; the 214 mirror protocol's source side).
-from qsh.sysid import SOLAR_CAPACITY_MIN_OBS, MIN_OBS_FOR_USE, CONFIDENCE_FULL_AT
+from qsh.sysid import SOLAR_CAPACITY_MIN_OBS, MIN_OBS_FOR_USE, CONFIDENCE_FULL_AT, U_PRIOR_CAP_MULT
 
 router = APIRouter()
+
+
+# INSTRUCTION-614 — the whole-house heat loss coefficient. The learned value
+# is the sum of the effective U of the rooms: the U that the room losses and
+# the forecast load values use. The design value is the configured peak_loss
+# over (comfort_temp - peak_ext), read from the config now: the stored
+# U priors are restored from the state file and do not follow a change of
+# peak_loss (614-L1). Read only; no control path reads it.
+def _finite(value) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _room_u_prior(sysid, room: str) -> Optional[float]:
+    """The U prior of the room, or None when sysid holds no valid prior."""
+    rooms = getattr(sysid, "rooms", None)
+    if not isinstance(rooms, dict):
+        return None
+    prior = _finite(getattr(rooms.get(room), "u_prior", None))
+    return prior if prior is not None and prior > 0.0 else None
+
+
+def _ratio(value: Optional[float], prior: Optional[float]) -> Optional[float]:
+    if value is None or prior is None or prior <= 0.0:
+        return None
+    return round(value / prior, 2)
+
+
+def _positive(config: dict, key: str) -> Optional[float]:
+    value = _finite(config.get(key)) if config else None
+    return value if value is not None and value > 0.0 else None
+
+
+def _installation_heat_loss(sysid, config: dict, room_names: Iterable[str]) -> dict:
+    """The house values, over the configured rooms.
+
+    The learned U is None when there is no room, or when any room gives no
+    finite effective U: a partial sum is not a house value. The design U is
+    None when peak_loss is not above 0 or the design temperature difference
+    is not above 0. The ratio and the loss at design are None unless every
+    room has a learned U, the rule of the forecast load U: a room at its prior
+    pulls the ratio toward 1 (614-M1). The counts are over the rooms whose U
+    and observations can be read.
+    """
+    names = list(room_names)
+    u_sum = 0.0
+    learned = 0
+    above_cap = 0
+    complete = bool(names)
+    for room in names:
+        try:
+            u = _finite(sysid.effective_u(room))
+            u_obs = sysid.room_observations(room, "u")
+        except Exception:
+            complete = False
+            continue
+        if isinstance(u_obs, int) and not isinstance(u_obs, bool) and u_obs >= MIN_OBS_FOR_USE:
+            learned += 1
+        if u is None:
+            complete = False
+            continue
+        u_sum += u
+        # The ratio as the room shows it, to 2 decimals.
+        room_ratio = _ratio(u, _room_u_prior(sysid, room))
+        if room_ratio is not None and room_ratio > U_PRIOR_CAP_MULT:
+            above_cap += 1
+    design_loss = _positive(config, "peak_loss")
+    design_indoor = _finite(config.get("comfort_temp")) if config else None
+    peak_ext = _finite(config.get("peak_ext")) if config else None
+    design_delta = design_indoor - peak_ext if design_indoor is not None and peak_ext is not None else None
+    if design_delta is not None and design_delta <= 0.0:
+        design_delta = None
+    u_learned = round(u_sum, 4) if complete else None
+    u_design = (
+        round(design_loss / design_delta, 4)
+        if design_loss is not None and design_delta is not None else None
+    )
+    if u_learned is not None and u_design is not None and learned == len(names):
+        ratio = round(u_sum * design_delta / design_loss, 2)
+        loss_at_design = round(u_sum * design_delta, 1)
+    else:
+        ratio = loss_at_design = None
+    return {
+        "u_learned_kw_per_c": u_learned,
+        "u_design_kw_per_c": u_design,
+        "ratio": ratio,
+        "design_loss_kw": design_loss,
+        "design_delta_c": round(design_delta, 1) if design_delta is not None else None,
+        "learned_loss_at_design_kw": loss_at_design,
+        "rooms_total": len(names),
+        "rooms_learned": learned,
+        "rooms_above_cap": above_cap,
+        "cap_mult": U_PRIOR_CAP_MULT,
+    }
 
 
 @router.get("/sysid")
@@ -24,6 +123,7 @@ def get_sysid():
             "error": "SysID not yet initialised",
             "rooms": {},
             "installation_solar_capacity_kw": None,
+            "installation_heat_loss": None,
         }
 
     config = shared_state.get_config()
@@ -33,6 +133,7 @@ def get_sysid():
     result = {}
     for room_name in room_areas:
         try:
+            u_prior = _room_u_prior(sysid, room_name)
             result[room_name] = {
                 "u_kw_per_c": round(sysid.effective_u(room_name), 4),
                 "c_kwh_per_c": round(sysid.effective_c(room_name), 4),
@@ -49,6 +150,10 @@ def get_sysid():
                 # the Engineering column and wizard advisory (advisory only;
                 # never consulted by any deploy or control path).
                 "sensor_cadence": sysid.sensor_cadence(room_name),
+                # INSTRUCTION-614 — the design U of the room and the ratio of
+                # the effective U to it. None when sysid holds no valid prior.
+                "u_prior_kw_per_c": round(u_prior, 4) if u_prior is not None else None,
+                "u_vs_design": _ratio(_finite(sysid.effective_u(room_name)), u_prior),
             }
         except Exception:
             result[room_name] = {"error": "Failed to read SysID for this room"}
@@ -71,6 +176,7 @@ def get_sysid():
     return {
         "rooms": result,
         "installation_solar_capacity_kw": capacity,
+        "installation_heat_loss": _installation_heat_loss(sysid, config, room_areas),
     }
 
 
