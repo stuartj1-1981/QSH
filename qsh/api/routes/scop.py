@@ -1,8 +1,9 @@
 """SCOP API route — mode-resolved seasonal CoP over configurable windows.
 
 Computes SCOP = Σ thermal_kWh / Σ electrical_kWh over a window for one of
-combined / CH (space heat) / HW (hot water). All three modes integrate
-against qsh_system. CH and HW filter on the `hw_active` tag set by
+combined / CH (space heat) / HW (hot water), restricted to the cycles in
+which a heat pump is the active source (INSTRUCTION-625). All three modes
+integrate against qsh_system. CH and HW filter on the `hw_active` tag set by
 historian.py at sample time (INSTRUCTION-215).
 
 INSTRUCTION-273 — replaces the INSTRUCTION-191C arithmetic-subtraction
@@ -28,6 +29,11 @@ VALID_MODES = {"combined", "ch", "hw"}
 
 THERMAL_FIELD = "active_source_thermal_output_kw"
 ELECTRICAL_FIELD = "hp_power_kw"
+
+# A cycle that records hp_power_kw is a cycle in which a heat pump was the
+# active source (historian.py, INSTRUCTION-117E gate). Used to restrict both
+# sums to heat-pump cycles only (INSTRUCTION-625).
+HP_CYCLE_FIELDS = (ELECTRICAL_FIELD,)
 
 # INSTRUCTION-300 coverage gate: a small grace absorbs sample-timing jitter
 # at the window-start boundary when comparing the earliest thermal sample
@@ -142,6 +148,10 @@ def get_scop(
         coverage_complete is false and data_start carries the earliest
         thermal-sample time (or null if the field has never been recorded);
         thermal_kwh / electrical_kwh remain the factual partial-window sums.
+
+        Both sums cover the cycles in which a heat pump is the active
+        source; thermal_kwh and electrical_kwh are over the same cycles.
+        Cycles of another source are not counted (INSTRUCTION-625).
     """
     if window not in VALID_WINDOWS:
         raise HTTPException(400, f"invalid window: {window!r}")
@@ -188,13 +198,16 @@ def get_scop(
     # denominator to the same cycle set — the points that recorded a thermal
     # reading — so the electrical denominator cannot be inflated by HP-on
     # cycles that wrote hp_power_kw but no active_source_thermal_output_kw.
+    # require_fields further restricts both sums to the cycles in which a
+    # heat pump is the active source; cycles of another source are not
+    # counted (INSTRUCTION-625).
     combined_th = h.sum_field_as_kwh(
         "qsh_system", THERMAL_FIELD, time_from, time_to,
-        require_field=THERMAL_FIELD,
+        require_field=THERMAL_FIELD, require_fields=HP_CYCLE_FIELDS,
     )
     combined_el = h.sum_field_as_kwh(
         "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
-        require_field=THERMAL_FIELD,
+        require_field=THERMAL_FIELD, require_fields=HP_CYCLE_FIELDS,
     )
 
     if mode == "combined":
@@ -206,10 +219,12 @@ def get_scop(
         hw_th = h.sum_field_as_kwh(
             "qsh_system", THERMAL_FIELD, time_from, time_to,
             hw_active="true", require_field=THERMAL_FIELD,
+            require_fields=HP_CYCLE_FIELDS,
         )
         hw_el = h.sum_field_as_kwh(
             "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
             hw_active="true", require_field=THERMAL_FIELD,
+            require_fields=HP_CYCLE_FIELDS,
         )
         scop = _safe_div(hw_th, hw_el)
         thermal = hw_th or 0.0
@@ -219,10 +234,12 @@ def get_scop(
         ch_th = h.sum_field_as_kwh(
             "qsh_system", THERMAL_FIELD, time_from, time_to,
             hw_active="false", require_field=THERMAL_FIELD,
+            require_fields=HP_CYCLE_FIELDS,
         )
         ch_el = h.sum_field_as_kwh(
             "qsh_system", ELECTRICAL_FIELD, time_from, time_to,
             hw_active="false", require_field=THERMAL_FIELD,
+            require_fields=HP_CYCLE_FIELDS,
         )
         scop = _safe_div(ch_th, ch_el)
         thermal = ch_th or 0.0

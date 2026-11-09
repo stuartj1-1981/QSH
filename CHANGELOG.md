@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [1.6.25] — 2026-11-09
+
+### Changed
+- System identification now checks the heat balance of the whole house.
+  Over 12 hours with no sun, open window or stale room, it compares the
+  heat the heat pump delivers (less hot water and defrost), the auxiliary
+  heat and any internal gains you declare with the heat loss and stored
+  heat that the learned room values imply. When three windows in a row
+  agree the learned scale is wrong, the room heat-loss values are corrected
+  together and each room keeps its time constant. Rooms still on their
+  design values are left alone. A learned house heat loss that was about
+  four times too high now comes back to the measured heat.
+
+### Fixed
+- The SCOP page now counts heat-pump cycles only. On an install with a
+  second heat source, the page added that source's heat but not its fuel,
+  so SCOP read too high. The daily COP used in the status, fleet telemetry
+  and parameter data had the same fault. The SCOP Combined, CH and HW cards
+  change; past SCOP windows are re-read and nothing is rewritten. On the
+  first day after the upgrade, the daily COP covers the heat-pump cycles
+  since the restart.
+
 ## [1.6.24] — 2026-11-08
 
 ### Added

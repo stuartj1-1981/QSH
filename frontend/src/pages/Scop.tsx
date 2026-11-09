@@ -27,7 +27,7 @@ const MODE_TITLES: Record<ScopMode, string> = {
 }
 
 const MODE_DESCRIPTIONS: Record<ScopMode, string> = {
-  combined: 'Total heat output / total electrical input',
+  combined: 'Heat-pump heat output / heat-pump electrical input',
   ch: 'Space heating only (Combined − HW)',
   hw: 'Domestic hot water only',
 }
@@ -117,7 +117,7 @@ function PageHeader() {
         SCOP — Seasonal Coefficient of Performance
       </h2>
       <p className="text-sm text-[var(--text-muted)] mt-1">
-        Σ thermal kWh / Σ electrical kWh, attributed by mode at sample time.
+        Σ heat-pump thermal kWh / Σ heat-pump electrical kWh, attributed by mode at sample time. Cycles in which another heat source is active are not counted.
       </p>
     </div>
   )

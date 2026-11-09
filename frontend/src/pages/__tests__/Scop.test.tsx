@@ -83,6 +83,16 @@ describe('Scop page', () => {
     ).toBeInTheDocument()
   })
 
+  it('header names the exclusion of cycles of another heat source', () => {
+    mockUseScop.mockReturnValue(loadingState)
+
+    render(<Scop />)
+
+    expect(
+      screen.getByText(/another heat source is active are not counted/),
+    ).toBeInTheDocument()
+  })
+
   it('renders three cards when data is available', () => {
     mockUseScop.mockImplementation((_w: string, mode: 'combined' | 'ch' | 'hw') =>
       availableState(mode, 3.5),
