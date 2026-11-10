@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from pathlib import Path
 
-from .routes import status, config, sysid, health, wizard, rooms, backup, schedule, away, control, history, entities, trends, historian, balancing, swarm, source_selection, comfort_schedule, scop, snapshots, forecast, manual, mv, predictive
+from .routes import status, config, sysid, health, wizard, rooms, backup, schedule, away, control, history, entities, trends, historian, balancing, swarm, source_selection, comfort_schedule, scop, snapshots, forecast, manual, mv, predictive, envelope
 from .ws import router as ws_router
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(status.router, prefix="/api", tags=["status"])
     app.include_router(config.router, prefix="/api", tags=["config"])
     app.include_router(sysid.router, prefix="/api", tags=["sysid"])
+    app.include_router(envelope.router, prefix="/api", tags=["envelope"])  # INSTRUCTION-620A
     app.include_router(wizard.router, prefix="/api", tags=["wizard"])
     app.include_router(rooms.router, prefix="/api", tags=["rooms"])
     app.include_router(backup.router, prefix="/api", tags=["backup"])

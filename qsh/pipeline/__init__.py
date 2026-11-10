@@ -589,6 +589,10 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
         ),
         ThermalController(
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),
+            # INSTRUCTION-620A — the efficiency-envelope learner. Only main.py
+            # passes one; the twin's builders and the tests pass none, so they
+            # build no learner and touch no state file.
+            envelope=kw.get("efficiency_envelope"),
         ),
         EnergyController(
             config=config,

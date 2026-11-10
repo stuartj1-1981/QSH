@@ -497,6 +497,7 @@ class SharedState:
         self._sysid_ref = None      # Reference to SystemIdentifier (read-only)
         self._config_ref = None     # Reference to HOUSE_CONFIG dict (read-only)
         self._balancing_ref = None  # Reference to BalancingDetector (set after API start)
+        self._envelope_ref = None   # INSTRUCTION-620A: EfficiencyEnvelope (set after API start)
         self._predictive_ref = None  # INSTRUCTION-478A: PredictiveOccupancy (set after API start)
         self._mv_ref = None  # Reference to MVAccumulator (INSTRUCTION-403, set after API start)
         self._swarm_ref = None      # SwarmRuntime (set after construction); None when swarm disabled
@@ -1318,6 +1319,14 @@ class SharedState:
     def set_balancing(self, detector):
         with self._lock:
             self._balancing_ref = detector
+
+    def get_envelope(self):
+        with self._lock:
+            return self._envelope_ref
+
+    def set_envelope(self, envelope):
+        with self._lock:
+            self._envelope_ref = envelope
 
     def get_predictive(self):
         """INSTRUCTION-478A: PredictiveOccupancy accessor for /api/predictive.
