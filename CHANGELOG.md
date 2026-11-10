@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.6.26] — 2026-11-10
+
+### Added
+- The heat pump's efficiency envelope is now learned on each install: how
+  its efficiency varies with flow temperature, load and outdoor
+  temperature. It is viewable through the API and can be reset. It
+  observes only and commands nothing.
+
+### Fixed
+- In winter mode, a room that the running flow temperature cannot heat
+  (for example an under-sized radiator) no longer keeps the heat pump
+  running at the flow floor all night while the rest of the house is
+  above target.
+
 ## [1.6.25] — 2026-11-09
 
 ### Changed
