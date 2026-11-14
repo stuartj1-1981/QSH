@@ -106,6 +106,13 @@ vi.mock('../../hooks/useHistory', () => ({
   useHistory: () => ({ data: [], loading: false }),
 }))
 
+// INSTRUCTION-620B — the efficiency envelope card fetches /api/envelope;
+// mocked so that this page test makes no network call.
+vi.mock('../../hooks/useEfficiencyEnvelope', () => ({
+  useEfficiencyEnvelope: () => ({ data: null, error: null, loading: false, refresh: vi.fn() }),
+  resetEfficiencyEnvelope: vi.fn(),
+}))
+
 // TrendChart pulls in recharts; stub it out to keep this test focused on
 // tooltip wiring rather than chart rendering. The stub still renders the
 // title so the title-honesty assertion (INSTRUCTION-239) can verify it.

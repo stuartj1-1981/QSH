@@ -82,7 +82,7 @@ export function StepAuxOutputs({ config, onUpdate }: StepAuxOutputsProps) {
                   {name.replace(/_/g, ' ')}
                 </h3>
                 <p className="text-xs text-[var(--text-muted)]">
-                  Control mode: {room.control_mode || 'indirect'}
+                  Control mode: {room.control_mode || (driver === 'mqtt' ? 'none' : 'indirect')}
                 </p>
               </header>
               <AuxOutputEditor

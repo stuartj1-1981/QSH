@@ -7,6 +7,7 @@ import { OccupancyFields } from '../OccupancyFields'
 import { WINDOW, WINDOW_MQTT } from '../../lib/helpText'
 import { HelpTip } from '../HelpTip'
 import { windowInvert, windowJsonPath, windowTopic, writeWindowTopic } from '../../lib/mqttWindowTopic'
+import { readbackJsonPath, readbackTopic, readbackTopics } from '../../lib/mqttTrvReadback'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
 import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { useRoomEntityScan } from '../../hooks/useEntityScan'
@@ -602,7 +603,7 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                       Control Mode
                     </label>
                     <select
-                      value={room.control_mode || 'indirect'}
+                      value={room.control_mode || (isMqtt ? 'none' : 'indirect')}
                       onChange={(e) => {
                         const mode = e.target.value as 'indirect' | 'direct' | 'none'
                         const changes: Partial<RoomConfigYaml> = { control_mode: mode }
@@ -734,6 +735,28 @@ export function StepRooms({ config, onUpdate }: StepRoomsProps) {
                           label="TRV Setpoint (optional)"
                           value={topicsOf(room.mqtt_topics?.trv_setpoint)[0] ?? ''}
                           onChange={(v) => updateRoomMqttTopic(name, 'trv_setpoint', v)}
+                          scanResults={mqttScanResults}
+                        />
+                      )}
+                      {/* INSTRUCTION-627B — the topic on which the TRV reports
+                          its setpoint. A list of two or more is shown, not changed. */}
+                      {readbackTopics(room.mqtt_topics?.trv_setpoint_readback).length >= 2 ? (
+                        <div data-testid={`${name}-wizard-trv-readback-list`}>
+                          <label className="block text-sm font-medium text-[var(--text)] mb-1">
+                            TRV Setpoint Readback (optional)
+                          </label>
+                          <p className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text-muted)]">
+                            Topics set: {readbackTopics(room.mqtt_topics?.trv_setpoint_readback).join(', ')}.
+                            Change this list in the configuration file.
+                          </p>
+                        </div>
+                      ) : (
+                        <TopicPicker
+                          label="TRV Setpoint Readback (optional)"
+                          value={readbackTopic(room.mqtt_topics?.trv_setpoint_readback)}
+                          format={readbackJsonPath(room.mqtt_topics?.trv_setpoint_readback) ? 'json' : undefined}
+                          jsonPath={readbackJsonPath(room.mqtt_topics?.trv_setpoint_readback) || undefined}
+                          onChange={(v, fmt, jp) => updateRoomMqttTopic(name, 'trv_setpoint_readback', v, fmt, jp)}
                           scanResults={mqttScanResults}
                         />
                       )}

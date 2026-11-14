@@ -16,6 +16,7 @@ from qsh import paths
 from qsh.paths import find_state_file, save_state_file
 
 from ... import clock
+from .control import _mqtt_writeback
 
 logger = logging.getLogger(__name__)
 
@@ -88,28 +89,6 @@ def _days_remaining(key: str, days_set: float) -> float:
 
 def _slugify(name: str) -> str:
     return name.lower().replace(" ", "_").replace("-", "_")
-
-
-def _mqtt_writeback(control_key: str, payload: str) -> None:
-    """Publish to MQTT control topic if MQTT driver is active (36C Task 5)."""
-    from ..state import shared_state
-
-    config = shared_state.get_config()
-    if config is None:
-        return
-
-    driver = config.get("driver", "ha")
-    if driver != "mqtt":
-        return
-
-    prefix = config.get("mqtt", {}).get("topic_prefix", "")
-    topic = f"{prefix}/control/{control_key}" if prefix else f"qsh/control/{control_key}"
-    try:
-        client = shared_state.get_mqtt_client()
-        if client:
-            client.publish(topic, payload, retain=True, qos=1)
-    except Exception as e:
-        logger.warning("MQTT write-back failed for %s: %s", control_key, e)
 
 
 # ── Away State Read ──

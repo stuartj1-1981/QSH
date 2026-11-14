@@ -466,10 +466,13 @@ def _face_literal_valid_for_key(face_key: str, literal: str) -> bool:
     return False
 
 
-def _resolve_control_mode(room: RoomConfig) -> str:
-    """Mirror qsh/config.py's control_mode default: indirect when trv_entity, else none."""
+def _resolve_control_mode(room: RoomConfig, driver: str = "ha") -> str:
+    """Mirror qsh/config.py's control_mode default: indirect when trv_entity,
+    else none. On the MQTT driver the default is none (INSTRUCTION-627B)."""
     if room.control_mode:
         return room.control_mode
+    if driver == "mqtt":
+        return "none"
     return "indirect" if room.trv_entity else "none"
 
 
@@ -492,7 +495,7 @@ def add_room(room_name: str, room: RoomConfig):
         nonlocal aux_warnings
         if room.auxiliary_output is not None:
             driver = raw.get("driver", "ha")
-            cm = _resolve_control_mode(room)
+            cm = _resolve_control_mode(room, driver)
             errors, warnings = validate_auxiliary_output_block(
                 room.auxiliary_output.model_dump(),
                 driver=driver,
@@ -550,7 +553,7 @@ def update_room(room_name: str, room: RoomConfig):
         nonlocal aux_warnings
         if room.auxiliary_output is not None:
             driver = raw.get("driver", "ha")
-            cm = _resolve_control_mode(room)
+            cm = _resolve_control_mode(room, driver)
             errors, warnings = validate_auxiliary_output_block(
                 room.auxiliary_output.model_dump(),
                 driver=driver,

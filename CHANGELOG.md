@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [1.6.27] — 2026-11-14
+
+### Added
+- The Engineering page has a Heat Pump Efficiency card showing the learned
+  efficiency envelope: the samples, the learned bins, and the best COP,
+  ceiling and COP by flow band for each outdoor band. It has a reset button.
+  The card only reports and commands nothing.
+- MQTT: a new optional room topic, `trv_setpoint_readback`, lets QSH see the
+  setpoint a TRV reports, so it can flag a valve that does not take its
+  setpoint.
+
+### Changed
+- In winter mode, the flow temperature is now set by the rooms that need
+  heat. Rooms already well above target, and rooms that are stalled, no
+  longer hold the flow down while other rooms are below target. How far
+  above the whole-house equilibrium the flow may go follows your tariff
+  aggression mode.
+- MQTT: a room set to `control_mode: indirect` now receives its TRV setpoint
+  in live mode (when any room target changes by 0.3 °C or more, at most once a
+  minute). Nothing is published in shadow mode. Check any MQTT room with this
+  setting and a `trv_setpoint` topic before updating.
+- MQTT: a room with no `control_mode` is now monitor-only, even if it has a
+  `trv_entity`. To control it, set `control_mode: indirect` and give it a
+  `trv_setpoint` topic. The wizard and validator now accept MQTT rooms by
+  their topics.
+
+### Fixed
+- MQTT: changing between live and shadow through the API no longer reports an
+  error after saving. The Home page live/shadow and away switches now publish
+  to the topics the MQTT driver actually reads, including with no topic prefix
+  or a custom topic.
+
 ## [1.6.26] — 2026-11-10
 
 ### Added

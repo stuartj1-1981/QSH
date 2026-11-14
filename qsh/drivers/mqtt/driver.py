@@ -33,6 +33,7 @@ from .topic_map import (
     CAPABILITY_FIELDS,
     SYSTEM_INPUT_FIELDS,
     SYSTEM_STRING_INPUT_FIELDS,
+    TRV_SETPOINT_READBACK_FIELD,
     TopicMap,
     TopicMapping,
     build_topic_map,
@@ -280,6 +281,7 @@ _ROOM_FIELD_SQ_PREFIX: Dict[str, str] = {
     "valve_position": "valve_positions",
     "occupancy_sensor": "occupancy_sensors",
     "window_sensor": "window_sensors",
+    "trv_setpoint_readback": "trv_setpoints",  # INSTRUCTION-627B
 }
 
 
@@ -994,7 +996,9 @@ class MQTTDriver:
         logger.log(
             level,
             "MQTT signal_quality %s: %s → %s "
-            "(topic=%s category=%s age=%s fresh=%ds unavailable=%ds)",
+            # INSTRUCTION-627B — %s for the two thresholds: the category
+            # `setpoint` has math.inf, which %d cannot format.
+            "(topic=%s category=%s age=%s fresh=%ss unavailable=%ss)",
             sq_key,
             previous,
             new_quality,
@@ -1183,6 +1187,9 @@ class MQTTDriver:
         valve_positions_per_emitter: Dict[str, Dict[str, float]] = {}
         occupancy_sensor_states: Dict[str, str] = {}
         window_sensor_states: Dict[str, str] = {}  # INSTRUCTION-604A
+        # INSTRUCTION-627B — the TRV setpoint readbacks of each room, in
+        # declaration order; the room value is their mean after the loop.
+        trv_setpoint_readbacks: Dict[str, List[float]] = {}
         signal_quality: Dict[str, str] = {}
         # INSTRUCTION-427 D1/D6 — per-key freshness provenance carried onto the
         # InputBlock this cycle (live_grade/shadow_grade/age_basis_s/
@@ -1383,6 +1390,14 @@ class MQTTDriver:
                         _valve_position_candidates.setdefault(mapping.room, []).append(
                             (value, quality, mapping)
                         )
+                    elif (
+                        mapping.field == TRV_SETPOINT_READBACK_FIELD
+                        and value is not None
+                        and quality != "unavailable"
+                    ):
+                        # INSTRUCTION-627B — one TRV's setpoint as the device
+                        # reports it. An unavailable reading is no reading.
+                        trv_setpoint_readbacks.setdefault(mapping.room, []).append(float(value))
                     elif mapping.field == "occupancy_sensor":
                         extracted = parse_payload_string(
                             payload_str, mapping.payload_format, mapping.json_path
@@ -2276,6 +2291,12 @@ class MQTTDriver:
             per_room_comfort_overrides=per_room_comfort,
             occupancy_sensor_states=occupancy_sensor_states,
             window_sensor_states=window_sensor_states,
+            # INSTRUCTION-627B — the mean of the room's readbacks, as the Home
+            # Assistant driver gives the mean of the room's TRV entities.
+            trv_setpoints={
+                _r: sum(_vals) / len(_vals)
+                for _r, _vals in trv_setpoint_readbacks.items()
+            },
             heat_sources=heat_sources_block,
             source_states=source_states_block,
             timestamp=now,

@@ -26,6 +26,7 @@ from .controllers import (
     WindowController,
     DegradationController,
     HeatSourceSensorSelector,
+    DefrostController,
     SensorController,
     ThermalController,
     EnergyController,
@@ -68,6 +69,7 @@ __all__ = [
     "BoostController",
     "DegradationController",
     "HeatSourceSensorSelector",
+    "DefrostController",
     "SensorController",
     "ThermalController",
     "EnergyController",
@@ -446,6 +448,16 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
             from ..valve_control import mqtt_bypass_path
 
             resolved["bypass_path_fn"] = mqtt_bypass_path
+        # INSTRUCTION-627B — the TRV-setpoint route and the readback test of
+        # HardwareController. Not set for mock.
+        if resolved.get("trv_setpoint_route_fn") is None:
+            from ..valve_control import mqtt_trv_setpoint_route
+
+            resolved["trv_setpoint_route_fn"] = mqtt_trv_setpoint_route
+        if resolved.get("trv_readback_mapped_fn") is None:
+            from ..valve_control import mqtt_trv_readback_mapped
+
+            resolved["trv_readback_mapped_fn"] = mqtt_trv_readback_mapped
 
     logger.info("Pipeline DI: using no-op stubs for %s driver", driver_type)
     return resolved
@@ -587,6 +599,10 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
                 ActionStage(config=config),
             ],
         ),
+        # INSTRUCTION-623A — the defrost detector runs after the window stages
+        # and before ThermalController, the first stage that a consumer of its
+        # output will occupy. Off unless defrost.enabled is True.
+        DefrostController(config=config),
         ThermalController(
             calculate_thermal_state_fn=kw.get("calculate_thermal_state_fn"),
             # INSTRUCTION-620A — the efficiency-envelope learner. Only main.py
@@ -666,6 +682,8 @@ def build_pipeline(config, **kwargs) -> Tuple[List[Controller], AuxiliaryOutputC
             apply_hardware_control_fn=kw.get("apply_hardware_control_fn"),
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),
             readback_threshold_fn=kw.get("readback_threshold_fn"),
+            trv_setpoint_route_fn=kw.get("trv_setpoint_route_fn"),
+            trv_readback_mapped_fn=kw.get("trv_readback_mapped_fn"),
         ),
         ShadowController(
             get_flow_temp_limits_fn=kw.get("get_flow_temp_limits_fn"),

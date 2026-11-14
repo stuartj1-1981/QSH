@@ -1066,7 +1066,7 @@ def patch_config_section(section: str, body=Body(...)):
                     )
                 if _room_model.auxiliary_output is not None:
                     _aux_driver = raw.get("driver", "ha")
-                    _aux_cm = _resolve_control_mode(_room_model)
+                    _aux_cm = _resolve_control_mode(_room_model, _aux_driver)  # INSTRUCTION-627B
                     _aux_errors, _aux_warnings = validate_auxiliary_output_block(
                         _room_model.auxiliary_output.model_dump(),
                         driver=_aux_driver,
