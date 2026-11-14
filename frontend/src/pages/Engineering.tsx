@@ -8,6 +8,8 @@ import { tempDomain } from '../lib/chartDomain'
 import { HardwareTelemetry } from '../components/HardwareTelemetry'
 import { HelpTip } from '../components/HelpTip'
 import { HeatLossSummary } from '../components/HeatLossSummary'
+import { EfficiencyEnvelopeCard } from '../components/EfficiencyEnvelopeCard'
+import { useEfficiencyEnvelope, resetEfficiencyEnvelope } from '../hooks/useEfficiencyEnvelope'
 import { cn } from '../lib/utils'
 import {
   MIN_OBS_FOR_USE,
@@ -23,6 +25,7 @@ export function Engineering() {
   const { data: live } = useLive()
   const { data: sysidData } = useSysid()
   const { data: config } = useRawConfig()
+  const envelope = useEfficiencyEnvelope()
   const eng = live?.engineering
   const status = live?.status
 
@@ -83,6 +86,19 @@ export function Engineering() {
       {sysidData?.rooms && sysidData.installation_heat_loss && (
         <HeatLossSummary summary={sysidData.installation_heat_loss} rooms={sysidData.rooms} />
       )}
+
+      {/* INSTRUCTION-620B — the heat source efficiency envelope (620A). */}
+      <EfficiencyEnvelopeCard
+        data={envelope.data}
+        error={envelope.error}
+        loading={envelope.loading}
+        outdoorTemp={status?.outdoor_temp}
+        onReset={async () => {
+          const res = await resetEfficiencyEnvelope()
+          if (res.ok) envelope.refresh()
+          return res.ok ? { ok: true } : { ok: false, error: res.error }
+        }}
+      />
 
       {/* SysID Overview */}
       {sysidData?.rooms && <SysidTable rooms={sysidData.rooms} />}

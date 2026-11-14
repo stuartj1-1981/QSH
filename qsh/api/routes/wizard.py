@@ -19,6 +19,7 @@ from ...heat_source_limits import is_heat_pump_family
 from ...paths import YAML_PATH
 from qsh.api.routes.config import REDACTED_SENTINEL, _load_raw_yaml, read_modify_write
 from qsh.config import validate_auxiliary_output_block
+from qsh.valve_control import mqtt_room_missing_control_topic
 
 try:
     import paho.mqtt.client as _paho_mqtt
@@ -1191,7 +1192,9 @@ def validate_config(req: WizardValidateRequest):
             has_valve = bool(rc.get("valve_hardware"))
             mode = rc.get("control_mode")
             if mode is None:
-                mode = "indirect" if has_trv else "none"
+                # INSTRUCTION-627B — on MQTT a room with no stored mode is
+                # monitor-only; trv_entity is a Home Assistant field.
+                mode = "none" if cfg.get("driver") == "mqtt" else ("indirect" if has_trv else "none")
 
             # Independent rules \u2014 every violation surfaces in one validate cycle so the
             # user is not forced into a redeploy-roundtrip per error.
@@ -1200,7 +1203,17 @@ def validate_config(req: WizardValidateRequest):
                     f"Room '{name}' has invalid control_mode '{mode}'. "
                     f"Valid: indirect, direct, none"
                 )
-            if mode in ("indirect", "direct") and not has_trv:
+            if cfg.get("driver") == "mqtt":
+                # INSTRUCTION-627B — an MQTT room is admitted by its topics,
+                # by the test that the boot finding reads (qsh/valve_control.py).
+                missing_topic = mqtt_room_missing_control_topic(rc, mode)
+                if missing_topic is not None:
+                    errors.append(
+                        f"Room '{name}' has control_mode '{mode}' but no "
+                        f"mqtt_topics.{missing_topic}. "
+                        f"Add the topic or set this room to monitor-only."
+                    )
+            elif mode in ("indirect", "direct") and not has_trv:
                 errors.append(
                     f"Room '{name}' has control_mode '{mode}' but no trv_entity. "
                     f"Add a TRV entity or set this room to monitor-only."
@@ -1225,7 +1238,8 @@ def validate_config(req: WizardValidateRequest):
                 continue
             cm = rc.get("control_mode")
             if cm is None:
-                cm = "indirect" if rc.get("trv_entity") else "none"
+                # INSTRUCTION-627B — none on the MQTT driver, as qsh/config.py.
+                cm = "none" if driver == "mqtt" else ("indirect" if rc.get("trv_entity") else "none")
             e, w = validate_auxiliary_output_block(
                 aux_raw, driver=driver, control_mode=cm
             )

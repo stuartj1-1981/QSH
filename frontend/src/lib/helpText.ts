@@ -140,6 +140,12 @@ export const WINDOW_MQTT = {
     'Set this when the sensor sends true while the window is closed. A Zigbee2MQTT contact sensor does this: its contact value is true when the window is closed.',
 } as const
 
+// INSTRUCTION-627B — the TRV setpoint readback topic of an MQTT room.
+export const TRV_READBACK = {
+  topic:
+    'The topic on which the radiator valve reports its setpoint. With it, QSH reports a valve that does not take the setpoint that QSH sent, and a room in which you set the valve by hand takes its target from the valve. For a Zigbee2MQTT valve, use the device topic and the JSON key of its setpoint, for example occupied_heating_setpoint.',
+} as const
+
 // INSTRUCTION-572B — the open-window inference mode (569B), where the
 // operator sets it. The texts state what 569B, 569C and 569D do.
 export const WINDOW_INFERENCE = {

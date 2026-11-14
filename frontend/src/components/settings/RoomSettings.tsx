@@ -13,7 +13,8 @@ import { OccupancyFields } from '../OccupancyFields'
 import { WindowInferenceChooser } from '../WindowInferenceChooser'
 import { selectedInferenceMode, writeInferenceMode } from '../../lib/windowSettings'
 import { HelpTip } from '../HelpTip'
-import { WINDOW, WINDOW_DELAY, WINDOW_MQTT } from '../../lib/helpText'
+import { TRV_READBACK, WINDOW, WINDOW_DELAY, WINDOW_MQTT } from '../../lib/helpText'
+import { readbackJsonPath, readbackTopic, readbackTopics, writeReadback } from '../../lib/mqttTrvReadback'
 import { windowInvert, windowJsonPath, windowTopic, writeWindowTopic } from '../../lib/mqttWindowTopic'
 import { parseWindowOpenDelay, WINDOW_OPEN_DELAY_MAX_S, WINDOW_OPEN_DELAY_MIN_S } from '../../lib/windowDelay'
 
@@ -199,8 +200,10 @@ function stripEmptyMqttTopics(room: RoomConfigYaml): RoomConfigYaml {
       continue
     }
     if (Array.isArray(v)) {
-      // Keep the list verbatim if any entry is non-empty.
-      if (v.some((t) => typeof t === 'string' && t.trim())) {
+      // Keep the list verbatim if any entry is non-empty. An entry is a
+      // topic string or, for trv_setpoint_readback (INSTRUCTION-627B), a
+      // mapping with a topic.
+      if (v.some((t) => (typeof t === 'string' ? t.trim() : getTopicString(t).trim()))) {
         cleaned[k] = v as string[]
       }
       continue
@@ -1070,7 +1073,7 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                   Control Mode
                 </label>
                 <select
-                  value={room.control_mode || 'indirect'}
+                  value={room.control_mode || (driver === 'mqtt' ? 'none' : 'indirect')}
                   onChange={(e) => {
                     const mode = e.target.value as 'indirect' | 'direct' | 'none'
                     const changes: Partial<RoomConfigYaml> = { control_mode: mode }
@@ -1266,6 +1269,68 @@ export function RoomSettings({ rooms, property, construction_year, fabric_class,
                   extraPlaceholder={(n) => `rooms/${name}/setpoint/emitter${n}`}
                   addTitle="Add additional TRV setpoint topic (multi-emitter)"
                 />
+                {/* INSTRUCTION-627B — the topic on which the TRV reports its
+                    setpoint, and its JSON key. A list of two or more is set
+                    in the configuration file and is shown, not changed. */}
+                {readbackTopics(room.mqtt_topics?.trv_setpoint_readback).length >= 2 ? (
+                  <div data-testid={`${name}-trv-readback-list`}>
+                    <label className="block text-xs text-[var(--text-muted)] mb-1">
+                      TRV Setpoint Readback Topics
+                    </label>
+                    <p className="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text-muted)]">
+                      Topics set: {readbackTopics(room.mqtt_topics?.trv_setpoint_readback).join(', ')}.
+                      Change this list in the configuration file.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <TopicField
+                      label="TRV Setpoint Readback Topic"
+                      value={readbackTopic(room.mqtt_topics?.trv_setpoint_readback)}
+                      onChange={(v) =>
+                        updateRoom(name, {
+                          mqtt_topics: {
+                            ...room.mqtt_topics,
+                            trv_setpoint_readback: writeReadback(room.mqtt_topics?.trv_setpoint_readback, {
+                              topic: v,
+                              jsonPath: readbackJsonPath(room.mqtt_topics?.trv_setpoint_readback),
+                            }),
+                          },
+                        })
+                      }
+                      placeholder={`rooms/${name}/setpoint/state`}
+                      helpText={TRV_READBACK.topic}
+                    />
+                    {readbackTopic(room.mqtt_topics?.trv_setpoint_readback) && (
+                      <div>
+                        <label
+                          htmlFor={`${name}-trv-readback-json-key`}
+                          className="text-xs text-[var(--text-muted)] mb-1 block"
+                        >
+                          TRV Setpoint Readback JSON Key
+                        </label>
+                        <input
+                          id={`${name}-trv-readback-json-key`}
+                          type="text"
+                          value={readbackJsonPath(room.mqtt_topics?.trv_setpoint_readback)}
+                          placeholder="occupied_heating_setpoint"
+                          onChange={(e) =>
+                            updateRoom(name, {
+                              mqtt_topics: {
+                                ...room.mqtt_topics,
+                                trv_setpoint_readback: writeReadback(room.mqtt_topics?.trv_setpoint_readback, {
+                                  topic: readbackTopic(room.mqtt_topics?.trv_setpoint_readback),
+                                  jsonPath: e.target.value,
+                                }),
+                              },
+                            })
+                          }
+                          className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
                 <OccupancyFields
                   room={room}
                   onChange={(changes) => updateRoom(name, changes)}

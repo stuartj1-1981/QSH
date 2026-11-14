@@ -265,22 +265,27 @@ def set_control_mode(body: ControlModeBody):
         pipeline's read_inputs() uses resolve_value() with internal key
         `control_enabled` (INSTRUCTION-125), which this endpoint also
         writes. The next cycle picks up the new internal value.
-      - MQTT driver (control_method == "mqtt"): publishes the new value
-        on {prefix}/control/dfan_control with retain=True.
+      - MQTT driver: publishes the new value, retained, on the driver's own
+        client to the Active-Control topic that the driver subscribes to
+        (configured_control_topic; the default suffix is
+        control/dfan_control), whatever the control method
+        (INSTRUCTION-627A).
+      - HA driver with control_method == "mqtt": publishes to the same
+        topic through the HA mqtt.publish service.
 
     The yaml write is the source of truth regardless of driver. A failed
     HA or MQTT sync never rolls back the yaml write; the pipeline
     reconciles on the next cycle via the resolver.
 
     Config prerequisites:
-      - Any driver that expects MQTT retained publishes to propagate the
-        toggle to external consumers MUST set `control_method: mqtt` in
-        qsh.yaml. Without it, `set_control_mode` writes yaml and
-        in-memory config only. The drivers' internal fallback reads
-        `control_enabled` directly (INSTRUCTION-125) and picks up the
-        change on the next cycle. Any external MQTT publisher on the
-        {prefix}/control/dfan_control topic still wins via cache-first
-        resolution — intentional "external wins" semantics.
+      - On the HA driver the retained publish runs only with
+        `control_method: mqtt` in qsh.yaml. Without it, `set_control_mode`
+        writes yaml and in-memory config only, and the driver reads
+        `control_enabled` directly (INSTRUCTION-125) on the next cycle.
+      - On the MQTT driver the pipeline reads the topic first (cache-first,
+        "external wins") and the write gate reads `control_enabled`. This
+        route writes both. Another publisher on the topic still wins at
+        the next read.
     """
     # 1. Update in-memory config (live effect, no restart)
     config = shared_state.get_config()
@@ -327,32 +332,25 @@ def set_control_mode(body: ControlModeBody):
                     "dfan_control HA sync failed (unexpected); queued for retry next cycle"
                 )
 
-    # 4. Sync to MQTT (when running via HA with MQTT flow control method)
-    # INSTRUCTION-442 — consume the WriteOutcome contract (408): a breaker-
-    # suppressed publish returns instead of raising, so it must not take the
-    # silent-success path. "mqtt_sync" is unconditional and five-valued: the
-    # enum's .value when the MQTT leg runs, the route-level literal
-    # "not_applicable" when the leg's own condition means no publish is
-    # attempted at all — consumers never infer from absence.
-    mqtt_sync = "not_applicable"
-    if config is not None and config.get("control_method") == "mqtt":
-        prefix = config.get("mqtt", {}).get("topic_prefix", "")
-        topic = f"{prefix}/control/dfan_control" if prefix else "qsh/control/dfan_control"
-        try:
-            from ...drivers.ha.integration import WriteOutcome, set_ha_service
-            result = set_ha_service(
-                "mqtt",
-                "publish",
-                {"topic": topic, "payload": str(body.enabled).lower(), "retain": True},
+    # 4. Sync to MQTT. INSTRUCTION-627A — the shared write-back publishes
+    # the new value, retained, to the topic that the MQTT driver subscribes
+    # to for this control (configured_control_topic, with the driver's
+    # prefix rule): through the driver's own client on the MQTT driver, and
+    # through the HA mqtt.publish service on the HA driver with the mqtt
+    # control method. "mqtt_sync" is unconditional and five-valued
+    # (INSTRUCTION-442): the outcome of the publish when the install has an
+    # MQTT leg, and the route-level literal for no leg when it has none —
+    # consumers never infer from absence. A failure of the leg never fails
+    # the request: the config write above has landed.
+    try:
+        mqtt_sync = _mqtt_writeback("dfan_control", str(body.enabled).lower())
+        if mqtt_sync not in ("sent", "not_applicable"):
+            logger.warning(
+                "dfan_control MQTT publish NOT sent (outcome=%s)", mqtt_sync
             )
-            mqtt_sync = result.value
-            if result is not WriteOutcome.SENT:
-                logger.warning(
-                    "dfan_control MQTT publish NOT sent (outcome=%s)", result.value
-                )
-        except Exception as e:
-            mqtt_sync = "failed"
-            logger.warning("dfan_control MQTT publish failed: %s", e)
+    except Exception as e:
+        mqtt_sync = "failed"
+        logger.warning("dfan_control MQTT publish failed: %s", e)
 
     return {"control_enabled": body.enabled, "mqtt_sync": mqtt_sync}
 
@@ -616,9 +614,9 @@ def _writeback_topic_suffix(config: dict, control_key: str) -> str:
     """Resolve the write-back publish suffix through the SAME resolution the
     MQTT driver uses for its subscriptions (topic_map.configured_control_topic),
     so INSTRUCTION-268 round-trips survive operator-configured custom topics.
-    Fixed-suffix write-back controls (flow_min, flow_max — the complete set;
-    away/away_days/per-room are subscription-only, no write-back call sites
-    exist for them) keep control/{key}."""
+    Fixed-suffix write-back controls keep control/{key}: flow_min and
+    flow_max, and the away keys that api/routes/away.py passes (away,
+    away_days, {room}/away, {room}/away_days — INSTRUCTION-627A)."""
     from ...drivers.mqtt.topic_map import configured_control_topic
     if control_key == "comfort_temp":
         return configured_control_topic(config, "pid_target")
@@ -627,7 +625,7 @@ def _writeback_topic_suffix(config: dict, control_key: str) -> str:
     return f"control/{control_key}"
 
 
-def _mqtt_writeback(control_key: str, payload: str) -> None:
+def _mqtt_writeback(control_key: str, payload: str) -> str:
     """Publish a value to the MQTT control topic if MQTT driver is active.
 
     This ensures Web UX changes are reflected on the MQTT bus for
@@ -641,16 +639,23 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
     configured_control_topic() the driver subscribes with, then prefixed with
     driver `_prefixed` parity (bare suffix when the prefix is empty), so custom
     control topics do not desync the write-and-readback round-trip.
+
+    INSTRUCTION-627A: returns the outcome of the publish leg, in the values
+    of the mqtt_sync field of POST /api/control/mode — "not_applicable" when
+    the install has no MQTT leg, else "sent", "suppressed", "failed" or
+    "no_token". A payload that float() does not read (a boolean "true" or
+    "false") is published and no PendingWriteback is recorded for it.
     """
     config = shared_state.get_config()
     if config is None:
-        return
+        return "not_applicable"
 
     driver = config.get("driver", "ha")
     written_at = clock.now()
     client_unavailable = False
     topic = None
     suffix = _writeback_topic_suffix(config, control_key)
+    outcome = "failed"
 
     if driver == "mqtt":
         # Direct MQTT driver — publish to control topic via shared client ref
@@ -660,6 +665,7 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
             client = shared_state.get_mqtt_client()
             if client:
                 client.publish(topic, payload, retain=True, qos=1)
+                outcome = "sent"
                 logger.info(
                     "MQTT write-back: topic=%s payload=%s retain=True qos=1 written_at=%.3f",
                     topic, payload, written_at,
@@ -683,6 +689,7 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
                 "publish",
                 {"topic": topic, "payload": payload, "retain": True},
             )
+            outcome = result.value
             # INSTRUCTION-442 — the success INFO only asserts publishes that
             # were actually sent; the PendingWriteback below is recorded in
             # every branch ("attempted publish", INSTRUCTION-268) and remains
@@ -701,15 +708,23 @@ def _mqtt_writeback(control_key: str, payload: str) -> None:
             logger.warning("MQTT write-back (via HA) failed for %s: %s", control_key, e)
     else:
         # Neither MQTT driver nor HA+MQTT control method — no MQTT involved.
-        return
+        return "not_applicable"
 
+    # INSTRUCTION-627A — a payload that is not a number (the "true" or
+    # "false" of dfan_control) has no numeric round-trip, and the MQTT
+    # driver verifies comfort_temp only. No record.
+    try:
+        value = float(payload)
+    except (TypeError, ValueError):
+        return outcome
     shared_state.set_pending_writeback(PendingWriteback(
         key=control_key,
-        value=float(payload),
+        value=value,
         written_at=written_at,
         deadline=written_at + WRITEBACK_DEADLINE_S,
         client_unavailable=client_unavailable,
     ))
+    return outcome
 
 
 # ── Shoulder threshold (hp_min_output_kw) ────────────────────────────

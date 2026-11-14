@@ -31,6 +31,10 @@ export type RoomMqttTopicValue = string | MqttTopicInput
  *  or a mapping; `invert` is true for a sensor that reads true when closed. */
 export type RoomMqttWindowTopicValue = string | (MqttTopicInput & { invert?: boolean })
 
+/** INSTRUCTION-627B — the TRV setpoint readback: a topic, a mapping, or a
+ *  list of these (one for each TRV of the room). */
+export type RoomMqttTrvReadbackValue = RoomMqttTopicValue | RoomMqttTopicValue[]
+
 export interface RoomMqttTopics {
   room_temp?: RoomMqttTopicValue
   // INSTRUCTION-224C/E — valve_position accepts a list of topic strings for
@@ -42,6 +46,8 @@ export interface RoomMqttTopics {
   // publishes the same value to every topic in the list (INSTRUCTION-222B).
   valve_setpoint?: string | string[]
   trv_setpoint?: string | string[]
+  // INSTRUCTION-627B — the topic on which the TRV reports its setpoint.
+  trv_setpoint_readback?: RoomMqttTrvReadbackValue
   occupancy_sensor?: string
   window_sensor?: RoomMqttWindowTopicValue
 }

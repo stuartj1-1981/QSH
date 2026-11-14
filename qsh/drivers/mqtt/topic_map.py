@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...valve_control import mqtt_trv_readback_entries
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +57,12 @@ BUILTIN_STALENESS_DEFAULTS: Dict[str, Dict[str, int]] = {
     # availability topic or a day of silence contradicts it. No stale grade:
     # a quiet healthy contact is not an alarm.
     "contact":     {"fresh": 86400, "unavailable": 86400},
+    # INSTRUCTION-627B — a TRV setpoint readback. A TRV holds its setpoint
+    # until it reports another, so the readback has no age limit: it is
+    # valid until a later message or its availability topic contradicts it,
+    # as the Home Assistant driver reads the entity. `mqtt.staleness_defaults`
+    # can give the category a limit.
+    "setpoint":    {"fresh": math.inf, "unavailable": math.inf},
     "power":       {"fresh": 180,  "unavailable": 600},
     "energy":      {"fresh": 300,  "unavailable": 900},
     "outdoor":     {"fresh": 1800, "unavailable": 3600},
@@ -90,7 +98,13 @@ _FIELD_CATEGORY_INFERENCE: Dict[str, str] = {
     "battery_soc": "energy",
     # Contacts (INSTRUCTION-604A)
     "window_sensor": "contact",
+    # Setpoint readbacks (INSTRUCTION-627B)
+    "trv_setpoint_readback": "setpoint",
 }
+
+
+# INSTRUCTION-627B — the per-room input field of a TRV setpoint readback.
+TRV_SETPOINT_READBACK_FIELD = "trv_setpoint_readback"
 
 
 # ── Subscribe-only mqtt.inputs keys (single source of truth) ─────────────────
@@ -1014,6 +1028,26 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                         last_seen=ls,
                         emitter=_mqtt_emitter_stem(raw),
                     ))
+
+        # trv_setpoint_readback → trv_setpoints[room] (INSTRUCTION-627B).
+        # One input mapping for each entry that names a topic: a string, a
+        # mapping, or the items of a list (one for each TRV of the room).
+        # mqtt_trv_readback_entries is the test; validate_yaml.py reports
+        # an entry that it does not give.
+        for rb_item in mqtt_trv_readback_entries(topics.get(TRV_SETPOINT_READBACK_FIELD)):
+            raw, fmt, jp, cat, avail, ls = _mapping_fields(rb_item)
+            tm.input_mappings.append(TopicMapping(
+                topic=_prefixed(prefix, raw.strip()),
+                field=TRV_SETPOINT_READBACK_FIELD,
+                room=room,
+                payload_format=fmt,
+                json_path=jp,
+                category=cat or infer_category(
+                    TRV_SETPOINT_READBACK_FIELD, TRV_SETPOINT_READBACK_FIELD
+                ),
+                availability=avail,
+                last_seen=ls,
+            ))
 
     # ── Away mode topic (always subscribe) ──
     tm.away_topic = _prefixed(prefix, "control/away")

@@ -596,6 +596,86 @@ export interface SysidResponse {
   installation_heat_loss?: InstallationHeatLoss | null
 }
 
+// INSTRUCTION-620B — the heat source efficiency envelope from
+// `GET /api/envelope` (INSTRUCTION-620A, `EfficiencyEnvelope.report()`).
+// The backend decides every maturity; the frontend reads the `mature`
+// fields and calculates only the count of mature S1 bins, the outdoor band
+// shown first, the sort and the axis ticks.
+
+/** `metered`: heat from a heat-output entity ÷ the input power.
+ *  `reported`: the conditioned live COP. `none`: no heat measure; the
+ *  learner refuses every cycle. */
+export type EnvelopeInstallClass = 'metered' | 'reported' | 'none'
+
+/** One published S1 bin: the fraction of Carnot against the input
+ *  fraction `x` (the lower edge of the bin) of the reference input. */
+export interface EnvelopeS1Bin {
+  x: number
+  input_kw: number
+  fraction_of_carnot: number
+  n: number
+  mature: boolean
+}
+
+/** One S2 bin: COP in a flow band × outdoor band, keyed by the lower
+ *  edges of the bands. */
+export interface EnvelopeS2Bin {
+  flow_c: number
+  outdoor_c: number
+  cop: number
+  n: number
+  mature: boolean
+}
+
+/** The floor. Every value except `mature` is null until S1 is mature. */
+export interface EnvelopeFloor {
+  mature: boolean
+  floor_fraction: number | null
+  floor_kw_el: number | null
+  floor_penalty: boolean | null
+}
+
+/** The ceiling of one outdoor band. `ceiling_flow_c` is null until a
+ *  mature flow band above the best one has a COP more than the tolerance
+ *  below the best COP. */
+export interface EnvelopeCeilingBand {
+  outdoor_c: number
+  best_flow_c: number
+  best_cop: number
+  ceiling_flow_c: number | null
+  mature: boolean
+}
+
+export interface EfficiencyEnvelopeResponse {
+  schema_version: number
+  install_class: EnvelopeInstallClass
+  /** The configured entity ids; an empty string when not configured. */
+  power_entity: string
+  heat_entity: string
+  cop_entity: string
+  samples: number
+  /** Refused cycles by the name of the first clause that refused them. */
+  refused: Record<string, number>
+  reference_input_kw: number | null
+  s1: EnvelopeS1Bin[]
+  s1_mature: boolean
+  s2: EnvelopeS2Bin[]
+  s2_mature: boolean
+  floor: EnvelopeFloor
+  ceiling: EnvelopeCeilingBand[]
+  /** Epoch seconds of the last admitted sample or of the last reset;
+   *  0 when neither has occurred. */
+  updated_at: number
+}
+
+/** INSTRUCTION-620B — response of `POST /api/envelope/reset`: the surfaces
+ *  are discarded; the install class and the power entity are kept. */
+export interface EnvelopeResetResult {
+  status: 'reset'
+  install_class: EnvelopeInstallClass
+  power_entity: string
+}
+
 // Trend persistence types
 export interface TrendPoint {
   t: number

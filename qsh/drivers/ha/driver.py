@@ -603,6 +603,46 @@ class HADriver:
         _compressor_freq = _read_modbus_entity("compressor_freq_hz")
         _defrost_valve = _read_modbus_entity("defrost_valve_pct")
 
+        # INSTRUCTION-623E — the refrigerant margin inputs (defrost.refrigerant),
+        # read only when the defrost function is enabled.
+        _defrost_section = config.get("defrost")
+        _refrig_cfg: Dict[str, Any] = {}
+        if isinstance(_defrost_section, dict) and _defrost_section.get("enabled") is True:
+            _candidate = _defrost_section.get("refrigerant")
+            if isinstance(_candidate, dict):
+                _refrig_cfg = _candidate
+
+        def _read_refrigerant_entity(key: str) -> Optional[float]:
+            entity_id = _refrig_cfg.get(key)
+            if not entity_id:
+                return None
+            raw = fetch_ha_entity(entity_id, default=None)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return None
+            if value != value or value in (float("inf"), float("-inf")):
+                return None
+            return value
+
+        _defrost_te_raw = _read_refrigerant_entity("te_entity")
+        _defrost_suction = _read_refrigerant_entity("suction_pressure_entity")
+        _defrost_threshold_raw = _read_refrigerant_entity("threshold_entity")
+
+        # INSTRUCTION-623B — the declared defrost source (D2), read only when
+        # the defrost detector is enabled and an entity is declared.
+        _defrost_section = config.get("defrost")
+        _defrost_declared_raw: Optional[str] = None
+        if isinstance(_defrost_section, dict) and _defrost_section.get("enabled") is True:
+            _declared_cfg = _defrost_section.get("declared")
+            _declared_entity = (
+                _declared_cfg.get("entity") if isinstance(_declared_cfg, dict) else None
+            )
+            if isinstance(_declared_entity, str) and _declared_entity.strip():
+                _declared_state = fetch_ha_entity(_declared_entity.strip(), default=None)
+                if _declared_state is not None:
+                    _defrost_declared_raw = str(_declared_state)
+
         # INSTRUCTION-364 — optional operator-mapped cooling-status sensor.
         # Read the mapped entity to a tri-state bool (on→True / off→False /
         # missing→None); OR-composed with 363's hydraulic detector below so a
@@ -642,6 +682,10 @@ class HADriver:
             compressor_freq_hz=_compressor_freq,
             defrost_active=(_defrost_valve or 0) > 0,
             defrost_valve_pct=_defrost_valve,
+            defrost_te_raw_c=_defrost_te_raw,
+            defrost_suction_bar_g=_defrost_suction,
+            defrost_te_threshold_raw_c=_defrost_threshold_raw,
+            defrost_declared_raw=_defrost_declared_raw,
             # INSTRUCTION-363/364 — operator-mapped cooling sensor (truthy) OR
             # 363's hydraulic detector from values already resolved for the
             # sibling heat-source fields (same defrost predicate as

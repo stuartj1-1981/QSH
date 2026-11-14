@@ -55,6 +55,13 @@ vi.mock('../../hooks/useHistory', () => ({
   useHistory: () => ({ data: [], loading: false }),
 }))
 
+// INSTRUCTION-620B — the efficiency envelope card fetches /api/envelope;
+// mocked so that this page test makes no network call.
+vi.mock('../../hooks/useEfficiencyEnvelope', () => ({
+  useEfficiencyEnvelope: () => ({ data: null, error: null, loading: false, refresh: vi.fn() }),
+  resetEfficiencyEnvelope: vi.fn(),
+}))
+
 vi.mock('../../components/TrendChart', () => ({
   TrendChart: ({ title }: { title: string }) => <div>{title}</div>,
 }))
