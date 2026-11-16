@@ -628,6 +628,8 @@ class HADriver:
         _defrost_te_raw = _read_refrigerant_entity("te_entity")
         _defrost_suction = _read_refrigerant_entity("suction_pressure_entity")
         _defrost_threshold_raw = _read_refrigerant_entity("threshold_entity")
+        # INSTRUCTION-628A — the reference of the Te off check.
+        _defrost_unit_air = _read_refrigerant_entity("air_entity")
 
         # INSTRUCTION-623B — the declared defrost source (D2), read only when
         # the defrost detector is enabled and an entity is declared.
@@ -685,6 +687,7 @@ class HADriver:
             defrost_te_raw_c=_defrost_te_raw,
             defrost_suction_bar_g=_defrost_suction,
             defrost_te_threshold_raw_c=_defrost_threshold_raw,
+            defrost_unit_air_raw_c=_defrost_unit_air,
             defrost_declared_raw=_defrost_declared_raw,
             # INSTRUCTION-363/364 — operator-mapped cooling sensor (truthy) OR
             # 363's hydraulic detector from values already resolved for the

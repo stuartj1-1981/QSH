@@ -6,7 +6,9 @@ import { TopicDiscoveryPanel } from './TopicDiscoveryPanel'
 import { useEntityScan } from '../../hooks/useEntityScan'
 import { cn } from '../../lib/utils'
 import { mqttSensorPlaceholder } from '../../lib/mqtt-placeholders'
-import { asTopicInput } from '../../lib/mqttTopic'
+import { asTopicInput, storedPowerUnit, withPowerUnit } from '../../lib/mqttTopic'
+import type { PowerUnit } from '../../lib/mqttTopic'
+import { PowerUnitSelect } from './PowerUnitSelect'
 import { HydraulicProtectionFields } from '../settings/HydraulicProtectionFields'
 import type {
   HeatSourceYaml, OutdoorYaml, SolarYaml, BatteryYaml, GridYaml,
@@ -61,6 +63,22 @@ const PER_SOURCE_MQTT_SENSOR_FIELDS = [
       'Circulator pump electrical input — typically relevant only for boiler sources.',
   },
 ] as const
+
+// INSTRUCTION-629D — the power topics of this step. QSH reads each in kW
+// unless its entry declares `unit: 'W'` (INSTRUCTION-629B).
+const POWER_UNIT_INPUT_KEYS: ReadonlySet<string> = new Set([
+  'solar_production', 'battery_power', 'grid_power',
+])
+const POWER_UNIT_SOURCE_SLOTS: ReadonlySet<string> = new Set([
+  'power_input', 'heat_output', 'pump_power',
+])
+// The old system input that a slot of the primary source covers. The driver
+// reads the slot in its place, and a unit on the old input that differs from
+// the slot's unit is refused (INSTRUCTION-629C).
+const OLD_INPUT_OF_SOURCE_SLOT: Readonly<Record<string, string>> = {
+  power_input: 'hp_power',
+  heat_output: 'hp_heat_output',
+}
 
 export function StepSensors({ config, onUpdate }: StepSensorsProps) {
   const isMqtt = config.driver === 'mqtt'
@@ -590,11 +608,21 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
     if (topic) {
       const entry: MqttTopicInput = { topic, format: (format || 'plain') as 'plain' | 'json' }
       if (jsonPath) entry.json_path = jsonPath
+      // INSTRUCTION-629D — a pick keeps the unit that the entry declares.
+      const prevUnit = POWER_UNIT_INPUT_KEYS.has(key) ? inputs[key]?.unit : undefined
+      if (prevUnit !== undefined) entry.unit = prevUnit
       newInputs[key] = entry
     } else {
       delete newInputs[key]
     }
     onUpdate('mqtt', { ...mqtt, inputs: newInputs })
+  }
+
+  // INSTRUCTION-629D — the unit of a mapped power input.
+  const setInputUnit = (key: string, unit: PowerUnit) => {
+    const current = inputs[key]
+    if (!current?.topic) return
+    onUpdate('mqtt', { ...mqtt, inputs: { ...inputs, [key]: withPowerUnit(current, unit) } })
   }
 
   // INSTRUCTION-606C — clear several input keys in one write. Two updateInput
@@ -616,11 +644,16 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
     format?: string,
     jsonPath?: string,
   ) => {
+    // INSTRUCTION-629D — a pick keeps the unit that the entry declares.
+    const prevUnit = POWER_UNIT_SOURCE_SLOTS.has(key)
+      ? asTopicInput(perSourceSensors[key as keyof typeof perSourceSensors])?.unit
+      : undefined
     const nextEntry: MqttTopicInput | undefined = topic
       ? {
           topic,
           format: (format || 'plain') as 'plain' | 'json',
           ...(jsonPath ? { json_path: jsonPath } : {}),
+          ...(prevUnit !== undefined ? { unit: prevUnit } : {}),
         }
       : undefined
     const nextSensors: Record<string, MqttTopicInput | string | undefined> = { ...perSourceSensors }
@@ -635,6 +668,29 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
         ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
         : [updatedSource]
     onUpdate('heat_sources', nextSources)
+  }
+
+
+  // INSTRUCTION-629D — the unit of a mapped per-source power topic.
+  const setPerSourceUnit = (key: string, unit: PowerUnit) => {
+    const current = asTopicInput(perSourceSensors[key as keyof typeof perSourceSensors])
+    if (!current?.topic) return
+    const updatedSource = {
+      ...hs,
+      sensors: { ...perSourceSensors, [key]: withPowerUnit(current, unit) },
+    }
+    const nextSources =
+      heatSourcesArr.length > 0
+        ? heatSourcesArr.map((s, i) => (i === safeActive ? updatedSource : s))
+        : [updatedSource]
+    onUpdate('heat_sources', nextSources)
+    // An old system input of the primary source that declares a unit takes
+    // the unit of the slot, so that the two do not differ.
+    const oldKey = safeActive === 0 ? OLD_INPUT_OF_SOURCE_SLOT[key] : undefined
+    const oldEntry = oldKey ? inputs[oldKey] : undefined
+    if (oldKey && oldEntry && typeof oldEntry === 'object' && oldEntry.unit !== undefined) {
+      onUpdate('mqtt', { ...mqtt, inputs: { ...inputs, [oldKey]: withPowerUnit(oldEntry, unit) } })
+    }
   }
 
   // INSTRUCTION-575H — source-level (non-sensor) fields; plural write only.
@@ -744,6 +800,13 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                   )}
                   required={hint === 'recommended'}
                 />
+                {POWER_UNIT_SOURCE_SLOTS.has(key) && !!entry?.topic && (
+                  <PowerUnitSelect
+                    label={label}
+                    stored={storedPowerUnit(entry)}
+                    onChange={(unit) => setPerSourceUnit(key, unit)}
+                  />
+                )}
                 {helperFor && (
                   <p className="mt-1 text-xs text-[var(--text-muted)]">{helperFor}</p>
                 )}
@@ -854,14 +917,23 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
             </div>
           </div>
           {hasSolar && (
-            <TopicPicker
-              label="Solar Production"
-              value={getInputTopic('solar_production')}
-              format={inputs.solar_production?.format}
-              jsonPath={inputs.solar_production?.json_path}
-              onChange={(topic, fmt, jp) => updateInput('solar_production', topic, fmt, jp)}
-              scanResults={scanResults}
-            />
+            <div>
+              <TopicPicker
+                label="Solar Production"
+                value={getInputTopic('solar_production')}
+                format={inputs.solar_production?.format}
+                jsonPath={inputs.solar_production?.json_path}
+                onChange={(topic, fmt, jp) => updateInput('solar_production', topic, fmt, jp)}
+                scanResults={scanResults}
+              />
+              {!!getInputTopic('solar_production') && (
+                <PowerUnitSelect
+                  label="Solar Production"
+                  stored={storedPowerUnit(inputs.solar_production)}
+                  onChange={(unit) => setInputUnit('solar_production', unit)}
+                />
+              )}
+            </div>
           )}
         </div>
 
@@ -901,14 +973,23 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
                 onChange={(topic, fmt, jp) => updateInput('battery_soc', topic, fmt, jp)}
                 scanResults={scanResults}
               />
-              <TopicPicker
-                label="Battery Power"
-                value={getInputTopic('battery_power')}
-                format={inputs.battery_power?.format}
-                jsonPath={inputs.battery_power?.json_path}
-                onChange={(topic, fmt, jp) => updateInput('battery_power', topic, fmt, jp)}
-                scanResults={scanResults}
-              />
+              <div>
+                <TopicPicker
+                  label="Battery Power"
+                  value={getInputTopic('battery_power')}
+                  format={inputs.battery_power?.format}
+                  jsonPath={inputs.battery_power?.json_path}
+                  onChange={(topic, fmt, jp) => updateInput('battery_power', topic, fmt, jp)}
+                  scanResults={scanResults}
+                />
+                {!!getInputTopic('battery_power') && (
+                  <PowerUnitSelect
+                    label="Battery Power"
+                    stored={storedPowerUnit(inputs.battery_power)}
+                    onChange={(unit) => setInputUnit('battery_power', unit)}
+                  />
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -941,14 +1022,23 @@ function MqttSensors({ config, onUpdate }: StepSensorsProps) {
             </div>
           </div>
           {hasGrid && (
-            <TopicPicker
-              label="Grid Power"
-              value={getInputTopic('grid_power')}
-              format={inputs.grid_power?.format}
-              jsonPath={inputs.grid_power?.json_path}
-              onChange={(topic, fmt, jp) => updateInput('grid_power', topic, fmt, jp)}
-              scanResults={scanResults}
-            />
+            <div>
+              <TopicPicker
+                label="Grid Power"
+                value={getInputTopic('grid_power')}
+                format={inputs.grid_power?.format}
+                jsonPath={inputs.grid_power?.json_path}
+                onChange={(topic, fmt, jp) => updateInput('grid_power', topic, fmt, jp)}
+                scanResults={scanResults}
+              />
+              {!!getInputTopic('grid_power') && (
+                <PowerUnitSelect
+                  label="Grid Power"
+                  stored={storedPowerUnit(inputs.grid_power)}
+                  onChange={(unit) => setInputUnit('grid_power', unit)}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>

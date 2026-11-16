@@ -167,6 +167,16 @@ def _fetch_entity_attributes(entity_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _mqtt_input_mapped(cfg: dict, key: str, old_form=None) -> bool:
+    """INSTRUCTION-629C — True when mqtt.inputs.<key> has a topic, or when the
+    old form of the key (for example solar.production_topic), which the
+    loader moves to mqtt.inputs at start, has one."""
+    from qsh.config import _topic_of
+
+    inputs = (cfg.get("mqtt") or {}).get("inputs") or {}
+    return bool(_topic_of(inputs.get(key)) or _topic_of(old_form))
+
+
 def _ha_entity_exists(entity_id: str) -> bool:
     """True iff the named entity is present on the HA instance. Returns
     False on any error (treats unreachable HA as 'absent' so the wizard
@@ -1275,6 +1285,12 @@ def validate_config(req: WizardValidateRequest):
                         "master enable. See docs/mqtt-forecast-publisher.md for "
                         "publisher requirements."
                     )
+            # INSTRUCTION-629C — a power topic that declares a unit declares
+            # W or kW, on the topic that the driver reads. Errors (422 at
+            # deploy); the check is shared with the offline validator.
+            from qsh.config_sections import power_unit_errors
+
+            errors.extend(power_unit_errors(cfg))
         else:
             hs = cfg.get("heat_source", {})
             sensors = hs.get("sensors", {})
@@ -1611,7 +1627,20 @@ def validate_config(req: WizardValidateRequest):
             # present-but-non-existent in HA fires the warning — the direct
             # "inherited, not his" detector.
             production_entity = solar_cfg.get("production_entity")
-            if not production_entity or not _ha_entity_exists(production_entity):
+            if cfg.get("driver") == "mqtt":
+                # INSTRUCTION-629C — on the MQTT driver the rule reads the
+                # mapped topic. It does not test that the topic is alive.
+                if not _mqtt_input_mapped(cfg, "solar_production", solar_cfg.get("production_topic")):
+                    warnings.append({
+                        "rule_id": "solar_block_no_entity",
+                        "message": (
+                            "A solar block is configured but no solar production "
+                            "topic is mapped (mqtt.inputs.solar_production) — "
+                            "confirm this building actually has solar, or "
+                            "remove the block"
+                        ),
+                    })
+            elif not production_entity or not _ha_entity_exists(production_entity):
                 warnings.append({
                     "rule_id": "solar_block_no_entity",
                     "message": (
@@ -1655,7 +1684,20 @@ def validate_config(req: WizardValidateRequest):
                     ),
                 })
             soc_entity = battery_cfg.get("soc_entity")
-            if not soc_entity or not _ha_entity_exists(soc_entity):
+            if cfg.get("driver") == "mqtt":
+                # INSTRUCTION-629C — on the MQTT driver the rule reads the
+                # mapped topic. It does not test that the topic is alive.
+                if not _mqtt_input_mapped(cfg, "battery_soc", battery_cfg.get("soc_topic")):
+                    warnings.append({
+                        "rule_id": "battery_block_no_entity",
+                        "message": (
+                            "A battery block is configured but no battery state "
+                            "of charge topic is mapped (mqtt.inputs.battery_soc) "
+                            "— confirm this building actually has a battery, or "
+                            "remove the block"
+                        ),
+                    })
+            elif not soc_entity or not _ha_entity_exists(soc_entity):
                 warnings.append({
                     "rule_id": "battery_block_no_entity",
                     "message": (

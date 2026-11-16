@@ -80,6 +80,17 @@ def _register_events() -> None:
         payload_fields=("temp",),
         default_level=logging.INFO,
     ))
+    # INSTRUCTION-629A — the outdoor entity is configured and stale, and no
+    # reading has been valid in this process, so the cycle delivers the
+    # synthetic 5.0 with has_outdoor=False. Singleton LATCHED WARNING, in
+    # place of a plain WARNING on each cycle. Name, payload and level are
+    # parity with MQTT.outdoor_stale_no_history (drivers/mqtt/driver.py).
+    ann.register(EventSpec(
+        name="HA.outdoor_stale_no_history",
+        kind=EventKind.LATCHED,
+        payload_fields=("fallback",),
+        default_level=logging.WARNING,
+    ))
     # INSTRUCTION-437 D4d — the last silent outdoor arm: no outdoor_temp entity
     # configured, so the driver holds last-valid or falls back to synthetic 5.0
     # with has_outdoor=False. WARNING because no outdoor sensor is wired. Name-
@@ -1521,6 +1532,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
                 )
             data.has_outdoor = True
             ann.exited("HA.outdoor_stale_lastvalid")
+            ann.exited("HA.outdoor_stale_no_history")
         else:
             if _last_valid_outdoor_temp is not None:
                 data.outdoor_temp = _last_valid_outdoor_temp
@@ -1532,7 +1544,7 @@ def fetch_all_sensor_data(config: Dict, target_temp: float) -> SensorData:
             else:
                 data.outdoor_temp = 5.0
                 data.has_outdoor = False
-                logging.warning("Outdoor sensor stale - no history, using 5°C fallback")
+                ann.entered("HA.outdoor_stale_no_history", fallback=5.0)
     else:
         data.outdoor_temp = _last_valid_outdoor_temp if _last_valid_outdoor_temp is not None else 5.0
         data.has_outdoor = False

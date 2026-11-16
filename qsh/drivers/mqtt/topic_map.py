@@ -63,6 +63,14 @@ BUILTIN_STALENESS_DEFAULTS: Dict[str, Dict[str, int]] = {
     # as the Home Assistant driver reads the entity. `mqtt.staleness_defaults`
     # can give the category a limit.
     "setpoint":    {"fresh": math.inf, "unavailable": math.inf},
+    # INSTRUCTION-631B — a state or a value of the heat pump unit (the
+    # declared defrost state, the reversing valve, the refrigerant values).
+    # The Home Assistant driver reads such an entity with no age test, and a
+    # publisher often sends on change only: a valve that stays at one
+    # position through a defrost sends one message. So the reading is valid
+    # until a later message, its availability topic or a day of silence
+    # contradicts it. No stale grade.
+    "unit_state":  {"fresh": 86400, "unavailable": 86400},
     "power":       {"fresh": 180,  "unavailable": 600},
     "energy":      {"fresh": 300,  "unavailable": 900},
     "outdoor":     {"fresh": 1800, "unavailable": 3600},
@@ -93,6 +101,8 @@ _FIELD_CATEGORY_INFERENCE: Dict[str, str] = {
     "hp_power": "power",
     "grid_power": "power",
     "battery_power": "power",
+    # INSTRUCTION-629E — graded as the other power inputs, not by `default`.
+    "boiler_power_input": "power",
     "hp_cop": "power",
     "solar_production": "energy",
     "battery_soc": "energy",
@@ -100,6 +110,17 @@ _FIELD_CATEGORY_INFERENCE: Dict[str, str] = {
     "window_sensor": "contact",
     # Setpoint readbacks (INSTRUCTION-627B)
     "trv_setpoint_readback": "setpoint",
+    # The refrigerant and defrost inputs (INSTRUCTION-631B), by config key
+    "evaporator_outlet_c": "unit_state",
+    "suction_pressure_kpa": "unit_state",
+    "compressor_freq_hz": "unit_state",
+    "defrost_valve_pct": "unit_state",
+    "defrost_te": "unit_state",
+    "defrost_suction_pressure": "unit_state",
+    "defrost_te_threshold": "unit_state",
+    # The air at the unit, the reference of the Te off check (INSTRUCTION-628C)
+    "defrost_unit_air": "unit_state",
+    "defrost_declared": "unit_state",
 }
 
 
@@ -124,6 +145,18 @@ TRV_SETPOINT_READBACK_FIELD = "trv_setpoint_readback"
 # subscription in the driver setup(). topic_map then correctly leaves it out of
 # the InputBlock signal-quality pipeline. INSTRUCTION-345.
 SUBSCRIBE_ONLY_INPUT_KEYS: frozenset = frozenset({"forecast"})
+
+# INSTRUCTION-629B — the power inputs that take the `unit` key. QSH works in
+# kW. A power topic in its mapping form can declare `unit: W` or `unit: kW`;
+# the driver divides a watt value by 1000 where it parses the payload. With no
+# key the unit is kW. The HA driver reads the unit of its power inputs from
+# the entity (drivers/ha/sensor_fetcher.py, _get_power_divisor).
+POWER_UNIT_INPUT_KEYS: frozenset = frozenset({
+    "hp_power", "hp_heat_output", "solar_production", "grid_power",
+    "battery_power", "boiler_power_input",
+})
+POWER_UNIT_SOURCE_SLOTS: frozenset = frozenset({"power_input", "heat_output", "pump_power"})
+POWER_UNIT_DIVISORS: Dict[str, float] = {"W": 1000.0, "kW": 1.0}
 
 
 @dataclass
@@ -164,6 +197,9 @@ class TopicMapping:
     # INSTRUCTION-604A: True for a window contact whose payload reads true
     # when the window is CLOSED (Zigbee2MQTT `contact`). False elsewhere.
     invert: bool = False
+    # INSTRUCTION-629B: the divisor that converts the parsed value to kW.
+    # 1000.0 for a power topic that declares `unit: W`; 1.0 elsewhere.
+    unit_divisor: float = 1.0
 
 
 @dataclass
@@ -204,6 +240,37 @@ class TopicMap:
                 seen.add(t)
                 unique.append(t)
         return unique
+
+
+def _declared_power_unit(entry: Any) -> Any:
+    """The `unit` value of a topic entry, or None when the entry declares none.
+
+    Only the mapping form can declare a unit. A string entry, and a mapping
+    with no `unit` key or with `unit: null`, declare none.
+    """
+    if isinstance(entry, dict):
+        return entry.get("unit")
+    return None
+
+
+def power_unit_divisor(entry: Any, label: str) -> float:
+    """INSTRUCTION-629B — the divisor that converts one power topic to kW.
+
+    1000.0 for `unit: W`; 1.0 for `unit: kW` and for no declared unit. A value
+    that is not one of the two is not read: the topic is taken as kW and one
+    WARNING names it, as the HA driver does for an unknown entity unit. The
+    start does not refuse the configuration.
+    """
+    unit = _declared_power_unit(entry)
+    if unit is None:
+        return 1.0
+    if isinstance(unit, str) and unit in POWER_UNIT_DIVISORS:
+        return POWER_UNIT_DIVISORS[unit]
+    logger.warning(
+        "%s: unknown unit %r — assuming kW. Expected 'W' or 'kW'",
+        label, unit,
+    )
+    return 1.0
 
 
 def _prefixed(prefix: str, topic: str) -> str:
@@ -555,6 +622,19 @@ SYSTEM_INPUT_FIELDS = {
     # the driver (qsh/drivers/mqtt/driver.py:535) via SYSTEM_INPUT_FIELDS
     # iteration; the capability flag below pairs with it.
     "boiler_power_input": "boiler_power_input",
+    # INSTRUCTION-631B — the refrigerant and defrost inputs that the Home
+    # Assistant driver reads from `sensors.hp_modbus` and from
+    # `defrost.refrigerant`: config key -> InputBlock field.
+    "evaporator_outlet_c": "evaporator_temp",
+    "suction_pressure_kpa": "suction_pressure_kpa",
+    "compressor_freq_hz": "compressor_freq_hz",
+    "defrost_valve_pct": "defrost_valve_pct",
+    "defrost_te": "defrost_te_raw_c",
+    "defrost_suction_pressure": "defrost_suction_bar_g",
+    "defrost_te_threshold": "defrost_te_threshold_raw_c",
+    # INSTRUCTION-628C — the air temperature at the unit's coil, which the
+    # Home Assistant driver reads from `defrost.refrigerant.air_entity`.
+    "defrost_unit_air": "defrost_unit_air_raw_c",
 }
 
 # System-level fields whose payload is a raw string (boolean/enum), NOT a number.
@@ -566,6 +646,10 @@ SYSTEM_STRING_INPUT_FIELDS = {
     # Classified on/off in driver.read_inputs and OR-composed with 363's
     # hydraulic derive_cooling_active. Requires the matching elif handler there.
     "cooling_active": "cooling_active",
+    # INSTRUCTION-631B — the declared defrost state of the unit (the source
+    # D2 of INSTRUCTION-623B): the raw payload, which `defrost.declared`
+    # decodes. Requires the matching elif handler in driver.read_inputs.
+    "defrost_declared": "defrost_declared_raw",
 }
 
 # Fields that indicate capabilities when received.
@@ -817,6 +901,10 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
             category=inferred_cat,
             availability=availability,
             last_seen=last_seen,
+            unit_divisor=(
+                power_unit_divisor(topic_cfg, f"mqtt.inputs.{config_key}")
+                if config_key in POWER_UNIT_INPUT_KEYS else 1.0
+            ),
         ))
 
     # ── Per-source heat-source topics (INSTRUCTION-241A Task 4) ──
@@ -874,6 +962,10 @@ def build_topic_map(config: Dict[str, Any]) -> TopicMap:
                 category=category,
                 availability=availability,
                 last_seen=last_seen,
+                unit_divisor=(
+                    power_unit_divisor(entry, f"heat_sources['{name}'].sensors.{slot}")
+                    if slot in POWER_UNIT_SOURCE_SLOTS else 1.0
+                ),
             ))
 
     # ── Per-source cost/carbon topics → source_states[name][slot] (INSTRUCTION-354A) ──

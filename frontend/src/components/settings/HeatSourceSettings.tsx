@@ -206,11 +206,21 @@ export function HeatSourceSettings({
   }
 
   const handleSensorChange = (i: number) => (key: string, value: string) => {
+    // INSTRUCTION-629F — an entry in its mapping form keeps its other keys
+    // (format, json_path, unit) when its topic changes. The keys are those
+    // of the entry in the form, or of the entry of the last save when the
+    // user emptied the field first. A string entry and a new entry are
+    // written as the text of the field.
+    type SensorEntries = Record<string, string | MqttTopicInput | undefined>
+    const savedSensors: SensorEntries = { ...(lastSavedRef.current[i]?.sensors ?? {}) }
+    const saved = savedSensors[key]
     setSources((prev) =>
       prev.map((s, idx) => {
         if (idx !== i) return s
-        const nextSensors = { ...(s.sensors ?? {}), [key]: value || undefined }
-        return { ...s, sensors: nextSensors }
+        const sensors: SensorEntries = { ...(s.sensors ?? {}) }
+        const kept = [sensors[key], saved].find((e) => !!e && typeof e === 'object')
+        const next = !value ? undefined : kept && typeof kept === 'object' ? { ...kept, topic: value } : value
+        return { ...s, sensors: { ...sensors, [key]: next } }
       }),
     )
   }
