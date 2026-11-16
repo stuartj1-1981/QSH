@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { extractTopic, extractFormat, extractJsonPath, asTopicInput } from '../mqttTopic'
+import {
+  extractTopic, extractFormat, extractJsonPath, asTopicInput,
+  storedPowerUnit, withPowerUnit,
+} from '../mqttTopic'
 import type { MqttTopicInput } from '../../types/config'
 
 describe('mqttTopic — extractTopic', () => {
@@ -98,5 +101,57 @@ describe('mqttTopic — asTopicInput', () => {
   it('passes through an object lacking optional fields', () => {
     const v: MqttTopicInput = { topic: 'qsh/c' } as MqttTopicInput
     expect(asTopicInput(v)).toBe(v)
+  })
+})
+
+describe('mqttTopic — storedPowerUnit (INSTRUCTION-629D)', () => {
+  it('returns empty text for undefined, null and a bare string', () => {
+    expect(storedPowerUnit(undefined)).toBe('')
+    expect(storedPowerUnit(null)).toBe('')
+    expect(storedPowerUnit('a/b')).toBe('')
+  })
+
+  it('returns empty text for an entry with no unit', () => {
+    expect(storedPowerUnit({ topic: 'a/b', format: 'plain' })).toBe('')
+  })
+
+  it('returns W and kW as they are stored', () => {
+    expect(storedPowerUnit({ topic: 'a/b', unit: 'W' })).toBe('W')
+    expect(storedPowerUnit({ topic: 'a/b', unit: 'kW' })).toBe('kW')
+  })
+
+  it('returns the text of a stored value that is not W or kW', () => {
+    const watts = JSON.parse('{"topic": "a/b", "unit": "watts"}') as MqttTopicInput
+    const number = JSON.parse('{"topic": "a/b", "unit": 1000}') as MqttTopicInput
+    expect(storedPowerUnit(watts)).toBe('watts')
+    expect(storedPowerUnit(number)).toBe('1000')
+  })
+
+  it('returns an empty unit in quotation marks, and not as no unit', () => {
+    const empty = JSON.parse('{"topic": "a/b", "unit": ""}') as MqttTopicInput
+    const space = JSON.parse('{"topic": "a/b", "unit": " "}') as MqttTopicInput
+    expect(storedPowerUnit(empty)).toBe('""')
+    expect(storedPowerUnit(space)).toBe('" "')
+  })
+})
+
+describe('mqttTopic — withPowerUnit (INSTRUCTION-629D)', () => {
+  it('stores W as unit W and keeps the other keys', () => {
+    const v: MqttTopicInput = { topic: 'a/b', format: 'json', json_path: 'x.y' }
+    expect(withPowerUnit(v, 'W')).toEqual({
+      topic: 'a/b', format: 'json', json_path: 'x.y', unit: 'W',
+    })
+  })
+
+  it('stores kW as no unit key', () => {
+    const next = withPowerUnit({ topic: 'a/b', format: 'plain', unit: 'W' }, 'kW')
+    expect(next).toEqual({ topic: 'a/b', format: 'plain' })
+    expect('unit' in next).toBe(false)
+  })
+
+  it('does not change the entry that it is given', () => {
+    const v: MqttTopicInput = { topic: 'a/b', format: 'plain', unit: 'W' }
+    withPowerUnit(v, 'kW')
+    expect(v).toEqual({ topic: 'a/b', format: 'plain', unit: 'W' })
   })
 })

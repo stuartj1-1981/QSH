@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [1.6.28] — 2026-11-16
+
+### Added
+- MQTT: a power topic can declare its unit, `unit: W` or `unit: kW`. QSH
+  divides watts by 1000; with no unit the topic is in kW, as before. The
+  setup wizard has a W/kW choice on each power topic.
+- MQTT: QSH can read the refrigerant-circuit and defrost inputs that it reads
+  on Home Assistant: evaporator outlet temperature, suction pressure,
+  compressor frequency, defrost valve, the unit's defrost state, and the air
+  temperature at the unit. Readings are held for up to one day with no new
+  message, so map an availability topic for them.
+
+### Fixed
+- MQTT: a boiler's power reading now reaches the energy and cost meters.
+  Before, a boiler with no `hp_power` topic was metered at zero energy and
+  zero cost. If both `mqtt.inputs.hp_power` and
+  `mqtt.inputs.boiler_power_input` are set, the meters now read
+  `boiler_power_input`.
+- MQTT: changing the topic of a heat source sensor in Settings no longer
+  drops its format, JSON path and unit.
+- MQTT: the configuration checker no longer gives false warnings for rooms,
+  outdoor temperature, battery and solar, and no longer reports no tariff
+  for a per-fuel tariff. The setup wizard no longer asks you to confirm a
+  solar or battery block that already has its topic, and both refuse a power
+  unit that is not W or kW.
+- A unit no longer sends a false weather front to the swarm after a start.
+  Before, a start with no outdoor reading yet compared the first real
+  reading with a stand-in of 5 °C.
+- Home Assistant: an outdoor sensor that is stale at start is now reported
+  once, not on every cycle.
+
 ## [1.6.27] — 2026-11-14
 
 ### Added

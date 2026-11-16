@@ -8,6 +8,9 @@ export interface MqttTopicInput {
   json_path?: string
   scale?: number
   offset?: number
+  // INSTRUCTION-629D — the unit of a power topic. QSH reads a power topic in
+  // kW unless its entry declares 'W' (INSTRUCTION-629B).
+  unit?: 'W' | 'kW'
 }
 
 export interface MqttConfig {

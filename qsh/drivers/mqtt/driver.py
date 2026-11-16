@@ -1219,6 +1219,9 @@ class MQTTDriver:
         hw_boolean_live: bool = False
         # INSTRUCTION-364 — optional cooling-status topic, classified on/off.
         cooling_active_value: Optional[bool] = None
+        # INSTRUCTION-631B — the raw declared defrost state; None with no
+        # reading this cycle.
+        defrost_declared_value: Optional[str] = None
 
         if tm:
             staleness_defaults = tm.staleness_defaults
@@ -1337,6 +1340,12 @@ class MQTTDriver:
 
                 # Parse value
                 value = parse_payload(payload_str, mapping.payload_format, mapping.json_path)
+
+                # INSTRUCTION-629B — a power topic that declares watts is
+                # converted to kW here, at the one numeric parse site, before
+                # any reader of the value.
+                if value is not None and mapping.unit_divisor != 1.0:
+                    value = value / mapping.unit_divisor
 
                 # INSTRUCTION-611 — a flow or return reading outside the band is
                 # no reading: no candidate, no capability flag, no delta-T.
@@ -1471,6 +1480,11 @@ class MQTTDriver:
                                 cooling_active_value = True
                             elif norm in _OFF_PAYLOADS:
                                 cooling_active_value = False
+                    elif mapping.field == "defrost_declared_raw":
+                        # INSTRUCTION-631B — the payload as it is; the
+                        # defrost detector decodes it (decode_declared).
+                        if extracted is not None:
+                            defrost_declared_value = extracted
                 elif value is not None:
                     _system_value_candidates.setdefault(mapping.field, []).append(
                         (value, quality, mapping)
@@ -2214,6 +2228,20 @@ class MQTTDriver:
             if provider.is_available:
                 forecast_temps = derive_daily_lows(provider.fetch_bundle(now), now)
 
+        _boiler_power_live = "boiler_power_input" in system_values
+
+        # INSTRUCTION-631B — the refrigerant and defrost inputs, as the Home
+        # Assistant driver delivers them. The valve gives the defrost flag
+        # (above 0 is a defrost). The three refrigerant inputs and the
+        # declared state are delivered only while the defrost function is
+        # enabled, as the Home Assistant driver reads them only then.
+        _defrost_valve = system_values.get("defrost_valve_pct")
+        _defrost_active = (_defrost_valve or 0) > 0
+        _defrost_section = config.get("defrost")
+        _defrost_on = (
+            isinstance(_defrost_section, dict) and _defrost_section.get("enabled") is True
+        )
+
         return InputBlock(
             room_temps=room_temps,
             # INSTRUCTION-579 — the source class per room, from the topic map
@@ -2236,18 +2264,19 @@ class MQTTDriver:
             hp_power=system_values.get("hp_power", 0.0),
             hp_cop=system_values.get("hp_cop", 3.5),
             # INSTRUCTION-363/364 — operator-mapped cooling topic (truthy) OR
-            # 363's hydraulic detector. MQTT carries no defrost signal
-            # (:1515-1546), so pass False for defrost; an MQTT HP in defrost may
-            # briefly read flow-below-return and be classed cool, harmlessly
-            # skipping a few learning cycles (conservative, §5). bool(None) is
-            # False, so an unmapped topic → exactly 363.
+            # 363's hydraulic detector. INSTRUCTION-631B — the detector takes
+            # the defrost flag of a mapped `defrost_valve_pct`, as on the Home
+            # Assistant driver; with no mapped valve the flag is False, and an
+            # MQTT HP in defrost may briefly read flow-below-return and be
+            # classed cool. bool(None) is False, so an unmapped topic →
+            # exactly 363.
             # INSTRUCTION-602 — the hydraulic detector is masked while hot water
             # is active; the mapped sensor is not.
             cooling_active=bool(cooling_active_value) or derive_cooling_active(
                 system_values.get("hp_power", 0.0),
                 system_values.get("hp_flow_temp", 35.0),
                 system_values.get("hp_return_temp", config.get("default_return_temp", 30.0)),
-                False,
+                _defrost_active,
                 has_live_return,
                 hot_water_active=hot_water_active,
             ),
@@ -2266,6 +2295,14 @@ class MQTTDriver:
                 "battery_power" in system_values
                 and signal_quality.get("battery_power") == "good"
             ),
+            # INSTRUCTION-629E — the boiler fuel-input power, kW, as the Home
+            # Assistant driver delivers it: live while the driver has a value,
+            # with no test of its own (the rule of has_live_power). With no
+            # value, None and False, and the boiler resolver takes its next tier.
+            boiler_power_input=(
+                system_values.get("boiler_power_input") if _boiler_power_live else None
+            ),
+            has_live_boiler_power=_boiler_power_live,
             current_rate=current_rate,
             export_rate=export_rate,
             control_enabled=dfan_rv.value,
@@ -2283,6 +2320,29 @@ class MQTTDriver:
             has_live_hot_water=has_live_hot_water,
             has_solar=capabilities.get("has_solar", False),
             has_battery=capabilities.get("has_battery", False),
+            # INSTRUCTION-631B — None with no reading, as on the Home
+            # Assistant driver.
+            evaporator_temp=system_values.get("evaporator_temp"),
+            suction_pressure_kpa=system_values.get("suction_pressure_kpa"),
+            compressor_freq_hz=system_values.get("compressor_freq_hz"),
+            defrost_active=_defrost_active,
+            defrost_valve_pct=_defrost_valve,
+            defrost_te_raw_c=(
+                system_values.get("defrost_te_raw_c") if _defrost_on else None
+            ),
+            defrost_suction_bar_g=(
+                system_values.get("defrost_suction_bar_g") if _defrost_on else None
+            ),
+            defrost_te_threshold_raw_c=(
+                system_values.get("defrost_te_threshold_raw_c") if _defrost_on else None
+            ),
+            # INSTRUCTION-628C — the reference of the Te off check, delivered
+            # as the three refrigerant inputs are: only while the defrost
+            # function is enabled, and None with no reading.
+            defrost_unit_air_raw_c=(
+                system_values.get("defrost_unit_air_raw_c") if _defrost_on else None
+            ),
+            defrost_declared_raw=(defrost_declared_value if _defrost_on else None),
             away_mode_active=away_rv.value,
             away_days=away_days_rv.value,
             heat_source_mode_command=(mode_rv.value if mode_rv.source == "external" else ""),
