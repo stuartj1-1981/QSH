@@ -286,7 +286,7 @@ export interface SourceSelectionYaml {
 // sites; the persisted format remains `SourceSelectionYaml`.
 export interface SourceSelectionConfig {
   mode: 'auto' | `lock:${string}`
-  preference: number               // 0.0..1.0 (0=pure cost, 1=pure carbon)
+  preference: number               // 0.0..1.0, the weight of cost (0=pure carbon, 1=pure cost)
   min_dwell_minutes: number        // backend YAML key; integer minutes
   score_deadband_pct: number       // backend YAML key; percentage 0..100
   max_switches_per_day: number     // 1..12 (UI clamp; backend has no upper bound)

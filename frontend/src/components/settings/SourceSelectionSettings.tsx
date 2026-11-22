@@ -3,7 +3,9 @@
 // 228B Task 2: Source-selection Settings subsection.
 //   * Renders an explainer note when fewer than two heat sources are configured.
 //   * Mode selector lists `Auto` plus one `Lock to <name>` option per configured source.
-//   * Preference slider with "Pure cost / Balanced / Pure carbon" anchors.
+//   * Preference slider with "Pure carbon / Balanced / Pure cost" anchors, left
+//     to right. The value is the weight of cost: 0 is pure carbon, 1 is pure
+//     cost, as on the Home page (INSTRUCTION-640).
 //   * Engineering-gated dwell / deadband / daily-cap inputs.
 //   * Daily-cap clamped to 1..12 at the UI level (compressor cycle-life guard).
 import { useState, useEffect } from 'react'
@@ -126,8 +128,8 @@ function SourceSelectionPanel({ config, sourceNames, onRefetch }: PanelProps) {
 
   const preferencePct = Math.round(ss.preference * 100)
   const preferenceAnchor =
-    preferencePct === 0 ? 'Pure cost'
-      : preferencePct === 100 ? 'Pure carbon'
+    preferencePct === 0 ? 'Pure carbon'
+      : preferencePct === 100 ? 'Pure cost'
         : preferencePct === 50 ? 'Balanced'
           : `${preferencePct}%`
 
@@ -185,10 +187,10 @@ function SourceSelectionPanel({ config, sourceNames, onRefetch }: PanelProps) {
 
       <div>
         <label className="flex items-center gap-1 text-xs font-medium text-[var(--text)] mb-1">
-          Cost / Carbon Preference <HelpTip text={SOURCE_SELECTION.preference} size={12} />
+          Carbon / Cost Preference <HelpTip text={SOURCE_SELECTION.preference} size={12} />
         </label>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-[var(--text-muted)]">Pure cost</span>
+          <span className="text-xs text-[var(--text-muted)]">Pure carbon</span>
           <input
             type="range"
             min={0}
@@ -199,7 +201,7 @@ function SourceSelectionPanel({ config, sourceNames, onRefetch }: PanelProps) {
             className="flex-1 accent-[var(--accent)]"
             data-testid="source-selection-preference"
           />
-          <span className="text-xs text-[var(--text-muted)]">Pure carbon</span>
+          <span className="text-xs text-[var(--text-muted)]">Pure cost</span>
         </div>
         <div className="text-xs text-[var(--text-muted)] mt-1 text-center" data-testid="source-selection-preference-anchor">
           {preferenceAnchor}

@@ -821,3 +821,27 @@ describe('StepHeatSource — flow capability bounds (INSTRUCTION-412)', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('StepHeatSource — cost/eco preference slider (INSTRUCTION-640)', () => {
+  it('has Eco at the left end and Cost at the right end, as the Home page has; 100 is pure cost', () => {
+    const config = {
+      heat_sources: [
+        { type: 'heat_pump' as const, name: 'HP' },
+        { type: 'gas_boiler' as const, name: 'Boiler' },
+      ],
+      source_selection: {
+        mode: 'auto' as const,
+        preference: 1,
+        min_dwell_minutes: 30,
+        score_deadband_pct: 10,
+        max_switches_per_day: 6,
+      },
+    }
+    const { container } = render(<StepHeatSource config={config} onUpdate={vi.fn()} />)
+    const slider = container.querySelector('#ss-preference') as HTMLInputElement | null
+    expect(slider).not.toBeNull()
+    expect(slider?.value).toBe('100')
+    const ends = Array.from(slider?.parentElement?.children ?? []).map((el) => el.textContent)
+    expect(ends).toEqual(['Eco', '', 'Cost'])
+  })
+})
