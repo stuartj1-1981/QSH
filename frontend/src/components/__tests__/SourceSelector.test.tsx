@@ -253,3 +253,21 @@ describe('SourceSelector debounce cleanup', () => {
     expect(clearTimeoutSpy).toHaveBeenCalled()
   })
 })
+
+describe('SourceSelector — preference slider ends (INSTRUCTION-640)', () => {
+  it('has Eco at the left end and Cost at the right end; 100 is pure cost', () => {
+    const { container } = render(
+      <SourceSelector
+        sourceSelection={makeState({ mode: 'auto', preference: 1 })}
+        onModeChange={vi.fn()}
+        onPreferenceChange={vi.fn()}
+      />
+    )
+    const slider = container.querySelector('input[type="range"]') as HTMLInputElement | null
+    expect(slider).not.toBeNull()
+    expect(slider?.value).toBe('100')
+    const labels = Array.from(slider?.previousElementSibling?.children ?? []).map((el) => el.textContent?.trim())
+    expect(labels[0]).toBe('Eco')
+    expect(labels[2]).toBe('Cost')
+  })
+})

@@ -940,10 +940,10 @@ function SourceSelectionInlineConfig({ config, sourceNames, onUpdate }: SourceSe
           htmlFor="ss-preference"
           className="text-sm font-medium text-[var(--text)] mb-1 flex items-center gap-1"
         >
-          Cost / Eco preference <HelpTip text={SOURCE_SELECTION.preference} size={12} />
+          Eco / Cost preference <HelpTip text={SOURCE_SELECTION.preference} size={12} />
         </label>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-[var(--text-muted)]">Cost</span>
+          <span className="text-xs text-[var(--text-muted)]">Eco</span>
           <input
             id="ss-preference"
             type="range"
@@ -954,7 +954,7 @@ function SourceSelectionInlineConfig({ config, sourceNames, onUpdate }: SourceSe
             onChange={(e) => update({ preference: parseInt(e.target.value, 10) / 100 })}
             className="flex-1 accent-[var(--accent)]"
           />
-          <span className="text-xs text-[var(--text-muted)]">Eco</span>
+          <span className="text-xs text-[var(--text-muted)]">Cost</span>
         </div>
         <div className="text-xs text-[var(--text-muted)] mt-1 text-center">{preferencePct}%</div>
       </div>

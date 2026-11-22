@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [1.6.29] — 2026-11-22
+
+### Changed
+- At the end of an Optimum Start pre-heat, a room's heat-up demand now comes
+  in over 30 minutes instead of in one step, and the heat-up part of the
+  demand is limited to the output of the heat source. Before, on an install
+  whose learned thermal mass was too high, the demand at the occupancy time
+  could go far above the heat source's output and fill the log with
+  "SANITY CHECK FAILED" lines.
+- Swarm: a unit now sends a disturbance packet only for a cold or warm front.
+  Heat pump starts and stops, setpoint changes, control toggles and cleared
+  alarms stay on the unit; before, each was sent, up to tens of thousands of
+  packets per unit. When data sharing is agreed, the packet carries the
+  unit's region at region level only.
+- Learning: the thermal-mass and heat-balance checks now take the heat from
+  the measured heat output where the heat source has a heat meter, and from
+  the input power x the filtered COP where it has none. The house-wide
+  heat-balance check does the same. Before, a COP sample that the filter
+  rejected, or a COP sensor that reads high or low, could skew the learned
+  heat loss and thermal mass. With no heat meter nothing changes.
+
+### Fixed
+- Source selection: on an install with two or more heat sources, the
+  cost/carbon slider in Settings and in the setup wizard had its end labels
+  the wrong way round. The labels now match the Home page: carbon (Eco) at
+  the left, cost at the right. The stored value and the source choice do not
+  change. If you set the slider in Settings or the wizard, check it on the
+  Home page.
+- Learning: a room that starts from its configured values (a new room, or a
+  room after a reset) no longer keeps a thermal-mass starting value that is
+  far too low, which made its heat loss read several times too low. After its
+  first accepted cooling fit the room restarts from a corrected starting
+  value. A room that already has a cooling fit is unchanged until it is
+  reset. After the correction, a room below its target may ask for a larger
+  heat-up, capped at the heat source's output.
+- Learning: the heat-balance check of a room now corrects a room whose heat
+  loss confidence is 0.8 or more (before, 0.9), so rooms that have learned
+  their heat loss are no longer left at a wrong scale.
+- Swarm: a restart after 00:30 UTC no longer sends a second parameter packet
+  for the same day. Each state packet now carries the result of the last
+  parameter push (accepted, rejected with the server's rule, or not sent
+  with the reason), and a failing packet build is one event, not a log line
+  every cycle.
+- Swarm: a unit whose learning resets a room no longer has its daily
+  parameter packet rejected by the server for weeks. A learned thermal mass
+  down to 0.01 kWh/°C is now sent; before, a value below 1.0 was sent as
+  empty.
+
 ## [1.6.28] — 2026-11-16
 
 ### Added

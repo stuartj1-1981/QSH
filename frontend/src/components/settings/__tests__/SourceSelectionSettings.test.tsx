@@ -179,7 +179,7 @@ describe('SourceSelectionSettings — preference slider', () => {
         onRefetch={noop}
       />,
     )
-    expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Pure cost')
+    expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Pure carbon')
 
     rerender(
       <SourceSelectionSettings
@@ -188,7 +188,7 @@ describe('SourceSelectionSettings — preference slider', () => {
         onRefetch={noop}
       />,
     )
-    expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Pure carbon')
+    expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Pure cost')
 
     rerender(
       <SourceSelectionSettings
@@ -198,6 +198,21 @@ describe('SourceSelectionSettings — preference slider', () => {
       />,
     )
     expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Balanced')
+  })
+
+  it('preference slider has carbon at the left end and cost at the right end (INSTRUCTION-640)', () => {
+    render(
+      <SourceSelectionSettings
+        config={{ ...baseConfig, preference: 1 }}
+        sourceNames={TWO_SOURCES}
+        onRefetch={noop}
+      />,
+    )
+    const slider = screen.getByTestId('source-selection-preference') as HTMLInputElement
+    const ends = Array.from(slider.parentElement?.children ?? []).map((el) => el.textContent)
+    expect(ends).toEqual(['Pure carbon', '', 'Pure cost'])
+    expect(slider.value).toBe('100')
+    expect(screen.getByTestId('source-selection-preference-anchor').textContent).toBe('Pure cost')
   })
 })
 
