@@ -217,10 +217,14 @@ export const StatusBanner = memo(function StatusBanner({
   // INSTRUCTION-128A Task 3). If this value ever changes, grep for
   // "off_power_threshold_kw" and update all three sites.
   const BOILER_OFF_THRESHOLD_KW = 0.5
+  // INSTRUCTION-646B — the server gives the active source's resolved
+  // off-power threshold (INSTRUCTION-646A); the constant above serves a
+  // server that predates it, or the cycle before the first.
+  const boilerOffKw = heatSource.off_power_threshold_kw ?? BOILER_OFF_THRESHOLD_KW
   const showPerfLabel = isHeatPump
     ? heatSource.performance.source === 'live'
     : heatSource.performance.value > 0
-      && heatSource.input_power_kw >= BOILER_OFF_THRESHOLD_KW
+      && heatSource.input_power_kw >= boilerOffKw
 
   return (
     <>

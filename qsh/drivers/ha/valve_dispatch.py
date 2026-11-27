@@ -37,6 +37,7 @@ from ...valve_control import (
     VALVE_HARDWARE_GENERIC,
     direct_is_hold,
     direct_base_target,
+    direct_max_opening,
     direct_slew_limit,
     DIRECT_LAW_MIN_MOVE_INTERVAL_S,
     DIRECT_LAW_LIMITED_HARDWARE,
@@ -601,13 +602,12 @@ def apply_direct_valve_control(
 
     # INSTRUCTION-596 — IN0 of the selector: the law target, computed on each
     # cycle, also while the selector outputs the dissipation setpoint. It is
-    # the base target of the shared law plus the balance offset; in the
-    # dead band it is the last IN0 (the law holds). The 600 s hold of the law
-    # and the slew delay the write of the target; they do not change it. The
-    # stop test of the dissipation episode reads IN0 and never the setpoint.
-    law_target = direct_base_target(deficit, heat_up_rate)
-    if balancing_detector is not None:
-        law_target = max(0, min(100, law_target + balancing_detector.get_balance_offset(room)))
+    # the base target of the shared law held at the room's maximum opening
+    # (INSTRUCTION-648D); in the dead band it is the last IN0 (the law
+    # holds). The 600 s hold of the law and the slew delay the write of the
+    # target; they do not change it. The stop test of the dissipation episode
+    # reads IN0 and never the setpoint.
+    law_target = direct_max_opening(room, direct_base_target(deficit, heat_up_rate), control_state)
     if control_state is not None:
         last_in0 = control_state.direct_law_target.get(room)
         if not direct_is_hold(deficit, heat_up_rate, last_in0):
@@ -640,6 +640,19 @@ def apply_direct_valve_control(
             logging.debug(f"{room} direct: dissipation setpoint {target_position}% selected")
             return apply_valve_position(
                 room, target_position, hardware_type, config, dfan_control, control_state
+            )
+
+    # INSTRUCTION-648C — the balancing probe, the third input of the selector:
+    # after the hydraulic bypass and the dissipation setpoint, before the law.
+    # No dead-band hold and no 600 s hold of the law; the writer applies
+    # MANUAL, shadow mode, its debounce, the 60 s interval and the 10 % slew.
+    if control_state is not None:
+        _probe = getattr(control_state, "balancing_probe_positions", None)
+        probe_pos = _probe.get(room) if isinstance(_probe, dict) else None
+        if isinstance(probe_pos, int) and not isinstance(probe_pos, bool):
+            logging.debug(f"{room} direct: balancing probe {probe_pos}% selected")
+            return apply_valve_position(
+                room, probe_pos, hardware_type, config, dfan_control, control_state
             )
 
     # Deficit-based target position with heat_up_rate damping.

@@ -111,6 +111,8 @@ export const SOURCE_SELECTION = {
 } as const
 
 export const BALANCING = {
+  maxOpening: 'The furthest QSH opens this radiator valve. Set by you, or learned from the flow test: a radiator that gets much more than its share of the flow is limited. A limit is lifted while the room is more than 1 °C cold.',
+  flowModel: 'What QSH has learned about each radiator: its flow at full opening against the flow its rated output needs. Hydraulic uses the flow-rate sensor; thermal uses the heat output when there is no flow sensor.',
   suggestion: 'A recommended lockshield valve adjustment to improve flow balance across your zones.',
   severity: 'How far the zone flow deviates from the ideal. Higher deviation means the zone is more out of balance.',
 } as const

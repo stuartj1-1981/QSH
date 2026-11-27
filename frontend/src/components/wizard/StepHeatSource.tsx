@@ -6,7 +6,14 @@ import { HelpTip } from '../HelpTip'
 import { SOURCE_SELECTION, HEAT_SOURCE } from '../../lib/helpText'
 import { effectiveCapability } from '../../lib/heatSourceCapability'
 import type { HeatSourceYaml, MqttTopicInput, QshConfigYaml, SourceSelectionYaml } from '../../types/config'
-import { isHeatPumpType } from '../../lib/heat-source-types'
+import {
+  OFF_POWER_THRESHOLD_MAX_KW,
+  OFF_POWER_THRESHOLD_MIN_KW,
+  defaultOffPowerThresholdKw,
+  isHeatPumpType,
+  offPowerThresholdHelp,
+  offPowerThresholdOutOfBand,
+} from '../../lib/heat-source-types'
 import { TopicPicker } from './TopicPicker'
 import { extractTopic, extractFormat, extractJsonPath } from '../../lib/mqttTopic'
 
@@ -608,6 +615,44 @@ function SourceCard({
               {hs.capacity_kw !== undefined && (hs.capacity_kw < 1 || hs.capacity_kw > 100) && (
                 <p className="text-xs text-amber-600 mt-1">
                   Outside typical residential range (1-100 kW). Verify nameplate.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Off-power threshold — INSTRUCTION-646B */}
+          {hs.type && (
+            <div>
+              <label
+                htmlFor={`source-${index}-off-power-threshold`}
+                className="block text-sm font-medium text-[var(--text)] mb-1"
+              >
+                Off-power threshold (kW)
+              </label>
+              <input
+                id={`source-${index}-off-power-threshold`}
+                type="number"
+                min={OFF_POWER_THRESHOLD_MIN_KW}
+                max={OFF_POWER_THRESHOLD_MAX_KW}
+                step={0.01}
+                value={hs.off_power_threshold_kw ?? ''}
+                onChange={(e) =>
+                  onUpdate({
+                    off_power_threshold_kw:
+                      e.target.value === '' ? undefined : parseFloat(e.target.value),
+                  })
+                }
+                placeholder={`default ${defaultOffPowerThresholdKw(hs.type)}`}
+                aria-invalid={offPowerThresholdOutOfBand(hs.off_power_threshold_kw)}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+              />
+              {offPowerThresholdOutOfBand(hs.off_power_threshold_kw) ? (
+                <p className="text-xs text-red-500 mt-1">
+                  Must be between {OFF_POWER_THRESHOLD_MIN_KW} and {OFF_POWER_THRESHOLD_MAX_KW} kW.
+                </p>
+              ) : (
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  {offPowerThresholdHelp(hs.type)}
                 </p>
               )}
             </div>

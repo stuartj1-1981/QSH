@@ -5,49 +5,32 @@ PUT/write endpoints require HA driver — return 501 on non-HA until
 a persistent AwayStateStore is implemented (INSTRUCTION-BR03-AWAY).
 """
 
-import json
-import os
 import logging
-from pathlib import Path
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from qsh import paths
-from qsh.paths import find_state_file, save_state_file
-
 from ... import clock
+from ...occupancy.away import load_away_stamps, save_away_stamps, stamp_value
 from .control import _mqtt_writeback
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/away", tags=["away"])
 
-_AWAY_TIMESTAMPS_FILENAME = "away_timestamps.json"
-
-
 # ── Activation Timestamp Helpers ──
 
 
 def _load_timestamps() -> dict:
-    """Load activation timestamps from persistent storage."""
-    try:
-        path = Path(find_state_file(_AWAY_TIMESTAMPS_FILENAME))
-        if path.exists():
-            return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to load away timestamps: %s", e)
-    return {}
+    """Load activation timestamps from persistent storage (INSTRUCTION-643:
+    the store of qsh/occupancy/away.py, which the pipeline also reads)."""
+    return load_away_stamps()
 
 
 def _save_timestamps(data: dict) -> None:
-    """Write activation timestamps to persistent storage."""
-    try:
-        path = Path(os.path.join(paths.CONFIG_DIR, _AWAY_TIMESTAMPS_FILENAME))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data))
-        save_state_file(str(path))  # best-effort copy to /data/
-    except OSError as e:
-        logger.warning("Failed to save away timestamps: %s", e)
+    """Write activation timestamps to persistent storage (INSTRUCTION-643:
+    the store of qsh/occupancy/away.py)."""
+    save_away_stamps(data)
 
 
 def _record_activation(key: str) -> None:
@@ -60,6 +43,21 @@ def _record_activation(key: str) -> None:
     ts = _load_timestamps()
     if key not in ts:
         ts[key] = clock.now()
+        _save_timestamps(ts)
+
+
+def _rearm_if_run_out(key: str, days) -> None:
+    """INSTRUCTION-643 — remove the start time of *key* when its *days* (the
+    days in force before this PUT, above 0) have run out: the Away now set
+    is a new one, and _record_activation then starts it now."""
+    try:
+        d = float(days)
+    except (TypeError, ValueError):
+        return
+    ts = _load_timestamps()
+    stored = stamp_value(ts.get(key))
+    if stored is not None and d > 0 and stored + d * 86400.0 <= clock.now():
+        del ts[key]
         _save_timestamps(ts)
 
 
@@ -213,6 +211,7 @@ def set_away_mode(body: dict):
     if not config:
         raise HTTPException(status_code=503, detail="Config not loaded")
 
+    prior_days = config.get("away_days_internal")
     config["away_active_internal"] = active
     if days is not None:
         config["away_days_internal"] = float(days)
@@ -240,6 +239,7 @@ def set_away_mode(body: dict):
 
     # Record or clear activation timestamp
     if active:
+        _rearm_if_run_out("whole_house", prior_days)
         _record_activation("whole_house")
     else:
         _clear_activation("whole_house")
@@ -298,6 +298,7 @@ def set_zone_away(room: str, body: dict):
     # persistence follow-up.
     room_internals = config.setdefault("room_internals", {})
     room_cfg = room_internals.setdefault(room, {})
+    prior_days = room_cfg.get("away_days_internal")
     room_cfg["away_active_internal"] = active
     if days is not None:
         room_cfg["away_days_internal"] = float(days)
@@ -309,6 +310,7 @@ def set_zone_away(room: str, body: dict):
 
     # Record or clear activation timestamp
     if active:
+        _rearm_if_run_out(f"zone_{slug}", prior_days)
         _record_activation(f"zone_{slug}")
     else:
         _clear_activation(f"zone_{slug}")
@@ -318,3 +320,17 @@ def set_zone_away(room: str, body: dict):
         "active": active,
         "days": days,
     }
+
+
+def end_expired_away(whole_house: bool, rooms: List[str]) -> None:
+    """INSTRUCTION-643 — switch off each Away scope whose days ran out, by
+    the operator's own path: the PUT handlers above, with active false and
+    no days. The main loop calls it when the pipeline asks for an end; an
+    end that does not take is asked for again (AWAY_END_RETRY_S)."""
+    if whole_house:
+        set_away_mode({"active": False})
+    for room in rooms:
+        try:
+            set_zone_away(room, {"active": False, "days": None})
+        except HTTPException as e:
+            logger.warning("AWAY: end of the away of room %s failed: %s", room, e.detail)

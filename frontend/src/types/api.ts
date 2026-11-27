@@ -68,6 +68,9 @@ export interface HeatSourceState {
   return_temp: number
   delta_t: number
   flow_rate: number
+  // INSTRUCTION-646B — the active source's resolved off-power threshold (kW),
+  // or null before the first cycle. Optional for servers that predate 646A.
+  off_power_threshold_kw?: number | null
 }
 
 export interface EnergyState {
@@ -782,10 +785,64 @@ export interface BalancingRoom {
   recommendation_pending: boolean
   recommendation_text: string
   recommendations_given: number
-  balance_offset: number
+  // INSTRUCTION-648A
+  balance_rate?: number | null
+  rate_spread?: number | null
+  flow_basis?: 'measured_return' | 'nominal_delta' | 'rated' | null
+  excluded?: 'bypass' | null
+  advice_off?: 'ufh' | null
+  // INSTRUCTION-648D
+  max_opening_pct?: number | null
+  max_opening_source?: 'override' | 'probe' | null
+  max_opening_lifted?: boolean
   control_mode: 'direct' | 'indirect' | 'none'
   balance_status: 'automatic' | 'balanced' | 'monitoring'
   notification_disabled: boolean
+}
+
+// INSTRUCTION-648B / 648C — the branch flow model and the step probe.
+export interface BalancingFlowRoom {
+  full_open: number
+  design: number | null
+  index: number | null
+  balance_index: number | null
+  mature: boolean
+  active_samples: number
+  rel_sd: number | null
+}
+
+export interface BalancingFlowBasis {
+  samples: number
+  constant: number
+  unit: 'l_min' | 'kw_per_k_n'
+  rooms: Record<string, BalancingFlowRoom>
+}
+
+export interface BalancingProbeResult {
+  time: number
+  result: 'done' | 'invalid' | 'aborted'
+  reason: string
+  return_check: 'pass' | 'fail' | 'not_run' | null
+  valve_before: number | null
+  baseline_lpm: number | null
+  flow_open_lpm: number | null
+  flow_closed_lpm: number | null
+  drop_lpm: number | null
+  full_open_lpm: number | null
+}
+
+export interface BalancingProbe {
+  state: 'idle' | 'opening' | 'reading_open' | 'closing' | 'reading_closed' | 'returning'
+  room: string | null
+  full_open_lpm: Record<string, number | null>
+  results: Record<string, BalancingProbeResult[]>
+}
+
+export interface BalancingFlowModel {
+  basis: 'hydraulic' | 'thermal' | 'none'
+  probe?: BalancingProbe
+  hydraulic: BalancingFlowBasis
+  thermal: BalancingFlowBasis
 }
 
 export interface BalancingResponse {
@@ -793,6 +850,7 @@ export interface BalancingResponse {
   rooms: Record<string, BalancingRoom>
   imbalanced_count: number
   total_observations: number
+  flow_model?: BalancingFlowModel
   error?: string
 }
 

@@ -325,6 +325,7 @@ def _resolve_noop_defaults(kwargs, logger, driver_type):
                     return_temp=kw.get("return_temp"),
                     has_live_return_temp=kw.get("has_live_return_temp", False),
                     should_update_mode=True,
+                    off_power_threshold_kw=kw.get("off_power_threshold_kw"),
                 )
 
             resolved["apply_hardware_control_fn"] = _mqtt_readback_hw

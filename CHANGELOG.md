@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.6.30] — 2026-11-27
+
+### Added
+- Radiator balancing now limits how far each direct-controlled valve opens,
+  from the learned flow of each radiator or from a limit you set, and the
+  Balancing page shows the maximum opening, the learned flow against the
+  design flow, and the last flow test.
+- The balancing learns each radiator's share of the system from the
+  flow-rate sensor or from heat output and radiator temperatures.
+- An optional live flow probe measures one radiator at a time; it is off by
+  default.
+- Each heat source has an off-power threshold setting (0.05–1.0 kW), shown
+  in Settings and the setup wizard.
+- `GET /api/sysid` reports the state of the house heat-balance window.
+
+### Changed
+- Away now counts its days down, recovers each room in time for the end,
+  and holds rooms that have occupancy sensors.
+
+### Fixed
+- A heat pump whose circulation pump runs on after stopping is no longer
+  read as running and sent repeated off commands.
+- A room in persistent mode keeps its last TRV setpoint when the TRV goes
+  offline.
+
 ## [1.6.29] — 2026-11-22
 
 ### Changed

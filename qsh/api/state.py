@@ -349,6 +349,14 @@ def build_heat_source_payload(snap: "CycleSnapshot") -> Dict[str, Any]:
         "return_temp": round(snap.hp_return_temp, 1),
         "delta_t": round(snap.delta_t, 1),
         "flow_rate": round(snap.flow_rate, 2),
+        # INSTRUCTION-646A — additive: the active source's resolved off-power
+        # threshold (kW). Input power below it reads as off. None when the
+        # cycle has no caps (before the first cycle).
+        "off_power_threshold_kw": (
+            round(float(snap.source_caps.off_power_threshold_kw), 3)
+            if snap.source_caps is not None
+            else None
+        ),
     }
 
 

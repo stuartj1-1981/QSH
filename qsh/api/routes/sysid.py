@@ -111,6 +111,20 @@ def _installation_heat_loss(sysid, config: dict, room_names: Iterable[str]) -> d
     }
 
 
+# INSTRUCTION-647 — the state of the house heat-balance window: open, its
+# start and age, the last break with its cause, and the breaks by cause.
+# None when sysid gives no such state (a stand-in in a test, or an error).
+def _house_window(sysid) -> Optional[dict]:
+    read = getattr(sysid, "house_window_state", None)
+    if not callable(read):
+        return None
+    try:
+        state = read()
+    except Exception:
+        return None
+    return state if isinstance(state, dict) else None
+
+
 @router.get("/sysid")
 def get_sysid():
     """Per-room learned thermal parameters and observation counts."""
@@ -124,6 +138,7 @@ def get_sysid():
             "rooms": {},
             "installation_solar_capacity_kw": None,
             "installation_heat_loss": None,
+            "house_window": None,  # INSTRUCTION-647
         }
 
     config = shared_state.get_config()
@@ -177,6 +192,7 @@ def get_sysid():
         "rooms": result,
         "installation_solar_capacity_kw": capacity,
         "installation_heat_loss": _installation_heat_loss(sysid, config, room_areas),
+        "house_window": _house_window(sysid),  # INSTRUCTION-647
     }
 
 

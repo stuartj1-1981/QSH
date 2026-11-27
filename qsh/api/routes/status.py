@@ -53,6 +53,10 @@ class HeatSourceState(BaseModel):
     return_temp: float
     delta_t: float
     flow_rate: float
+    # INSTRUCTION-646A — additive optional: the active source's resolved
+    # off-power threshold (kW). Optional so payloads that predate 646A keep
+    # validating.
+    off_power_threshold_kw: Optional[float] = None
 
 
 class HpState(BaseModel):
