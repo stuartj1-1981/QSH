@@ -198,6 +198,10 @@ export interface HeatSourceYaml {
   // Times the dead-time gate's operator readback alarm. Validity [30, 900] s.
   // Unset → resolves to the per-source-type default (HP/GSHP 180, boilers 300).
   response_timeout_s?: number
+  // INSTRUCTION-646B: per-source off-power threshold (kW). Input power below
+  // it reads as off. Validity [0.05, 1.0] kW (INSTRUCTION-646A). Unset → the
+  // type value (heat pump 0.1 kW, boiler 0.5 kW).
+  off_power_threshold_kw?: number
   flow_min?: number
   flow_max?: number
   // INSTRUCTION-412: operator-asserted appliance flow-temperature capability (°C).

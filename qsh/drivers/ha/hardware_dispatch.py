@@ -33,10 +33,16 @@ PIPELINE_CYCLE_SECONDS = 30.0
 
 # Safety margin (cycles) added on top of the debounce-derived wait.
 # Sized for typical R290 compressor cold-start response: 90-180 s from
-# command receipt to observable power draw crossing the 0.1 kW threshold
+# command receipt to observable power draw crossing the off-power threshold
 # in hardware_dispatch's observed_mode classifier. 6 cycles = 180 s
-# covers the upper end of normal response.
+# covers the upper end of normal response. Sized at 0.1 kW, the heat-pump
+# type value; a higher threshold lengthens the crossing (INSTRUCTION-646A).
 READBACK_SAFETY_MARGIN_CYCLES = 6
+
+# The readback's off-power threshold when the caller gives none: the heat-pump
+# registry value. Callers give the active source's resolved value
+# (SourceCapabilities.off_power_threshold_kw, INSTRUCTION-646A).
+DEFAULT_OFF_POWER_THRESHOLD_KW = 0.1
 
 # Legacy alias retained for the modules that use it as a default for
 # fields/initial state (qsh/pipeline/context.py, qsh/api/state.py) and as
@@ -475,10 +481,13 @@ def compute_mode_readback(
     return_temp: Optional[float],
     has_live_return_temp: bool,
     should_update_mode: bool,
+    off_power_threshold_kw: Optional[float] = None,
 ) -> tuple[Optional[str], int]:
     """Driver-agnostic mode readback. Returns (applied_mode, new_mismatch_count).
 
-    Derives observed_mode from HP power draw (>= 0.1 kW => "heat", else "off"),
+    Derives observed_mode from HP power draw (>= off_power_threshold_kw =>
+    "heat", else "off"). The threshold is the active source's resolved value
+    (INSTRUCTION-646A); None takes DEFAULT_OFF_POWER_THRESHOLD_KW. It
     counts consecutive cycles where observed_mode != optimal_mode, applies the
     demand-satisfied suppression (the count resets when the HP is legitimately
     idle because commanded flow <= return + margin), and returns
@@ -513,7 +522,12 @@ def compute_mode_readback(
     applied_mode = optimal_mode if should_update_mode else prev_mode
     new_mismatch_count = prev_mismatch_count
     if hp_power_kw is not None and optimal_mode is not None:
-        observed_mode = "heat" if hp_power_kw >= 0.1 else "off"
+        threshold = (
+            DEFAULT_OFF_POWER_THRESHOLD_KW
+            if off_power_threshold_kw is None
+            else off_power_threshold_kw
+        )
+        observed_mode = "heat" if hp_power_kw >= threshold else "off"
         if observed_mode != optimal_mode:
             flow_below_return = (
                 has_live_return_temp
@@ -633,6 +647,7 @@ def apply_hardware_control(
     return_temp=None,
     has_live_return_temp=False,
     off_hold_flow=None,
+    off_power_threshold_kw=None,
 ):
     """
     Apply hardware control to heat source and TRVs.
@@ -843,6 +858,7 @@ def apply_hardware_control(
         return_temp=return_temp,
         has_live_return_temp=has_live_return_temp,
         should_update_mode=should_update_mode,
+        off_power_threshold_kw=off_power_threshold_kw,
     )
     # INSTRUCTION-598 — while the HA breaker is open the power reading is not
     # a measurement (an HA read that fails leaves its default) and, with an HA

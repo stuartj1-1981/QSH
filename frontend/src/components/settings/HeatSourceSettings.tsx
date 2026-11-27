@@ -27,7 +27,14 @@ import { SourceSelectionSettings } from './SourceSelectionSettings'
 import { ControlValueDisplay } from './ControlValueDisplay'
 import { WriteBudgetField } from './WriteBudgetField'
 import { HydraulicProtectionFields } from './HydraulicProtectionFields'
-import { isHeatPumpType } from '../../lib/heat-source-types'
+import {
+  OFF_POWER_THRESHOLD_MAX_KW,
+  OFF_POWER_THRESHOLD_MIN_KW,
+  defaultOffPowerThresholdKw,
+  isHeatPumpType,
+  offPowerThresholdHelp,
+  offPowerThresholdOutOfBand,
+} from '../../lib/heat-source-types'
 
 // INSTRUCTION-385B — verbatim mirror of the backend efficiency_plausible
 // (385A, config.py). Keyed on explicit type sets (NOT isHeatPumpType, which is
@@ -586,6 +593,11 @@ function SourceCard({
     (hs.response_timeout_s < RESPONSE_TIMEOUT_MIN ||
       hs.response_timeout_s > RESPONSE_TIMEOUT_MAX)
 
+  // INSTRUCTION-646B — per-source off-power threshold (kW). Unset reads the
+  // type value; the band mirrors the backend guard (INSTRUCTION-646A).
+  const offPowerDefault = defaultOffPowerThresholdKw(hs.type)
+  const offPowerError = offPowerThresholdOutOfBand(hs.off_power_threshold_kw)
+
   // INSTRUCTION-412 — per-source appliance flow CAPABILITY assertion. Both axes
   // optional; the effective envelope is asserted-else-registry (mirror of the
   // backend resolution). ALL validation below derives from the card's CURRENT
@@ -945,6 +957,45 @@ function SourceCard({
               <p className="mt-1 text-xs text-[var(--text-muted)]">
                 Command-to-fire window before a no-response alarm. Unset uses{' '}
                 {responseTimeoutDefault} s.
+              </p>
+            )}
+          </div>
+
+          {/* Off-power threshold — INSTRUCTION-646B */}
+          <div>
+            <label
+              htmlFor={`source-${index}-off-power-threshold`}
+              className="block text-xs font-medium text-[var(--text)] mb-1"
+            >
+              Off-power threshold (kW)
+            </label>
+            <input
+              id={`source-${index}-off-power-threshold`}
+              type="number"
+              min={OFF_POWER_THRESHOLD_MIN_KW}
+              max={OFF_POWER_THRESHOLD_MAX_KW}
+              step={0.01}
+              value={hs.off_power_threshold_kw ?? ''}
+              placeholder={`default ${offPowerDefault}`}
+              aria-invalid={offPowerError}
+              onChange={(e) =>
+                onChange({
+                  off_power_threshold_kw:
+                    e.target.value === ''
+                      ? undefined
+                      : parseFloat(e.target.value),
+                })
+              }
+              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm text-[var(--text)]"
+            />
+            {offPowerError ? (
+              <p className="mt-1 text-xs text-red-500">
+                Must be between {OFF_POWER_THRESHOLD_MIN_KW} and{' '}
+                {OFF_POWER_THRESHOLD_MAX_KW} kW.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                {offPowerThresholdHelp(hs.type)}
               </p>
             )}
           </div>

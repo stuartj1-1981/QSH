@@ -31,6 +31,8 @@ from qsh.heat_source_limits import (
     MIN_HEAT_SOURCES,
 )
 from qsh.pipeline.source_capabilities import (
+    OFF_POWER_THRESHOLD_MAX_KW,
+    OFF_POWER_THRESHOLD_MIN_KW,
     clamp_source_flow_envelope,
     resolve_effective_capability_or_reason,
 )
@@ -140,6 +142,31 @@ def _check_response_timeout(idx: int, src: dict) -> Optional[Tuple[int, str]]:
             422,
             f"heat_sources[{idx}].response_timeout_s={rt}s is outside safe range "
             f"[30, 900]",
+        )
+    return None
+
+
+def _check_off_power_threshold(idx: int, src: dict) -> Optional[Tuple[int, str]]:
+    """Per-source off_power_threshold_kw band (INSTRUCTION-646A).
+
+    The same band that config load enforces, on both interactive write
+    surfaces (the Settings save and the wizard deploy).
+    """
+    if "off_power_threshold_kw" not in src:
+        return None
+    raw = src["off_power_threshold_kw"]
+    value = None if isinstance(raw, bool) else _coerce(raw)
+    if value is None:
+        return (
+            422,
+            f"heat_sources[{idx}].off_power_threshold_kw must be a number, "
+            f"got {raw!r}",
+        )
+    if not (OFF_POWER_THRESHOLD_MIN_KW <= value <= OFF_POWER_THRESHOLD_MAX_KW):  # also NaN, inf
+        return (
+            422,
+            f"heat_sources[{idx}].off_power_threshold_kw={value} kW is outside "
+            f"safe range [{OFF_POWER_THRESHOLD_MIN_KW}, {OFF_POWER_THRESHOLD_MAX_KW}]",
         )
     return None
 
@@ -337,6 +364,7 @@ def validate_heat_sources_list(
     for idx, src in enumerate(sources):
         for check in (
             _check_response_timeout,
+            _check_off_power_threshold,
             _check_capability,
             _check_operating_envelope,
         ):

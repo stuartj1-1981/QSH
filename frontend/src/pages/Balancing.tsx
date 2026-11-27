@@ -2,10 +2,17 @@ import { useBalancing } from '../hooks/useBalancing'
 import { cn } from '../lib/utils'
 import { HelpTip } from '../components/HelpTip'
 import { BALANCING } from '../lib/helpText'
-import type { BalancingRoom } from '../types/api'
+import type { BalancingFlowBasis, BalancingFlowModel, BalancingRoom } from '../types/api'
+
+function exclusionNote(room: BalancingRoom): string | null {
+  if (room.excluded === 'bypass') return 'bypass — not compared'
+  if (room.advice_off === 'ufh') return 'underfloor — no lockshield advice'
+  return null
+}
 
 function turnSuggestion(room: BalancingRoom): string | null {
   if (room.control_mode === 'direct') return null
+  if (exclusionNote(room)) return null
   const absRatio = Math.abs(room.imbalance_ratio)
   if (absRatio < 0.25) return null
   const direction = room.imbalance_ratio > 0 ? 'closing' : 'opening'
@@ -27,6 +34,72 @@ function statusBadge(status: BalancingRoom['balance_status']) {
     <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap', info.cls)}>
       {info.label}
     </span>
+  )
+}
+
+function formatFlowValue(value: number | null | undefined, basis: BalancingFlowBasis): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return basis.unit === 'l_min' ? `${value.toFixed(1)} L/min` : `${value.toPrecision(3)} kW/K^n`
+}
+
+function FlowModelSection({ model }: { model: BalancingFlowModel }) {
+  const label =
+    model.basis === 'hydraulic' ? 'Hydraulic' : model.basis === 'thermal' ? 'Thermal' : 'Not yet learned'
+  const active = model.basis === 'none' ? null : model[model.basis]
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <h3 className="text-base font-semibold text-[var(--text)]">Flow model</h3>
+        <HelpTip text={BALANCING.flowModel} size={12} />
+        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text)]">
+          {label}
+        </span>
+      </div>
+      {active === null ? (
+        <p className="text-sm text-[var(--text-muted)]">
+          Not enough data yet. The model needs about a week of heating. Samples: hydraulic{' '}
+          {model.hydraulic.samples}, thermal {model.thermal.samples}.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[var(--bg-card)] text-[var(--text-muted)] text-left">
+                <th className="px-2 sm:px-4 py-2 font-medium">Zone</th>
+                <th className="px-2 sm:px-4 py-2 font-medium text-right">Full open</th>
+                <th className="px-2 sm:px-4 py-2 font-medium text-right hidden sm:table-cell">Design</th>
+                <th className="px-2 sm:px-4 py-2 font-medium text-right">Index</th>
+                <th className="px-2 sm:px-4 py-2 font-medium text-center hidden sm:table-cell">Mature</th>
+                <th className="px-2 sm:px-4 py-2 font-medium text-right hidden md:table-cell">Probe</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {Object.entries(active.rooms).map(([name, r]) => {
+                const probe = model.probe?.full_open_lpm?.[name]
+                return (
+                  <tr key={name} className="bg-[var(--bg)]">
+                    <td className="px-2 sm:px-4 py-2 text-[var(--text)]">
+                      {name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                    </td>
+                    <td className="px-2 sm:px-4 py-2 text-right font-mono">{formatFlowValue(r.full_open, active)}</td>
+                    <td className="px-2 sm:px-4 py-2 text-right font-mono hidden sm:table-cell">
+                      {formatFlowValue(r.design, active)}
+                    </td>
+                    <td className="px-2 sm:px-4 py-2 text-right font-mono">
+                      {typeof r.balance_index === 'number' ? r.balance_index.toFixed(2) : '—'}
+                    </td>
+                    <td className="px-2 sm:px-4 py-2 text-center hidden sm:table-cell">{r.mature ? 'yes' : 'no'}</td>
+                    <td className="px-2 sm:px-4 py-2 text-right font-mono hidden md:table-cell">
+                      {typeof probe === 'number' ? `${probe.toFixed(1)} L/min` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -84,6 +157,7 @@ export function Balancing() {
               <th className="px-2 sm:px-4 py-3 font-medium">Status</th>
               <th className="px-2 sm:px-4 py-3 font-medium text-right"><span className="flex items-center justify-end gap-1">Deviation <HelpTip text={BALANCING.severity} size={12} /></span></th>
               <th className="px-2 sm:px-4 py-3 font-medium hidden sm:table-cell"><span className="flex items-center gap-1">Suggestion <HelpTip text={BALANCING.suggestion} size={12} /></span></th>
+              <th className="px-2 sm:px-4 py-3 font-medium text-right hidden md:table-cell"><span className="flex items-center justify-end gap-1">Max open <HelpTip text={BALANCING.maxOpening} size={12} /></span></th>
               <th className="px-2 sm:px-4 py-3 font-medium text-right hidden md:table-cell">Data</th>
               <th className="px-2 sm:px-4 py-3 font-medium text-center hidden sm:table-cell">Notify</th>
             </tr>
@@ -96,6 +170,9 @@ export function Balancing() {
                     {name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
                   </div>
                   <div className="text-xs text-[var(--text-muted)]">{room.control_mode}</div>
+                  {exclusionNote(room) && (
+                    <div className="text-xs text-[var(--text-muted)] italic">{exclusionNote(room)}</div>
+                  )}
                   {/* Mobile-only suggestion text */}
                   {turnSuggestion(room) && (
                     <div className="text-xs text-amber-600 dark:text-amber-300 mt-1 sm:hidden">
@@ -127,6 +204,14 @@ export function Balancing() {
                   ) : (
                     <span className="text-[var(--text-muted)]">—</span>
                   )}
+                </td>
+                <td
+                  className="px-2 sm:px-4 py-3 text-right font-mono hidden md:table-cell"
+                  title={room.max_opening_source ?? undefined}
+                >
+                  {typeof room.max_opening_pct === 'number'
+                    ? `${room.max_opening_pct}%${room.max_opening_lifted ? ' (lifted)' : ''}`
+                    : '—'}
                 </td>
                 <td className="px-2 sm:px-4 py-3 text-right text-[var(--text-muted)] hidden md:table-cell">
                   {room.observations} obs
@@ -165,6 +250,8 @@ export function Balancing() {
           </tbody>
         </table>
       </div>
+
+      {data.flow_model && <FlowModelSection model={data.flow_model} />}
 
       {/* Pending recommendations */}
       {pendingRecs.length > 0 && (
